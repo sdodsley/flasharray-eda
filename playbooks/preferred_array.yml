@@ -1,0 +1,92 @@
+---
+# ActiveCluster: when a stretched pod loses a member, point the hosts that
+# use the pod's volumes at the online array (host preferred arrays, which
+# drives ALUA path priority); when the pod recovers, clear the preference so
+# both sides are active again.
+#
+# Called by the replication rulebook with target_array, pod, online_arrays,
+# offline_arrays and mode (prefer_online | restore). Hosts are discovered
+# from the pod's volume connections with the SDK; the change is made with
+# everpure.flasharray.purefa_host. Hosts that already had an explicit
+# preference are left alone and reported.
+- name: Host preferred arrays for a stretched pod
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Find the hosts connected to the pod's volumes
+      ansible.builtin.command:
+        cmd: python3 -
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          pod = os.environ["POD"]
+          vols = [v.name for v in c.get_volumes(filter=f"pod.name='{pod}' and destroyed='false'").items]
+          hosts = {}
+          if vols:
+              for conn in c.get_connections(volume_names=vols).items:
+                  # a stretched pod also lists the peer array's hosts as "<array>:<host>"; only local hosts are ours to change
+                  if conn.host and conn.host.name and ":" not in conn.host.name:
+                      hosts.setdefault(conn.host.name, []).append(conn.volume.name)
+          out = []
+          for h in c.get_hosts(names=list(hosts)).items if hosts else []:
+              out.append({"host": h.name, "preferred": [a.name for a in (h.preferred_arrays or [])], "volumes": hosts[h.name]})
+          print(json.dumps({"volumes": vols, "hosts": out}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ pod }}"
+      register: discovery
+      changed_when: false
+
+    - name: Parse the discovery
+      ansible.builtin.set_fact:
+        pod_hosts: "{{ (discovery.stdout | from_json).hosts }}"
+        pod_volumes: "{{ (discovery.stdout | from_json).volumes }}"
+
+    - name: Prefer the online arrays on hosts with no explicit preference
+      when: mode == 'prefer_online' and item.preferred | length == 0 and online_arrays | length > 0
+      everpure.flasharray.purefa_host:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item.host }}"
+        preferred_array: "{{ online_arrays }}"
+      loop: "{{ pod_hosts }}"
+      loop_control:
+        label: "{{ item.host }}"
+      register: prefer
+
+    - name: Restore hosts whose preference is exactly the online set we applied
+      when: mode == 'restore' and item.preferred | sort == online_arrays | sort and item.preferred | length > 0
+      everpure.flasharray.purefa_host:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item.host }}"
+        preferred_array: [delete]
+      loop: "{{ pod_hosts }}"
+      loop_control:
+        label: "{{ item.host }}"
+      register: restore
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'preferred_array', 'severity': 'critical' if mode == 'prefer_online' else 'info',
+              'array': inventory_hostname, 'pod': pod, 'mode': mode,
+              'online_arrays': online_arrays, 'offline_arrays': offline_arrays | default([]),
+              'hosts': pod_hosts | map(attribute='host') | list,
+              'changed_hosts': ((prefer.results | default([])) + (restore.results | default([]))) | selectattr('changed', 'defined') | selectattr('changed') | map(attribute='item.host') | list,
+              'left_alone': pod_hosts | selectattr('preferred', '!=', []) | map(attribute='host') | list if mode == 'prefer_online' else []} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} pod {{ pod }}: {{ mode }} -> hosts {{ pod_hosts | map(attribute='host') | list }},
+          online {{ online_arrays }}, offline {{ offline_arrays | default([]) }}

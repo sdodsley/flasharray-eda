@@ -1,11 +1,18 @@
 ---
-# Replication: array connections and their paths, pod replica links (lag and
-# recovery point), stretched pods (ActiveCluster member and mediator status)
-# and protection group replication (overdue or stuck transfers).
+# Replication as an RPO contract: array connections and their paths, pod
+# replica links (lag, recovery point, pause), stretched pods (ActiveCluster
+# member and mediator status) and protection group replication (overdue or
+# stuck transfers), plus a scheduled DR drill.
 #
-# Action in this phase: notify. The RPO engine actions (replicate-now,
-# pause/resume, preferred-array shift, DR drill) arrive in the replication
-# phase of the plan.
+# Actions (each gated by a var so a site can start with notify only):
+#   overdue or stuck protection group  -> replicate now (purefa_pgsnap now+remote)
+#   stretched pod member offline       -> move host preferred arrays to the
+#                                         online side; move them back on recovery
+#   RPO breached for N polls           -> escalate to critical
+#   paused link, failed paths, unhealthy link -> notify
+#   tick                               -> DR drill: copy a volume from the latest
+#                                         replicated snapshot on the target,
+#                                         verify, destroy
 
 - name: FlashArray replication
   hosts: all
@@ -40,11 +47,11 @@
           extra_vars:
             severity: critical
             subject: "{{ event.purefa_array_connection.array }} connection to {{ event.purefa_array_connection.remote }} is {{ event.purefa_array_connection.status }}"
-            detail: "type={{ event.purefa_array_connection.type }} paths {{ event.purefa_array_connection.paths_connected }}/{{ event.purefa_array_connection.paths_total }} connected"
+            detail: "type={{ event.purefa_array_connection.type }} paths {{ event.purefa_array_connection.paths_connected }}/{{ event.purefa_array_connection.paths_total }} connected; failed: {{ event.purefa_array_connection.failed_paths }}"
             target_array: "{{ event.purefa_array_connection.array }}"
             alert_log: "{{ alert_log }}"
 
-    - name: Array connection has failed paths - notify
+    - name: Array connection has failed paths - notify with the paths
       condition: >-
         event.purefa_array_connection.status == "connected" and
         event.purefa_array_connection.paths_connected < event.purefa_array_connection.paths_total
@@ -59,7 +66,7 @@
           extra_vars:
             severity: warning
             subject: "{{ event.purefa_array_connection.array }} has failed replication paths to {{ event.purefa_array_connection.remote }}"
-            detail: "{{ event.purefa_array_connection.paths_connected }} of {{ event.purefa_array_connection.paths_total }} paths connected"
+            detail: "{{ event.purefa_array_connection.paths_connected }} of {{ event.purefa_array_connection.paths_total }} paths connected; failed: {{ event.purefa_array_connection.failed_paths }}"
             target_array: "{{ event.purefa_array_connection.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -76,7 +83,7 @@
           extra_vars:
             severity: warning
             subject: "Replica link {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_array }}:{{ event.purefa_replica_link.remote_pod }} is paused"
-            detail: "status={{ event.purefa_replica_link.status }} recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old"
+            detail: "status={{ event.purefa_replica_link.status }} paused for {{ event.purefa_replica_link.paused_for_s }}s (since this rulebook noticed), recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old"
             target_array: "{{ event.purefa_replica_link.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -102,7 +109,8 @@
     - name: Replica link lag above the RPO - notify
       condition: >-
         event.purefa_replica_link.direction == "outbound" and
-        event.purefa_replica_link.rpo_breached == true
+        event.purefa_replica_link.rpo_breached == true and
+        event.purefa_replica_link.rpo_breach_polls < vars.rpo_escalate_polls
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -113,15 +121,58 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "Replica link {{ event.purefa_replica_link.local_pod }} lag {{ event.purefa_replica_link.lag_ms }}ms exceeds RPO {{ event.purefa_replica_link.rpo_seconds }}s"
-            detail: "recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old, status={{ event.purefa_replica_link.status }}"
+            subject: "Replica link {{ event.purefa_replica_link.local_pod }} lag {{ event.purefa_replica_link.lag_s }}s exceeds RPO {{ event.purefa_replica_link.rpo_seconds }}s"
+            detail: "recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old, status={{ event.purefa_replica_link.status }}, breached for {{ event.purefa_replica_link.rpo_breach_polls }} polls"
             target_array: "{{ event.purefa_replica_link.array }}"
             alert_log: "{{ alert_log }}"
 
-    - name: Stretched pod member or mediator not online - notify
+    - name: Replica link lag above the RPO for N polls - escalate
+      condition: >-
+        event.purefa_replica_link.direction == "outbound" and
+        event.purefa_replica_link.rpo_breached == true and
+        event.purefa_replica_link.rpo_breach_polls >= vars.rpo_escalate_polls
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefa_replica_link.array
+          - event.purefa_replica_link.local_pod
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "RPO breach on {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_array }} has persisted for {{ event.purefa_replica_link.rpo_breach_polls }} polls"
+            detail: "lag {{ event.purefa_replica_link.lag_s }}s vs RPO {{ event.purefa_replica_link.rpo_seconds }}s, recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old"
+            target_array: "{{ event.purefa_replica_link.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Stretched pod member offline - prefer the online array on its hosts
       condition: >-
         event.purefa_stretched_pod.pod is defined and
-        (event.purefa_stretched_pod.all_online == false or event.purefa_stretched_pod.mediator_online == false)
+        event.purefa_stretched_pod.all_online == false and
+        event.purefa_stretched_pod.maintenance_active == false and
+        vars.activecluster_auto_prefer == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_stretched_pod.array
+          - event.purefa_stretched_pod.pod
+      action:
+        run_playbook:
+          name: playbooks/preferred_array.yml
+          extra_vars:
+            target_array: "{{ event.purefa_stretched_pod.array }}"
+            pod: "{{ event.purefa_stretched_pod.pod }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
+            offline_arrays: "{{ event.purefa_stretched_pod.offline_arrays }}"
+            mode: prefer_online
+            alert_log: "{{ alert_log }}"
+
+    - name: Stretched pod member offline - notify only
+      condition: >-
+        event.purefa_stretched_pod.pod is defined and
+        (event.purefa_stretched_pod.all_online == false or event.purefa_stretched_pod.mediator_online == false) and
+        (event.purefa_stretched_pod.maintenance_active == true or vars.activecluster_auto_prefer == false or event.purefa_stretched_pod.all_online == true)
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -137,10 +188,49 @@
             target_array: "{{ event.purefa_stretched_pod.array }}"
             alert_log: "{{ alert_log }}"
 
-    - name: Protection group replication overdue or stuck - notify
+    - name: Stretched pod recovered - restore host preferred arrays
+      condition: >-
+        event.purefa_stretched_pod.recovered == true and
+        vars.activecluster_auto_prefer == true
+      action:
+        run_playbook:
+          name: playbooks/preferred_array.yml
+          extra_vars:
+            target_array: "{{ event.purefa_stretched_pod.array }}"
+            pod: "{{ event.purefa_stretched_pod.pod }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
+            offline_arrays: []
+            mode: restore
+            alert_log: "{{ alert_log }}"
+
+    - name: Protection group replication overdue or stuck - replicate now
       condition: >-
         event.purefa_pg_replication.pgroup is defined and
-        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true)
+        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        event.purefa_pg_replication.maintenance_active == false and
+        vars.replication_auto_replicate_now == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
+      action:
+        run_playbook:
+          name: playbooks/replicate_now.yml
+          extra_vars:
+            target_array: "{{ event.purefa_pg_replication.array }}"
+            pgroup: "{{ event.purefa_pg_replication.pgroup }}"
+            reason: "{{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
+            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s }}"
+            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms }}"
+            in_progress: "{{ event.purefa_pg_replication.in_progress }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Protection group replication overdue or stuck - notify only
+      condition: >-
+        event.purefa_pg_replication.pgroup is defined and
+        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        (event.purefa_pg_replication.maintenance_active == true or vars.replication_auto_replicate_now == false)
       throttle:
         once_within: 1 hour
         group_by_attributes:
@@ -158,4 +248,21 @@
               in progress={{ event.purefa_pg_replication.in_progress }},
               targets={{ event.purefa_pg_replication.targets }}
             target_array: "{{ event.purefa_pg_replication.array }}"
+            alert_log: "{{ alert_log }}"
+
+- name: FlashArray DR drill
+  hosts: all
+
+  sources:
+    - ansible.eda.tick:
+        delay: "{{ dr_drill_interval_s }}"
+
+  rules:
+    - name: Drill every replicated protection group on its target
+      condition: event.i is defined
+      action:
+        run_playbook:
+          name: playbooks/dr_drill.yml
+          extra_vars:
+            dr_drills: "{{ dr_drills }}"
             alert_log: "{{ alert_log }}"

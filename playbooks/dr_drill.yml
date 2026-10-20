@@ -1,0 +1,19 @@
+---
+# DR drill: on the replication target, copy one volume out of the latest
+# fully transferred snapshot of a replicated protection group, confirm the
+# copy exists with the expected size, then destroy and eradicate it. A drill
+# that cannot find a completed snapshot, or whose copy fails, records a
+# failure; that is the signal a DR plan has silently stopped working.
+#
+# dr_drills is a list of {target_array, source_array, pgroup, volume (member
+# volume name on the source; omit to use the first member), prefix}.
+- name: DR drill
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run each drill on its target array
+      ansible.builtin.include_tasks: dr_drill_one.yml
+      loop: "{{ dr_drills }}"
+      loop_control:
+        loop_var: drill
+        label: "{{ drill.target_array }}:{{ drill.source_array }}:{{ drill.pgroup }}"

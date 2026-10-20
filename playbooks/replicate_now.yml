@@ -1,0 +1,37 @@
+---
+# Take an immediate protection group snapshot and push it to the remote
+# targets. Called by the replication rulebook when a replicating protection
+# group is overdue (no completed transfer within two schedule periods) or
+# stuck (an in-progress transfer whose progress has not moved for N polls).
+- name: Replicate a protection group now
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Snapshot the group and replicate immediately
+      everpure.flasharray.purefa_pgsnap:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ pgroup }}"
+        suffix: "eda-{{ reason }}-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+        remote: true          # immediate snapshot replicated to the targets (the module forbids now+remote together)
+        apply_retention: true
+        state: present
+      register: snap
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'replicate_now', 'severity': 'warning',
+              'array': inventory_hostname, 'pgroup': pgroup, 'reason': reason,
+              'since_last_completed_s': since_last_completed_s | default(''),
+              'frequency_ms': frequency_ms | default(''), 'in_progress': in_progress | default(''),
+              'changed': snap.changed} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ pgroup }} was {{ reason }}; immediate replicated snapshot requested (changed={{ snap.changed }})"

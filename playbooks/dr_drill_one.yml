@@ -1,0 +1,99 @@
+---
+# One DR drill (included by dr_drill.yml with `drill`). Runs on localhost and
+# delegates the array work to the target array's inventory host.
+- name: "{{ drill.target_array }}: find the latest completed replicated snapshot of {{ drill.source_array }}:{{ drill.pgroup }}"
+  ansible.builtin.command:
+    cmd: python3 -
+    stdin: |
+      import json, os, urllib3
+      urllib3.disable_warnings()
+      from pypureclient import flasharray
+      c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+      pg = os.environ["SOURCE"] + ":" + os.environ["PGROUP"]
+      done = [t for t in c.get_protection_group_snapshots_transfer(filter=f"name='{pg}.*'", limit=50).items if t.completed]
+      if not done:
+          print(json.dumps({"error": f"no completed transfer for {pg}"})); raise SystemExit(0)
+      latest = max(done, key=lambda t: t.completed)
+      members = [v.name for v in c.get_volume_snapshots(filter=f"name='{latest.name}.*'").items]
+      want = os.environ.get("VOLUME") or ""
+      pick = next((m for m in members if m.endswith("." + want)), members[0] if members else None)
+      print(json.dumps({"snapshot": latest.name, "completed": latest.completed, "members": members, "volume_snapshot": pick,
+                        "volume": pick.split(".", 2)[-1] if pick else None}))
+  environment:
+    FA_HOST: "{{ hostvars[drill.target_array].fa_url | regex_replace('^https?://', '') }}"
+    FA_TOKEN: "{{ hostvars[drill.target_array].api_token }}"
+    SOURCE: "{{ drill.source_array }}"
+    PGROUP: "{{ drill.pgroup }}"
+    VOLUME: "{{ drill.volume | default('') }}"
+  register: find
+  changed_when: false
+
+- name: Parse
+  ansible.builtin.set_fact:
+    drill_snap: "{{ find.stdout | from_json }}"
+    drill_copy: "{{ drill.prefix | default('eda-drill') }}-{{ drill.pgroup }}"
+
+- name: Copy the volume out of the snapshot, verify, destroy
+  when: drill_snap.volume_snapshot is defined and drill_snap.volume_snapshot
+  block:
+    - name: Copy the member volume from the replicated snapshot
+      everpure.flasharray.purefa_pgsnap:
+        fa_url: "{{ hostvars[drill.target_array].fa_url }}"
+        api_token: "{{ hostvars[drill.target_array].api_token }}"
+        disable_warnings: true
+        name: "{{ drill.source_array }}:{{ drill.pgroup }}"
+        suffix: "{{ drill_snap.snapshot.split('.', 1)[1] }}"
+        restore: "{{ drill_snap.volume }}"
+        target: "{{ drill_copy }}"
+        overwrite: true
+        with_default_protection: false
+        state: copy
+      register: copy
+
+    - name: Verify the copy exists and is readable
+      ansible.builtin.command:
+        cmd: python3 -
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          v = list(c.get_volumes(names=[os.environ["NAME"]]).items)
+          s = list(c.get_volume_snapshots(names=[os.environ["SNAP"]]).items)
+          print(json.dumps({"exists": bool(v), "size": v[0].provisioned if v else None, "snapshot_size": s[0].provisioned if s else None,
+                            "size_matches": bool(v and s and v[0].provisioned == s[0].provisioned)}))
+      environment:
+        FA_HOST: "{{ hostvars[drill.target_array].fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ hostvars[drill.target_array].api_token }}"
+        NAME: "{{ drill_copy }}"
+        SNAP: "{{ drill_snap.volume_snapshot }}"
+      register: verify
+      changed_when: false
+
+    - name: Destroy and eradicate the copy
+      everpure.flasharray.purefa_volume:
+        fa_url: "{{ hostvars[drill.target_array].fa_url }}"
+        api_token: "{{ hostvars[drill.target_array].api_token }}"
+        disable_warnings: true
+        name: "{{ drill_copy }}"
+        state: absent
+        eradicate: true
+
+- name: Record the drill
+  ansible.builtin.lineinfile:
+    path: "{{ alert_log }}"
+    create: true
+    mode: "0600"
+    line: >-
+      {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'dr_drill',
+          'severity': 'info' if (verify.stdout | default('{}') | from_json).size_matches | default(false) else 'critical',
+          'array': drill.target_array, 'source_array': drill.source_array, 'pgroup': drill.pgroup,
+          'snapshot': drill_snap.snapshot | default(''), 'snapshot_completed': drill_snap.completed | default(''),
+          'volume': drill_snap.volume | default(''), 'copy': drill_copy,
+          'result': (verify.stdout | default('{}') | from_json) if verify is defined and verify.stdout is defined else {'error': drill_snap.error | default('copy failed')}} | to_json }}
+
+- name: Show the drill
+  ansible.builtin.debug:
+    msg: >-
+      DR drill {{ drill.target_array }} <- {{ drill.source_array }}:{{ drill.pgroup }}:
+      {{ 'OK ' ~ drill_snap.snapshot ~ ' volume ' ~ drill_snap.volume ~ ' copied and verified' if (verify.stdout | default('{}') | from_json).size_matches | default(false) else 'FAILED ' ~ (drill_snap.error | default('see record')) }}

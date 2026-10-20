@@ -1,0 +1,66 @@
+---
+# Replay recorded replication events through the action rules.
+#   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<a>/g; s/REPLAY_PGROUP/<pg>/g; s/REPLAY_POD/<pod>/g; s/REPLAY_ONLINE/<a>/g; s/REPLAY_OFFLINE/<b>/g" tests/fixtures/replication.yml; } > tests/out/vars_replay.yml
+#   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_replication.yml
+# Rules are copies of the ones in extensions/eda/rulebooks/replication.yml.
+# Note: the recovery event follows the degraded one by `delay` seconds, so
+# the online_arrays it carries must match what prefer_online applied.
+- name: FlashArray replication (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 20
+
+  rules:
+    - name: Protection group replication overdue or stuck - replicate now
+      condition: >-
+        event.purefa_pg_replication.pgroup is defined and
+        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        event.purefa_pg_replication.maintenance_active == false and
+        vars.replication_auto_replicate_now == true
+      action:
+        run_playbook:
+          name: playbooks/replicate_now.yml
+          extra_vars:
+            target_array: "{{ event.purefa_pg_replication.array }}"
+            pgroup: "{{ event.purefa_pg_replication.pgroup }}"
+            reason: "{{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
+            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s }}"
+            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms }}"
+            in_progress: "{{ event.purefa_pg_replication.in_progress }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Stretched pod member offline - prefer the online array on its hosts
+      condition: >-
+        event.purefa_stretched_pod.pod is defined and
+        event.purefa_stretched_pod.all_online == false and
+        event.purefa_stretched_pod.maintenance_active == false and
+        vars.activecluster_auto_prefer == true
+      action:
+        run_playbook:
+          name: playbooks/preferred_array.yml
+          extra_vars:
+            target_array: "{{ event.purefa_stretched_pod.array }}"
+            pod: "{{ event.purefa_stretched_pod.pod }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
+            offline_arrays: "{{ event.purefa_stretched_pod.offline_arrays }}"
+            mode: prefer_online
+            alert_log: "{{ alert_log }}"
+
+    - name: Stretched pod recovered - restore host preferred arrays
+      condition: >-
+        event.purefa_stretched_pod.recovered == true and
+        vars.activecluster_auto_prefer == true
+      action:
+        run_playbook:
+          name: playbooks/preferred_array.yml
+          extra_vars:
+            target_array: "{{ event.purefa_stretched_pod.array }}"
+            pod: "{{ event.purefa_stretched_pod.pod }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
+            offline_arrays: []
+            mode: restore
+            alert_log: "{{ alert_log }}"

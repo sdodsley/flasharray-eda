@@ -1,0 +1,58 @@
+---
+# Test helper: a throwaway host and a volume inside a stretched pod, so the
+# preferred-array playbook has a host to act on without touching real ones.
+#   ansible-playbook -i inventory/local-lab.yml tests/pod_test_host.yml \
+#       -e target_array=<array> -e pod=<stretched pod> [-e cleanup=true]
+- name: Stretched pod test host and volume
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    test_host: eda-drill-host
+    test_volume: "{{ pod }}::eda-drill-vol"
+  tasks:
+    - name: Create
+      when: not cleanup | default(false) | bool
+      block:
+        - name: Volume in the pod
+          everpure.flasharray.purefa_volume:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ test_volume }}"
+            size: 1G
+            with_default_protection: false
+        - name: Host with a placeholder IQN
+          everpure.flasharray.purefa_host:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ test_host }}"
+            protocol: iscsi
+            iqn:
+              - iqn.2026-10.org.example:eda-drill-host
+        - name: Connect the volume
+          everpure.flasharray.purefa_host:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ test_host }}"
+            volume: "{{ test_volume }}"
+
+    - name: Clean up
+      when: cleanup | default(false) | bool
+      block:
+        - name: Remove the host (disconnects the volume)
+          everpure.flasharray.purefa_host:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ test_host }}"
+            state: absent
+        - name: Destroy and eradicate the volume
+          everpure.flasharray.purefa_volume:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ test_volume }}"
+            state: absent
+            eradicate: true

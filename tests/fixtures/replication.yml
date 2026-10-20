@@ -1,0 +1,45 @@
+---
+# Recorded-shape replication events for replay through ansible.eda.generic.
+# REPLAY_ARRAY, REPLAY_PGROUP, REPLAY_POD, REPLAY_ONLINE and REPLAY_OFFLINE
+# are substituted with sed by the test. The actions they drive run against
+# the real array: an immediate replicated snapshot of REPLAY_PGROUP, and host
+# preferred arrays on the hosts connected to REPLAY_POD's volumes (set, then
+# restored by the recovery event).
+fixture_events:
+  - purefa_pg_replication:
+      array: REPLAY_ARRAY
+      maintenance_active: false
+      pgroup: REPLAY_PGROUP
+      targets: [REPLAY_ONLINE]
+      schedule_enabled: true
+      frequency_ms: 3600000
+      last_completed: 0
+      since_last_completed_s: 9000
+      overdue: true
+      in_progress: null
+      stuck_polls: 0
+      stuck: false
+  - purefa_stretched_pod:
+      array: REPLAY_ARRAY
+      maintenance_active: false
+      pod: REPLAY_POD
+      members:
+        - {array: REPLAY_ARRAY, status: online, mediator_status: online, pre_elected: false}
+        - {array: REPLAY_OFFLINE, status: offline, mediator_status: online, pre_elected: false}
+      online_arrays: [REPLAY_ARRAY]
+      offline_arrays: [REPLAY_OFFLINE]
+      all_online: false
+      mediator_online: true
+      recovered: false
+  - purefa_stretched_pod:
+      array: REPLAY_ARRAY
+      maintenance_active: false
+      pod: REPLAY_POD
+      members:
+        - {array: REPLAY_ARRAY, status: online, mediator_status: online, pre_elected: false}
+        - {array: REPLAY_OFFLINE, status: online, mediator_status: online, pre_elected: false}
+      online_arrays: [REPLAY_ARRAY]
+      offline_arrays: []
+      all_online: true
+      mediator_online: true
+      recovered: true
