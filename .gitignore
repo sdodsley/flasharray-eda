@@ -1,0 +1,13 @@
+# credentials and local state never belong here
+auth-config*.json
+*.token
+.pure_test_env
+vars/local*.yml
+inventory/local*.yml
+alerts.log
+*.log
+venv/
+collections/
+__pycache__/
+*.pyc
+.DS_Store
