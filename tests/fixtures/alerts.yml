@@ -1,0 +1,58 @@
+---
+# Recorded-shape alert events for replay through ansible.eda.generic:
+# a hardware failure (code 42, routed as a ticket), a code with per-code
+# runbook tasks (9999, fixture), an unknown code (default route) and one
+# opened inside a maintenance window (logged, not routed).
+fixture_events:
+  - purefa_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000001"
+      code: 42
+      severity: warning
+      state: open
+      component_type: hardware
+      component_name: ct0.eth7
+      summary: "(hardware:ct0.eth7): failure"
+      action: "Review the linked Knowledge Base article. If the alert is not resolved or you need further assistance, contact Pure Storage Support and provide the alert text."
+      knowledge_base_url: "https://support.purestorage.com/?cid=Alert_0042"
+  - purefa_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000002"
+      code: 9999
+      severity: warning
+      state: open
+      component_type: fixture
+      component_name: fixture
+      summary: "(fixture): per-code runbook tasks"
+      action: ""
+      knowledge_base_url: ""
+  - purefa_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000003"
+      code: 777
+      severity: info
+      state: open
+      component_type: fixture
+      component_name: fixture
+      summary: "(fixture): unknown code takes the default route"
+      action: ""
+      knowledge_base_url: ""
+  - purefa_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: true
+      alert_id: "900000004"
+      code: 42
+      severity: warning
+      state: open
+      component_type: hardware
+      component_name: ct1.eth7
+      summary: "(hardware:ct1.eth7): failure during maintenance"
+      action: ""
+      knowledge_base_url: ""

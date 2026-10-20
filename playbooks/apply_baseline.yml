@@ -1,0 +1,69 @@
+---
+# Apply the git baseline forward to every array that has a baseline file.
+# Called by the change control rulebook on a git push webhook (git_ref,
+# git_after) or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/apply_baseline.yml \
+#       -e baseline_dir=$PWD/baseline -e set_dns_tasks=$PWD/playbooks/set_dns.yml -e alert_log=$PWD/alerts.log
+# Pulls the baseline repository first when it is a git checkout.
+- name: Refresh the baseline checkout
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Pull the baseline repository
+      ansible.builtin.command:
+        cmd: git pull --ff-only
+        chdir: "{{ baseline_dir }}"
+      register: pull
+      changed_when: "'Already up to date' not in pull.stdout"
+      failed_when: false
+
+- name: Apply the baseline to each array
+  hosts: all:!localhost
+  gather_facts: false
+  vars:
+    baseline_file: "{{ baseline_dir }}/{{ inventory_hostname }}.yml"
+  tasks:
+    - name: Check for a baseline file
+      ansible.builtin.stat:
+        path: "{{ baseline_file }}"
+      delegate_to: localhost
+      register: bl
+
+    - name: Apply the baseline
+      when: bl.stat.exists
+      block:
+        - name: Load the baseline
+          ansible.builtin.include_vars:
+            file: "{{ baseline_file }}"
+            name: baseline
+
+        - name: NTP
+          when: baseline.ntp_servers is defined
+          everpure.flasharray.purefa_ntp:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            state: present
+            ntp_servers: "{{ baseline.ntp_servers }}"
+          register: ntp_result
+
+        - name: DNS
+          when: baseline.dns is defined
+          ansible.builtin.include_tasks:
+            file: "{{ set_dns_tasks }}"
+          vars:
+            dns_domain: "{{ baseline.dns.domain }}"
+            dns_nameservers: "{{ baseline.dns.nameservers }}"
+
+        - name: Record the apply
+          ansible.builtin.lineinfile:
+            path: "{{ alert_log }}"
+            create: true
+            mode: "0600"
+            line: >-
+              {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'baseline_apply',
+                  'array': inventory_hostname, 'git_ref': git_ref | default('manual'),
+                  'git_after': git_after | default(''),
+                  'ntp_changed': ntp_result.changed | default(false),
+                  'dns_changed': dns_result.changed | default(false)} | to_json }}
+          delegate_to: localhost

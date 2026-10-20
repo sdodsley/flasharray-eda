@@ -62,6 +62,7 @@
             observed_dns_nameservers: "{{ event.purefa_config.dns_nameservers_csv }}"
             baseline_dns_domain: "{{ baseline_dns_domain }}"
             baseline_dns_nameservers_csv: "{{ baseline_dns_nameservers_csv }}"
+            set_dns_tasks: "{{ set_dns_tasks }}"
             alert_log: "{{ alert_log }}"
 
     - name: LDAP drift - notify only

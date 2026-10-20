@@ -1,8 +1,10 @@
 ---
-# Alerts: every alert state change on the array, with the array's own
-# recommended action text and knowledge base link carried into the
-# notification. Alerts already open when the rulebook starts arrive with
-# transition "initial" and are only logged.
+# Alerts: every alert state change on the array, routed through the
+# alert-code runbook map (vars: alert_runbooks) with the array's own
+# recommended action text and knowledge base link carried into the record.
+# Alerts already open when the rulebook starts arrive with transition
+# "initial" and are only logged. Inside a maintenance window an opened alert
+# is logged, not routed.
 
 - name: FlashArray alerts
   hosts: all
@@ -26,21 +28,33 @@
         debug:
           msg: "open at start: {{ event.purefa_alert.array }} #{{ event.purefa_alert.alert_id }} code {{ event.purefa_alert.code }} {{ event.purefa_alert.severity }} {{ event.purefa_alert.summary }}"
 
-    - name: Alert opened - notify
-      condition: event.purefa_alert.transition == "opened"
+    - name: Alert opened during a maintenance window - log only
+      condition: >-
+        event.purefa_alert.transition == "opened" and
+        event.purefa_alert.maintenance_active == true
+      action:
+        debug:
+          msg: "maintenance window on {{ event.purefa_alert.array }}: alert {{ event.purefa_alert.code }} {{ event.purefa_alert.summary }} not routed"
+
+    - name: Alert opened - route through the runbook map
+      condition: >-
+        event.purefa_alert.transition == "opened" and
+        event.purefa_alert.maintenance_active == false
       action:
         run_playbook:
-          name: playbooks/notify.yml
+          name: playbooks/alert_runbook.yml
           extra_vars:
             severity: "{{ event.purefa_alert.severity }}"
+            transition: opened
             subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }}: {{ event.purefa_alert.summary }}"
-            detail: >-
-              component={{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}
-              expected={{ event.purefa_alert.expected }} actual={{ event.purefa_alert.actual }};
-              action: {{ event.purefa_alert.action }} KB: {{ event.purefa_alert.knowledge_base_url }}
+            component: "{{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}"
+            array_action: "{{ event.purefa_alert.action }}"
+            knowledge_base_url: "{{ event.purefa_alert.knowledge_base_url }}"
             target_array: "{{ event.purefa_alert.array }}"
             alert_id: "{{ event.purefa_alert.alert_id }}"
             alert_code: "{{ event.purefa_alert.code }}"
+            alert_runbooks: "{{ alert_runbooks }}"
+            runbook_dir: "{{ runbook_dir }}"
             alert_log: "{{ alert_log }}"
 
     - name: Alert closed - log

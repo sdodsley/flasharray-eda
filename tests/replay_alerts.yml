@@ -1,0 +1,43 @@
+---
+# Replay recorded alert events through the alert rules.
+#   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<array>/" tests/fixtures/alerts.yml; } > tests/out/vars_replay.yml
+#   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_alerts.yml
+# Rules are copies of the ones in extensions/eda/rulebooks/alerts.yml.
+- name: FlashArray alerts (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Alert opened during a maintenance window - log only
+      condition: >-
+        event.purefa_alert.transition == "opened" and
+        event.purefa_alert.maintenance_active == true
+      action:
+        debug:
+          msg: "maintenance window on {{ event.purefa_alert.array }}: alert {{ event.purefa_alert.code }} {{ event.purefa_alert.summary }} not routed"
+
+    - name: Alert opened - route through the runbook map
+      condition: >-
+        event.purefa_alert.transition == "opened" and
+        event.purefa_alert.maintenance_active == false
+      action:
+        run_playbook:
+          name: playbooks/alert_runbook.yml
+          extra_vars:
+            severity: "{{ event.purefa_alert.severity }}"
+            transition: opened
+            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }}: {{ event.purefa_alert.summary }}"
+            component: "{{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}"
+            array_action: "{{ event.purefa_alert.action }}"
+            knowledge_base_url: "{{ event.purefa_alert.knowledge_base_url }}"
+            target_array: "{{ event.purefa_alert.array }}"
+            alert_id: "{{ event.purefa_alert.alert_id }}"
+            alert_code: "{{ event.purefa_alert.code }}"
+            alert_runbooks: "{{ alert_runbooks }}"
+            runbook_dir: "{{ runbook_dir }}"
+            alert_log: "{{ alert_log }}"

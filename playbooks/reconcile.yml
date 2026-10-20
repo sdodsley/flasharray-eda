@@ -1,0 +1,70 @@
+---
+# Reconcile one array with its git baseline after an audited change.
+# Called by the change control rulebook with target_array, baseline_dir,
+# set_dns_tasks (absolute path of playbooks/set_dns.yml) and the audit fields
+# (audit_user, audit_interface, audit_command, audit_subcommand,
+# audit_arguments, audit_time) as extra_vars.
+#
+# Which commands reconcile and which only notify is decided here, next to
+# the code that would do the write. Purity logs NTP changes as
+# `purearray setattr --ntpserver ...` (there is no purentp command), DNS as
+# `puredns setattr ...`:
+#   purearray setattr --ntpserver, puredns -> reapplied from the baseline
+#   everything else                        -> notified; a human decides
+- name: Reconcile an array with its baseline
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    baseline_file: "{{ baseline_dir }}/{{ inventory_hostname }}.yml"
+    is_ntp: "{{ audit_command == 'purearray' and audit_subcommand | default('') == 'setattr' and '--ntpserver' in (audit_arguments | default('')) }}"
+    is_dns: "{{ audit_command == 'puredns' }}"
+  tasks:
+    - name: Load the baseline for this array
+      ansible.builtin.include_vars:
+        file: "{{ baseline_file }}"
+        name: baseline
+
+    - name: Reapply NTP from the baseline
+      when: is_ntp | bool and baseline.ntp_servers is defined
+      everpure.flasharray.purefa_ntp:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline.ntp_servers }}"
+      register: ntp_result
+
+    - name: Reapply DNS from the baseline
+      when: is_dns | bool and baseline.dns is defined
+      ansible.builtin.include_tasks:
+        file: "{{ set_dns_tasks }}"
+      vars:
+        dns_domain: "{{ baseline.dns.domain }}"
+        dns_nameservers: "{{ baseline.dns.nameservers }}"
+
+    - name: Work out what happened
+      ansible.builtin.set_fact:
+        reconciled: "{{ is_ntp | bool or is_dns | bool }}"
+        changed_back: "{{ (ntp_result.changed | default(false)) or (dns_result.changed | default(false)) }}"
+
+    - name: Record the change control event
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'change_control',
+              'severity': 'warning', 'array': inventory_hostname,
+              'user': audit_user, 'interface': audit_interface | default(''),
+              'command': audit_command ~ ' ' ~ (audit_subcommand | default('')),
+              'arguments': audit_arguments | default(''), 'audit_time': audit_time | default(''),
+              'outcome': ('reverted to baseline' if changed_back else 'already at baseline') if reconciled else 'notified, not reconciled',
+              'baseline': baseline_file} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ audit_user }} ran {{ audit_command }} {{ audit_subcommand | default('') }}
+          {{ audit_arguments | default('') }} ->
+          {{ ('reverted to baseline' if changed_back else 'already at baseline') if reconciled else 'notified, not reconciled' }}

@@ -1,0 +1,114 @@
+---
+# Change control: react to the audit record, not to the next drift poll.
+#
+# Every configuration change the array logs arrives as purefa_audit with the
+# user, command, subcommand and arguments. Anything on a governed command by
+# an identity other than the automation service account is reconciled from
+# the git baseline (baseline_dir/<array>.yml) and reported with who did it
+# and how. Destructive commands by humans are reported. Automation's own
+# changes are logged. Nothing is actioned inside a maintenance window.
+#
+# The second ruleset listens for a git push webhook and applies the baseline
+# forward to every array: merges apply, out-of-band changes revert.
+
+- name: FlashArray change control
+  hosts: all
+
+  sources:
+    - purefa_events:
+        arrays: "{{ config_arrays }}"
+        signals: [audits]
+        audits_interval: "{{ audits_interval }}"
+        automation_users: "{{ automation_users }}"
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: Governed setting changed by a human - reconcile from the baseline
+      condition: >-
+        event.purefa_audit.command is defined and
+        event.purefa_audit.command in vars.governed_commands and
+        event.purefa_audit.by_automation == false and
+        event.purefa_audit.system_user == false and
+        event.purefa_audit.maintenance_active == false
+      throttle:
+        once_within: 2 minutes
+        group_by_attributes:
+          - event.purefa_audit.array
+          - event.purefa_audit.command
+      action:
+        run_playbook:
+          name: playbooks/reconcile.yml
+          extra_vars:
+            target_array: "{{ event.purefa_audit.array }}"
+            baseline_dir: "{{ baseline_dir }}"
+            set_dns_tasks: "{{ set_dns_tasks }}"
+            audit_user: "{{ event.purefa_audit.user }}"
+            audit_interface: "{{ event.purefa_audit.user_interface }}"
+            audit_command: "{{ event.purefa_audit.command }}"
+            audit_subcommand: "{{ event.purefa_audit.subcommand }}"
+            audit_arguments: "{{ event.purefa_audit.arguments }}"
+            audit_time: "{{ event.purefa_audit.time }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Governed setting changed during a maintenance window - log only
+      condition: >-
+        event.purefa_audit.command is defined and
+        event.purefa_audit.command in vars.governed_commands and
+        event.purefa_audit.by_automation == false and
+        event.purefa_audit.maintenance_active == true
+      action:
+        debug:
+          msg: "maintenance window on {{ event.purefa_audit.array }}: {{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}; not reconciled"
+
+    - name: Destructive command by a human - notify
+      condition: >-
+        event.purefa_audit.command is defined and
+        event.purefa_audit.command in vars.destructive_commands and
+        event.purefa_audit.subcommand in vars.destructive_subcommands and
+        event.purefa_audit.by_automation == false and
+        event.purefa_audit.system_user == false
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} on {{ event.purefa_audit.array }}"
+            detail: "arguments: {{ event.purefa_audit.arguments }} (interface {{ event.purefa_audit.user_interface }}, audit {{ event.purefa_audit.audit_id }})"
+            target_array: "{{ event.purefa_audit.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Change by the automation account - log
+      condition: event.purefa_audit.by_automation == true
+      action:
+        debug:
+          msg: "automation ({{ event.purefa_audit.user }}) on {{ event.purefa_audit.array }}: {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}"
+
+- name: FlashArray baseline apply on git push
+  hosts: all
+
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: "{{ webhook_port }}"
+
+  rules:
+    - name: Push to the baseline repository - apply the baseline to every array
+      condition: event.payload.ref is defined
+      throttle:
+        once_within: 1 minute
+        group_by_attributes:
+          - event.payload.ref
+      action:
+        run_playbook:
+          name: playbooks/apply_baseline.yml
+          extra_vars:
+            baseline_dir: "{{ baseline_dir }}"
+            set_dns_tasks: "{{ set_dns_tasks }}"
+            git_ref: "{{ event.payload.ref }}"
+            git_after: "{{ event.payload.after }}"
+            alert_log: "{{ alert_log }}"

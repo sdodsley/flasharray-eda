@@ -1,0 +1,38 @@
+---
+# Test helper: make an out-of-band change as the "human" user (HUMAN_URL /
+# HUMAN_TOKEN in the environment), so the audit record carries their name.
+#   ansible-playbook tests/as_human.yml -e action=ntp_drift -e baseline_ntp_servers_csv=pool.ntp.org
+#   ansible-playbook tests/as_human.yml -e action=destroy_volume
+- name: Out-of-band change as the human user
+  hosts: localhost
+  gather_facts: false
+  vars:
+    human_url: "{{ lookup('env', 'HUMAN_URL') }}"
+    human_token: "{{ lookup('env', 'HUMAN_TOKEN') }}"
+  tasks:
+    - name: Add an NTP server
+      when: action == 'ntp_drift'
+      everpure.flasharray.purefa_ntp:
+        fa_url: "{{ human_url }}"
+        api_token: "{{ human_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline_ntp_servers_csv.split(',') + ['time.google.com'] }}"
+
+    - name: Create, destroy and eradicate a scratch volume
+      when: action == 'destroy_volume'
+      block:
+        - everpure.flasharray.purefa_volume:
+            fa_url: "{{ human_url }}"
+            api_token: "{{ human_token }}"
+            disable_warnings: true
+            name: eda-change-control-test
+            size: 1G
+            with_default_protection: false
+        - everpure.flasharray.purefa_volume:
+            fa_url: "{{ human_url }}"
+            api_token: "{{ human_token }}"
+            disable_warnings: true
+            name: eda-change-control-test
+            state: absent
+            eradicate: true

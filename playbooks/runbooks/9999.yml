@@ -1,0 +1,8 @@
+---
+# Per-code runbook tasks, included by playbooks/alert_runbook.yml when the
+# alert_runbooks entry for the code has route: tasks. This one is the test
+# fixture; a real one would gather diagnostics for the component, attach them
+# to the ticket, or run the collection module that fixes the condition.
+- name: Runbook tasks for alert code {{ alert_code }}
+  ansible.builtin.debug:
+    msg: "runbook tasks ran for {{ target_array }} alert {{ alert_id }} ({{ component | default('') }})"

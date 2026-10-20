@@ -1,0 +1,51 @@
+---
+# Route an array alert through the alert-code runbook map and raise a
+# ticket record carrying the array's own action text and KB link.
+#
+# The alerts rulebook passes the alert fields plus `alert_runbooks` (a map of
+# alert code -> {severity, route, note}) and `runbook_dir`. A code with no
+# entry takes the `default` entry. `route` is one of:
+#   notify   -> alert log only (same shape as notify.yml)
+#   ticket   -> alert log + a ticket record; swap the lineinfile for
+#               servicenow.itsm.incident or jira when connected
+#   tasks    -> also include runbook_dir/<code>.yml (per-code tasks)
+- name: Alert runbook
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Pick the runbook entry for this alert code
+      ansible.builtin.set_fact:
+        runbook: "{{ alert_runbooks[alert_code | string] | default(alert_runbooks['default']) }}"
+
+    - name: Build the record
+      ansible.builtin.set_fact:
+        alert_record:
+          time: "{{ lookup('pipe', 'date -Is') }}"
+          kind: "{{ 'ticket' if runbook.route in ['ticket', 'tasks'] else 'notify' }}"
+          severity: "{{ runbook.severity | default(severity) }}"
+          array: "{{ target_array }}"
+          alert_id: "{{ alert_id }}"
+          alert_code: "{{ alert_code }}"
+          transition: "{{ transition | default('opened') }}"
+          subject: "{{ subject }}"
+          component: "{{ component | default('') }}"
+          array_action: "{{ array_action | default('') }}"
+          knowledge_base_url: "{{ knowledge_base_url | default('') }}"
+          runbook_note: "{{ runbook.note | default('') }}"
+          route: "{{ runbook.route }}"
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ alert_record | to_json }}"
+
+    - name: Run the per-code runbook tasks
+      when: runbook.route == 'tasks'
+      ansible.builtin.include_tasks:
+        file: "{{ runbook_dir }}/{{ alert_code }}.yml"
+
+    - name: Show the record
+      ansible.builtin.debug:
+        msg: "[{{ alert_record.severity | upper }}] {{ alert_record.route }} :: {{ alert_record.subject }} :: {{ alert_record.array_action }} {{ alert_record.knowledge_base_url }} {{ alert_record.runbook_note }}"

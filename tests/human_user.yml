@@ -1,0 +1,42 @@
+---
+# Test helper: create (or remove) a local array user that plays the "human"
+# in the change control tests, and mint an API token for it. The token is
+# written to an env file (mode 0600) and never printed.
+#   ansible-playbook -i inventory/local-lab.yml tests/human_user.yml \
+#       -e target_array=<array> -e human_user=eda-human -e human_password=... \
+#       -e human_env_file=$HOME/.flasharray-eda-human.env [-e user_state=absent]
+- name: Lab "human" user for change control tests
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  no_log: true
+  tasks:
+    - name: Create or remove the user
+      everpure.flasharray.purefa_user:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ human_user }}"
+        password: "{{ human_password }}"
+        role: array_admin
+        state: "{{ user_state | default('present') }}"
+
+    - name: Mint an API token for the user
+      when: user_state | default('present') == 'present'
+      everpure.flasharray.purefa_token:
+        fa_url: "{{ fa_url }}"
+        disable_warnings: true
+        username: "{{ human_user }}"
+        password: "{{ human_password }}"
+        state: present
+        recreate: true
+      register: token
+
+    - name: Write the env file
+      when: user_state | default('present') == 'present'
+      ansible.builtin.copy:
+        dest: "{{ human_env_file }}"
+        mode: "0600"
+        content: |
+          HUMAN_URL={{ fa_url }}
+          HUMAN_TOKEN={{ token.purefa_token }}
+      delegate_to: localhost

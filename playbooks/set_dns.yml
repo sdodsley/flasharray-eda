@@ -1,0 +1,41 @@
+---
+# Task file: set the management DNS domain and nameservers on the current
+# host with the SDK, idempotently. Included by remediate_dns.yml,
+# reconcile.yml and apply_baseline.yml.
+#
+# Not everpure.flasharray.purefa_dns: release 1.44.0 defaults `service` to
+# management and fails with "Changing service type is not permitted" whenever
+# the management configuration also lists the file service (the normal state
+# until a separate file DNS configuration exists). Fixed on the collection's
+# master branch; switch back when that ships.
+# Expects: dns_domain, dns_nameservers (list). Registers dns_result
+# ({changed, domain, nameservers}).
+- name: Set management DNS
+  ansible.builtin.command:
+    cmd: python3 -
+    stdin: |
+      import json, os, urllib3
+      urllib3.disable_warnings()
+      from pypureclient import flasharray
+      c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+      want_domain, want_ns = os.environ["DNS_DOMAIN"], [n for n in os.environ["DNS_NS"].split(",") if n]
+      cur = list(c.get_dns(names=["management"]).items)[0]
+      if cur.domain == want_domain and list(cur.nameservers or []) == want_ns:
+          print(json.dumps({"changed": False, "domain": cur.domain, "nameservers": list(cur.nameservers or [])})); raise SystemExit(0)
+      r = c.patch_dns(names=["management"], dns=flasharray.DnsPatch(domain=want_domain, nameservers=want_ns))
+      if r.status_code != 200:
+          print(json.dumps({"changed": False, "error": r.errors[0].message})); raise SystemExit(0)
+      cur = list(c.get_dns(names=["management"]).items)[0]
+      print(json.dumps({"changed": True, "domain": cur.domain, "nameservers": list(cur.nameservers or [])}))
+  environment:
+    FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+    FA_TOKEN: "{{ api_token }}"
+    DNS_DOMAIN: "{{ dns_domain }}"
+    DNS_NS: "{{ dns_nameservers | join(',') }}"
+  register: dns_cmd
+  changed_when: (dns_cmd.stdout | from_json).changed
+  failed_when: (dns_cmd.stdout | from_json).error is defined
+
+- name: Parse the DNS result
+  ansible.builtin.set_fact:
+    dns_result: "{{ dns_cmd.stdout | from_json }}"

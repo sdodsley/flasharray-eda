@@ -44,6 +44,13 @@ top_growers       telemetry: how many fastest-growing volumes to report
                   (default 5)
 baseline          telemetry: also fetch the same half hour one week ago
                   from the array's own history (default true)
+drr_drop_pct      telemetry: data reduction this much below a week ago sets
+                  drr_drop (default 10)
+snapshot_growth_pct
+                  telemetry: snapshot space this much above a week ago sets
+                  snapshot_surge (default 25)
+write_surge_ratio telemetry: write bandwidth this many times last week's
+                  sets write_surge (default 3)
 rpo_seconds       replication: informational; copied onto replica-link
                   events so rules can compare lag with it (default 0 = none)
 
@@ -71,23 +78,32 @@ purefa_controller_failover
 purefa_capacity         capacity_bytes, used_bytes, used_pct, data_reduction,
                         total_reduction, snapshot_bytes, growth_bytes_per_day,
                         days_to_full, days_to_full_known, top_growers[],
-                        pending_eradication_*,
+                        pending_eradication_*, drr_week_ago, drr_drop_pct,
+                        drr_drop_poll_pct, snapshot_growth_pct,
+                        snapshot_growth_poll_pct, drr_drop, snapshot_surge
                         others[] (other polled arrays, least used first)
 purefa_array_performance
                         usec_per_read_op, usec_per_write_op, reads_per_sec,
                         writes_per_sec, read/write_bytes_per_sec, queue_depth,
                         baseline_* (same half hour last week), read/write
-                        latency ratio against the baseline, baseline_known
+                        latency ratio against the baseline, baseline_known,
+                        write_bw_ratio, write_surge
 purefa_volume_performance
-                        volume, latencies, IOPS, high_latency_polls,
+                        volume, latencies, IOPS, iops_share_pct,
+                        high_latency_polls, normal_polls, qos_iops_limit,
+                        qos_bw_limit, eda_capped (volume carries the eda/qos_cap
+                        tag set by the QoS playbook), eda_cap_since,
                         array_usec_per_read_op, array_usec_per_write_op
 purefa_array_connection remote, status, type, replication_transport,
-                        paths_total, paths_connected, throttle
+                        paths_total, paths_connected, failed_paths[], throttle
 purefa_replica_link     local_pod, remote_pod, remote_array, status,
                         direction, paused, lag_ms, lag_s, recovery_point,
-                        recovery_point_age_s, rpo_seconds, rpo_breached
+                        recovery_point_age_s, rpo_seconds, rpo_breached,
+                        rpo_breach_polls, paused_for_s
 purefa_stretched_pod    pod, members[{array,status,mediator_status}],
-                        all_online, mediator_online
+                        online_arrays[], offline_arrays[], all_online,
+                        mediator_online, recovered (first all-online poll
+                        after a degraded one)
 purefa_pg_replication   pgroup, targets[], schedule_enabled, frequency_ms,
                         last_completed, since_last_completed_s, overdue,
                         in_progress{name,progress,data_transferred},
@@ -400,6 +416,7 @@ def _capacity_row(arr, state, args):
     used = sp.get("total_physical") or 0
 
     growth = days_to_full = None
+    hist = []
     try:
         hist = _items(c.get_arrays_space(resolution=DAY_MS, start_time=now - 7 * DAY_MS, end_time=now), "space history")
         pts = [(h.get("time"), (h.get("space") or {}).get("total_physical")) for h in hist
@@ -413,6 +430,24 @@ def _capacity_row(arr, state, args):
                     days_to_full = round((capacity - used) / growth, 1)
     except Exception as exc:  # noqa: BLE001 - history is optional
         logger.debug("purefa_events[%s]: space history unavailable: %s", arr.name, exc)
+
+    # anomaly inputs: data reduction and snapshot space against the 7-day daily
+    # history (its first point) and against the previous poll
+    drr_now = sp.get("data_reduction")
+    snap_now = sp.get("snapshots") or 0
+    first = next((h for h in sorted(hist, key=lambda h: h.get("time") or 0) if h.get("space")), None)
+    drr_week = (first.get("space") or {}).get("data_reduction") if first else None
+    snap_week = (first.get("space") or {}).get("snapshots") if first else None
+    drr_drop_pct = round(100.0 * (drr_week - drr_now) / drr_week, 1) if drr_week and drr_now else None
+    snap_growth_pct = round(100.0 * (snap_now - snap_week) / snap_week, 1) if snap_week else None
+    prev_space = st.get("prev_space") or {}
+    drr_drop_poll_pct = (round(100.0 * (prev_space["drr"] - drr_now) / prev_space["drr"], 2)
+                         if prev_space.get("drr") and drr_now else None)
+    snap_growth_poll_pct = (round(100.0 * (snap_now - prev_space["snap"]) / prev_space["snap"], 2)
+                            if prev_space.get("snap") else None)
+    st["prev_space"] = {"drr": drr_now, "snap": snap_now}
+    drr_drop_threshold = float(args.get("drr_drop_pct", 10))
+    snap_growth_threshold = float(args.get("snapshot_growth_pct", 25))
 
     top_n = int(args.get("top_growers", 5))
     vols = _items(c.get_volumes_space(limit=500, sort=["space.total_physical-"], destroyed=False), "volumes/space")
@@ -435,6 +470,14 @@ def _capacity_row(arr, state, args):
         "data_reduction": sp.get("data_reduction"),
         "total_reduction": sp.get("total_reduction"),
         "snapshot_bytes": sp.get("snapshots"),
+        "drr_week_ago": drr_week,
+        "drr_drop_pct": drr_drop_pct,
+        "drr_drop_poll_pct": drr_drop_poll_pct,
+        "snapshot_growth_pct": snap_growth_pct,
+        "snapshot_growth_poll_pct": snap_growth_poll_pct,
+        # anomaly booleans (thresholds: drr_drop_pct, snapshot_growth_pct args)
+        "drr_drop": bool(drr_drop_pct is not None and drr_drop_pct >= drr_drop_threshold),
+        "snapshot_surge": bool(snap_growth_pct is not None and snap_growth_pct >= snap_growth_threshold),
         "growth_bytes_per_day": growth,
         "days_to_full": days_to_full,
         "days_to_full_known": days_to_full is not None,
@@ -467,9 +510,13 @@ def _performance_events(arr, state, args):
             ev["read_latency_ratio"] = _ratio(ev["usec_per_read_op"], ev.get("baseline_usec_per_read_op"))
             ev["write_latency_ratio"] = _ratio(ev["usec_per_write_op"], ev.get("baseline_usec_per_write_op"))
             ev["baseline_known"] = ev["write_latency_ratio"] is not None
+            ev["write_bw_ratio"] = _ratio(ev["write_bytes_per_sec"], _avg(h.get("write_bytes_per_sec") for h in hist))
+            ev["write_surge"] = bool(ev["write_bw_ratio"] is not None and
+                                     ev["write_bw_ratio"] >= float(args.get("write_surge_ratio", 3)))
         except Exception as exc:  # noqa: BLE001 - baseline is optional
             logger.debug("purefa_events[%s]: baseline unavailable: %s", arr.name, exc)
     ev.setdefault("baseline_known", False)
+    ev.setdefault("write_surge", False)
     events = [{"purefa_array_performance": ev}]
 
     top = int(args.get("top_volumes", 10))
@@ -481,14 +528,30 @@ def _performance_events(arr, state, args):
         for v in _items(c.get_volumes_performance(limit=top, sort=[sort], destroyed=False), "volumes/performance"):
             merged[v.get("name")] = v
     seen = set()
-    for name, vp in merged.items():
+    normal = st.setdefault("normal_polls", {})
+    active = {n: vp for n, vp in merged.items()
+              if (vp.get("reads_per_sec") or 0) + (vp.get("writes_per_sec") or 0) >= min_iops}
+    # QoS limits and the EDA cap tag for the volumes about to be reported, so
+    # the hysteresis rule sees state the array itself holds
+    qos, capped = {}, {}
+    if active:
+        names = list(active)
+        for v in _items(c.get_volumes(names=names), "volumes"):
+            q = v.get("qos") or {}
+            qos[v.get("name")] = {"iops": q.get("iops_limit"), "bw": q.get("bandwidth_limit")}
+        try:
+            for t in _items(c.get_volumes_tags(resource_names=names, namespaces=["eda"]), "volume tags"):
+                if t.get("key") == "qos_cap":
+                    capped[_name(t.get("resource"))] = t.get("value")
+        except Exception as exc:  # noqa: BLE001 - tags are optional
+            logger.debug("purefa_events[%s]: volume tags unavailable: %s", arr.name, exc)
+    array_iops = (perf.get("reads_per_sec") or 0) + (perf.get("writes_per_sec") or 0)
+    for name, vp in active.items():
         iops = (vp.get("reads_per_sec") or 0) + (vp.get("writes_per_sec") or 0)
-        if iops < min_iops:
-            counters.pop(name, None)
-            continue
         seen.add(name)
         lat = max(vp.get("usec_per_read_op") or 0, vp.get("usec_per_write_op") or 0)
         counters[name] = counters.get(name, 0) + 1 if lat >= threshold else 0
+        normal[name] = normal.get(name, 0) + 1 if lat < threshold else 0
         events.append({"purefa_volume_performance": {
             "array": arr.name,
             "volume": name,
@@ -496,18 +559,25 @@ def _performance_events(arr, state, args):
             "usec_per_write_op": vp.get("usec_per_write_op"),
             "reads_per_sec": vp.get("reads_per_sec"),
             "writes_per_sec": vp.get("writes_per_sec"),
+            "iops_share_pct": round(100.0 * iops / array_iops, 1) if array_iops else None,
             "high_latency_polls": counters[name],
+            "normal_polls": normal[name],
+            "qos_iops_limit": qos.get(name, {}).get("iops"),
+            "qos_bw_limit": qos.get(name, {}).get("bw"),
+            "eda_capped": name in capped,
+            "eda_cap_since": capped.get(name),
             "array_usec_per_read_op": perf.get("usec_per_read_op"),
             "array_usec_per_write_op": perf.get("usec_per_write_op"),
         }})
     for name in [n for n in counters if n not in seen]:
         counters.pop(name, None)
+        normal.pop(name, None)
     return events
 
 
 def poll_replication(arr, state, args):
     c = arr.client
-    st = state.setdefault("replication", {}).setdefault(arr.name, {"progress": {}})
+    st = state.setdefault("replication", {}).setdefault(arr.name, {"progress": {}, "rpo_polls": {}, "paused_since": {}, "degraded": set()})
     now = _now_ms()
     rpo = int(args.get("rpo_seconds", 0) or 0)
     events = []
@@ -516,6 +586,8 @@ def poll_replication(arr, state, args):
     paths = _items(c.get_array_connections_path(), "array-connections/path")
     for conn in _items(c.get_array_connections(), "array-connections"):
         mine = [p for p in paths if p.get("name") == conn.get("name")]
+        failed = [{"local": f"{p.get('local_port')} {p.get('local_address')}", "remote": f"{p.get('remote_port')} {p.get('remote_address')}",
+                   "status": p.get("status")} for p in mine if p.get("status") != "connected"]
         events.append({"purefa_array_connection": {
             "array": arr.name,
             "maintenance_active": maintenance_active,
@@ -524,13 +596,21 @@ def poll_replication(arr, state, args):
             "type": conn.get("type"),
             "replication_transport": conn.get("replication_transport"),
             "paths_total": len(mine),
-            "paths_connected": sum(1 for p in mine if p.get("status") == "connected"),
+            "paths_connected": len(mine) - len(failed),
+            "failed_paths": failed,
             "throttle": conn.get("throttle") or {},
             "remote_version": conn.get("version"),
         }})
 
     for link in _items(c.get_pod_replica_links(), "pod-replica-links"):
         rp = link.get("recovery_point")
+        key = f"{_name(link.get('local_pod'))}->{_name(link.get('remote_pod'))}"
+        breached = bool(rpo > 0 and (link.get("lag") or 0) > rpo * 1000)
+        st["rpo_polls"][key] = st["rpo_polls"].get(key, 0) + 1 if breached else 0
+        if link.get("paused"):
+            st["paused_since"].setdefault(key, now)
+        else:
+            st["paused_since"].pop(key, None)
         events.append({"purefa_replica_link": {
             "array": arr.name,
             "maintenance_active": maintenance_active,
@@ -546,19 +626,32 @@ def poll_replication(arr, state, args):
             "recovery_point_age_s": round((now - rp) / 1000) if rp else None,
             "rpo_seconds": rpo,
             # rulebook conditions cannot do arithmetic, so the comparison is made here
-            "rpo_breached": bool(rpo > 0 and (link.get("lag") or 0) > rpo * 1000),
+            "rpo_breached": breached,
+            "rpo_breach_polls": st["rpo_polls"][key],
+            "paused_for_s": round((now - st["paused_since"][key]) / 1000) if key in st["paused_since"] else 0,
         }})
 
     for pod in _items(c.get_pods(filter="destroyed='false' and array_count>1"), "pods"):
         members = [{"array": m.get("name"), "status": m.get("status"), "mediator_status": m.get("mediator_status"),
                     "pre_elected": m.get("pre_elected")} for m in (pod.get("arrays") or [])]
+        all_online = all(m["status"] == "online" for m in members)
+        mediator_online = all(m["mediator_status"] == "online" for m in members)
+        pname = pod.get("name")
+        recovered = all_online and pname in st["degraded"]
+        if all_online:
+            st["degraded"].discard(pname)
+        else:
+            st["degraded"].add(pname)
         events.append({"purefa_stretched_pod": {
             "array": arr.name,
             "maintenance_active": maintenance_active,
-            "pod": pod.get("name"),
+            "pod": pname,
             "members": members,
-            "all_online": all(m["status"] == "online" for m in members),
-            "mediator_online": all(m["mediator_status"] == "online" for m in members),
+            "online_arrays": [m["array"] for m in members if m["status"] == "online"],
+            "offline_arrays": [m["array"] for m in members if m["status"] != "online"],
+            "all_online": all_online,
+            "mediator_online": mediator_online,
+            "recovered": recovered,
         }})
 
     stuck_after = int(args.get("stuck_transfer_polls", 3))

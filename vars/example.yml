@@ -73,7 +73,6 @@ automation_users:
 # Commands whose audit record triggers a reconcile (or a notification for the
 # ones the reconcile playbook does not rewrite).
 governed_commands:
-  - purentp
   - puredns
   - pureds
   - purearray
@@ -98,6 +97,8 @@ destructive_subcommands:
 baseline_dir: /opt/flasharray-eda-baseline
 # Port the change control rulebook listens on for the git push webhook.
 webhook_port: 5000
+# Absolute path of playbooks/set_dns.yml (run_playbook copies only the playbook).
+set_dns_tasks: /opt/flasharray-eda/playbooks/set_dns.yml
 
 # --- alert runbooks (alerts signal) ---------------------------------------
 # alert code (as a string) -> how to route it. Unknown codes use `default`.
@@ -109,3 +110,41 @@ alert_runbooks:
   "120": {route: ticket, severity: critical, note: "Stretched pod offline on peer: check the replication paths and the mediator before touching the pod."}
   "122": {route: ticket, severity: critical, note: "Mediator unhealthy: verify DNS and outbound HTTPS from both arrays."}
   "13": {route: notify, note: "NTP not synchronised: compare with the baseline NTP servers."}
+
+# --- replication actions (replication signal) ----------------------------
+rpo_escalate_polls: 4                 # RPO breached this many polls in a row -> critical
+replication_auto_replicate_now: true  # overdue/stuck protection group -> immediate replicated snapshot
+activecluster_auto_prefer: true       # stretched pod member offline -> host preferred arrays to the online side
+# Scheduled DR drill: copy a volume from the latest replicated snapshot on the
+# target, verify it, destroy it. One entry per replicated protection group.
+dr_drill_interval_s: 86400
+dr_drills:
+  - target_array: array-b
+    source_array: array-a
+    pgroup: pg-prod
+    volume: ""            # member volume name on the source; empty = first member
+    prefix: eda-drill
+
+# --- capacity approvals and QoS (telemetry signal) --------------------------
+# Approval requests are written here and answered on the approvals webhook:
+#   curl -X POST http://<eda host>:<approval_port>/endpoint -H 'Content-Type: application/json' \
+#        -d '{"request_id": "<id>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
+request_dir: /var/lib/flasharray-eda/requests
+approval_port: 5001
+qos_auto_cap: true                # noisy neighbour on a hot array -> temporary IOPS cap
+qos_cap_iops: 20000               # the cap applied
+qos_cap_min_iops_share_pct: 40    # only volumes holding at least this share of the array's IOPS
+qos_lift_normal_polls: 5          # lift after this many consecutive normal polls
+
+# --- anomaly (composite rule) --------------------------------------------
+anomaly_drr_drop_pct: 10          # data reduction this far below a week ago
+anomaly_snapshot_growth_pct: 25   # snapshot space this far above a week ago
+anomaly_write_surge_ratio: 3      # write bandwidth this many times last week's
+anomaly_extend_eradication_by_s: 86400   # lengthen the eradication delay by a day
+
+# --- push and zero-code paths ----------------------------------------------
+# purefa_syslog listener (point the arrays' syslog target here; 514 needs root)
+syslog_port: 5140
+syslog_hostnames: {}             # syslog hostname -> inventory array name, when they differ
+# ansible.eda.alertmanager listener for prometheus/flasharray.rules.yml
+alertmanager_port: 5002

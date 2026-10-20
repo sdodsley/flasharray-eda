@@ -21,7 +21,11 @@ fi
 VENV=${FAEDA_VENV:-$HOME/fusion-eda/venv}
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
-export ANSIBLE_COLLECTIONS_PATH=${ANSIBLE_COLLECTIONS_PATH:-$HOME/.ansible/collections}
+# ansible.eda (webhook, tick, generic sources) and everpure.flasharray must both
+# be on the collections path; a collections/ dir beside the venv is included.
+COLL_DEFAULT=$HOME/.ansible/collections
+[ -d "$(dirname "$VENV")/collections" ] && COLL_DEFAULT="$(dirname "$VENV")/collections:$COLL_DEFAULT"
+export ANSIBLE_COLLECTIONS_PATH=${ANSIBLE_COLLECTIONS_PATH:-$COLL_DEFAULT}
 export ANSIBLE_LOCALHOST_WARNING=False
 
 RULEBOOK=${1:-extensions/eda/rulebooks/alerts.yml}

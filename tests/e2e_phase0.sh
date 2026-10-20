@@ -24,6 +24,8 @@ ENV_FILE=${FAEDA_ENV:-$HOME/.pure_test_env}
 set -a; source "$ENV_FILE"; set +a
 source "${FAEDA_VENV:-$HOME/fusion-eda/venv}/bin/activate"
 export ANSIBLE_LOCALHOST_WARNING=False
+VENV=${FAEDA_VENV:-$HOME/fusion-eda/venv}; COLL=$HOME/.ansible/collections; [ -d "$(dirname "$VENV")/collections" ] && COLL="$(dirname "$VENV")/collections:$COLL"
+export ANSIBLE_COLLECTIONS_PATH=${ANSIBLE_COLLECTIONS_PATH:-$COLL}
 PB() { ansible-playbook -i inventory/local-lab.yml "$@" 2>&1 | grep -E "changed=|fatal|FAILED" | cut -c1-160; }
 RB() { local secs=$1 log=$2; shift 2; timeout "$secs" ./run.sh "$@" > "$OUT/$log" 2>&1; }
 summary() { grep -E "polling|Ruleset:|Rule:|Action:|PLAY RECAP|ok=|failed=|msg|poll failed|Traceback|ERROR" "$OUT/$1" | grep -v "^$" | cut -c1-220 | head -${2:-25}; }

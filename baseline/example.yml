@@ -1,0 +1,10 @@
+---
+# Desired state for one array. Copy to <array>.yml in the baseline repo.
+ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+dns:
+  domain: example.com
+  nameservers:
+    - 10.0.0.53
+    - 10.0.1.53

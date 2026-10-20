@@ -1,21 +1,18 @@
 ---
 # Reapply the baseline management DNS configuration to one array.
+# set_dns_tasks is the absolute path of playbooks/set_dns.yml (ansible-rulebook
+# copies only the playbook to a temporary directory, so the task file is
+# passed in as a var by the rulebook).
 - name: Reapply baseline DNS
   hosts: "{{ target_array }}"
   gather_facts: false
   vars:
-    baseline_dns_nameservers: "{{ baseline_dns_nameservers_csv.split(',') }}"
+    dns_domain: "{{ baseline_dns_domain }}"
+    dns_nameservers: "{{ baseline_dns_nameservers_csv.split(',') }}"
   tasks:
     - name: Set DNS domain and nameservers to baseline
-      everpure.flasharray.purefa_dns:
-        fa_url: "{{ fa_url }}"
-        api_token: "{{ api_token }}"
-        disable_warnings: true
-        state: present
-        name: management
-        domain: "{{ baseline_dns_domain }}"
-        nameservers: "{{ baseline_dns_nameservers }}"
-      register: dns_result
+      ansible.builtin.include_tasks:
+        file: "{{ set_dns_tasks }}"
 
     - name: Record the remediation
       ansible.builtin.lineinfile:
@@ -25,6 +22,6 @@
         line: >-
           {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'remediation', 'array': inventory_hostname,
               'setting': 'dns', 'observed': {'domain': observed_dns_domain | default(''), 'nameservers': observed_dns_nameservers | default('')},
-              'applied': {'domain': baseline_dns_domain, 'nameservers': baseline_dns_nameservers},
+              'applied': {'domain': dns_domain, 'nameservers': dns_nameservers},
               'changed': dns_result.changed} | to_json }}
       delegate_to: localhost
