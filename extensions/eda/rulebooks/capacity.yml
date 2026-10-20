@@ -1,11 +1,16 @@
 ---
 # Capacity: physical utilisation, days-to-full from the array's own space
-# history, and the fastest-growing volumes since the previous poll.
+# history, the fastest-growing volumes since the previous poll, and what is
+# sitting in pending eradication.
 #
-# Nothing here frees space. Crossing the risk threshold records an approval
-# request listing the arrays with the most headroom; in Ansible Automation
-# Platform the same rule calls run_workflow_template against a workflow whose
-# first node is a manual approval.
+# Nothing here frees space on its own. Crossing the risk threshold records an
+# approval request (with a request id) listing what could be reclaimed and
+# which other arrays have headroom. The second ruleset is the approval gate:
+# a POST to its webhook with {"request_id": ..., "approve": true, "action":
+# "eradicate_pending"} runs the reclaim playbook, anything else is logged.
+# In Ansible Automation Platform the first ruleset calls run_workflow_template
+# against a workflow whose first node is a manual approval and the webhook
+# ruleset is not needed.
 
 - name: FlashArray capacity
   hosts: all
@@ -24,7 +29,7 @@
         debug:
           msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
 
-    - name: Array over capacity risk threshold - raise provisioning request
+    - name: Array over capacity risk threshold - raise an approval request
       condition: >-
         event.purefa_capacity.used_pct is defined and
         event.purefa_capacity.used_pct >= vars.capacity_risk_pct
@@ -42,7 +47,10 @@
             capacity_bytes: "{{ event.purefa_capacity.capacity_bytes }}"
             days_to_full: "{{ event.purefa_capacity.days_to_full }}"
             top_growers: "{{ event.purefa_capacity.top_growers }}"
+            pending_eradication_volumes: "{{ event.purefa_capacity.pending_eradication_volumes }}"
+            pending_eradication_snapshots: "{{ event.purefa_capacity.pending_eradication_snapshots }}"
             candidate_targets: "{{ event.purefa_capacity.others }}"
+            request_dir: "{{ request_dir }}"
             alert_log: "{{ alert_log }}"
 
     - name: Array will be full within the warning horizon - notify
@@ -65,3 +73,32 @@
               top growers={{ event.purefa_capacity.top_growers }}
             target_array: "{{ event.purefa_capacity.array }}"
             alert_log: "{{ alert_log }}"
+
+- name: FlashArray capacity approvals
+  hosts: all
+
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: "{{ approval_port }}"
+
+  rules:
+    - name: Approved request - reclaim
+      condition: >-
+        event.payload.request_id is defined and
+        event.payload.approve == true
+      action:
+        run_playbook:
+          name: playbooks/capacity_reclaim.yml
+          extra_vars:
+            request_id: "{{ event.payload.request_id }}"
+            approver: "{{ event.payload.approver }}"
+            reclaim_action: "{{ event.payload.action }}"
+            request_dir: "{{ request_dir }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Rejected or malformed request - log
+      condition: event.payload.request_id is defined and event.payload.approve != true
+      action:
+        debug:
+          msg: "capacity request {{ event.payload.request_id }} rejected by {{ event.payload.approver }}"

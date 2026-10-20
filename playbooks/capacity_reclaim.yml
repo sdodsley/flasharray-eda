@@ -1,0 +1,69 @@
+---
+# Act on an approved capacity request. Reads request_dir/<request_id>.json
+# (written by capacity_request.yml), checks it is still awaiting approval,
+# performs the approved action and marks the request done.
+#
+# Actions:
+#   eradicate_pending  eradicate volumes and volume snapshots already in
+#                      pending eradication on the array. Objects under a
+#                      SafeMode retention lock are refused by the array and
+#                      reported, never forced.
+- name: Reclaim capacity on an approved request
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load the request
+      ansible.builtin.set_fact:
+        request: "{{ lookup('file', request_dir ~ '/' ~ request_id ~ '.json') | from_json }}"
+
+    - name: Refuse anything that is not awaiting approval or not a proposed action
+      ansible.builtin.assert:
+        that:
+          - request.status == 'awaiting_approval'
+          - reclaim_action in request.proposed_actions
+        fail_msg: "request {{ request_id }} is {{ request.status }} or does not propose {{ reclaim_action }}"
+
+    - name: Eradicate pending objects
+      when: reclaim_action == 'eradicate_pending'
+      ansible.builtin.command:
+        cmd: python3 -
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          done, refused = [], []
+          snaps = [s.name for s in c.get_volume_snapshots(destroyed=True).items]
+          for n in snaps:
+              r = c.delete_volume_snapshots(names=[n])
+              (done if r.status_code == 200 else refused).append({"snapshot": n, **({} if r.status_code == 200 else {"error": r.errors[0].message})})
+          vols = [v.name for v in c.get_volumes(destroyed=True).items]
+          for n in vols:
+              r = c.delete_volumes(names=[n])
+              (done if r.status_code == 200 else refused).append({"volume": n, **({} if r.status_code == 200 else {"error": r.errors[0].message})})
+          print(json.dumps({"eradicated": done, "refused": refused}))
+      environment:
+        FA_HOST: "{{ hostvars[request.array].fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ hostvars[request.array].api_token }}"
+      register: reclaim
+      changed_when: (reclaim.stdout | from_json).eradicated | length > 0
+
+    - name: Mark the request done
+      ansible.builtin.copy:
+        dest: "{{ request_dir }}/{{ request_id }}.json"
+        mode: "0600"
+        content: "{{ request | combine({'status': 'done', 'approver': approver | default(''), 'action': reclaim_action, 'result': reclaim.stdout | default('{}') | from_json, 'done_at': lookup('pipe', 'date -Is')}) | to_nice_json }}"
+
+    - name: Record the outcome
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'capacity_reclaim', 'severity': 'info',
+              'array': request.array, 'request_id': request_id, 'approver': approver | default(''),
+              'action': reclaim_action, 'result': reclaim.stdout | default('{}') | from_json} | to_json }}
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: "request {{ request_id }} approved by {{ approver | default('?') }}: {{ reclaim_action }} on {{ request.array }} -> {{ reclaim.stdout | default('{}') }}"

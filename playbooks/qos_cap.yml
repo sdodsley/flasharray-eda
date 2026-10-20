@@ -1,0 +1,116 @@
+---
+# Apply or lift a temporary IOPS cap on a volume and keep the state on the
+# array as a tag (namespace eda, key qos_cap, value = when it was applied).
+# Called by the performance rulebook with target_array, volume, mode
+# (cap | lift), cap_iops, reason and alert_log.
+#
+# The cap uses everpure.flasharray.purefa_volume (iops_qos); the tags are set
+# and removed with the SDK (the collection's kvp syntax splits values on ":"
+# and its removal needs the exact value). Lifting restores the previous IOPS
+# limit carried in the tag, or clears it (module value 0, stored as 100000000).
+- name: Volume QoS cap with hysteresis
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    pod_or_vg: "{{ '::' in volume or '/' in volume }}"
+  tasks:
+    - name: Read the volume's current QoS and cap tag
+      ansible.builtin.command:
+        cmd: python3 -
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          # to_dict(): SDK models raise AttributeError for fields the array did not return
+          v = list(c.get_volumes(names=[os.environ["VOL"]]).items)[0].to_dict()
+          q = v.get("qos") or {}
+          tags = {t.key: t.value for t in c.get_volumes_tags(resource_names=[os.environ["VOL"]], namespaces=["eda"]).items}
+          print(json.dumps({"iops_limit": q.get("iops_limit"), "bw_limit": q.get("bandwidth_limit"), "tags": tags}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        VOL: "{{ volume }}"
+      register: before_cmd
+      changed_when: false
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        before: "{{ before_cmd.stdout | from_json }}"
+
+    - name: Apply the cap
+      when: mode == 'cap'
+      block:
+        - name: Set the IOPS limit
+          everpure.flasharray.purefa_volume:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ volume }}"
+            iops_qos: "{{ cap_iops }}"
+          register: capped
+
+        - name: Tag the volume so the plugin and operators can see the cap
+          ansible.builtin.command:
+            cmd: python3 -
+            stdin: |
+              import os, time, urllib3
+              urllib3.disable_warnings()
+              from pypureclient import flasharray
+              c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+              # values hold no colons: the collection's kvp syntax splits on them
+              tags = [flasharray.Tag(namespace="eda", key="qos_cap", value=str(int(time.time()))),
+                      flasharray.Tag(namespace="eda", key="qos_prev_iops", value=os.environ["PREV"])]
+              r = c.put_volumes_tags_batch(resource_names=[os.environ["VOL"]], tag=tags)
+              print(r.status_code, "" if r.status_code == 200 else r.errors[0].message)
+          environment:
+            FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+            FA_TOKEN: "{{ api_token }}"
+            VOL: "{{ volume }}"
+            PREV: "{{ before.iops_limit | default('none', true) }}"
+          changed_when: true
+
+    - name: Lift the cap
+      when: mode == 'lift'
+      block:
+        - name: Restore the previous IOPS limit, or clear it (the module takes 0 for "no limit", which the array stores as 100000000)
+          everpure.flasharray.purefa_volume:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ volume }}"
+            iops_qos: "{{ '0' if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000'] else before.tags.qos_prev_iops }}"
+          register: lifted
+
+        - name: Remove the cap tags
+          ansible.builtin.command:
+            cmd: python3 -
+            stdin: |
+              import os, urllib3
+              urllib3.disable_warnings()
+              from pypureclient import flasharray
+              c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+              r = c.delete_volumes_tags(resource_names=[os.environ["VOL"]], namespaces=["eda"], keys=["qos_cap", "qos_prev_iops"])
+              print(r.status_code, "" if r.status_code == 200 else r.errors[0].message)
+          environment:
+            FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+            FA_TOKEN: "{{ api_token }}"
+            VOL: "{{ volume }}"
+          changed_when: true
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'qos_cap', 'severity': 'warning' if mode == 'cap' else 'info',
+              'array': inventory_hostname, 'volume': volume, 'mode': mode,
+              'cap_iops': cap_iops | default(''), 'previous_iops_limit': before.iops_limit,
+              'reason': reason | default('') | trim,
+              'changed': (capped.changed | default(false)) or (lifted.changed | default(false))} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}/{{ volume }}: QoS {{ mode }} {{ '(' ~ cap_iops ~ ' IOPS)' if mode == 'cap' else '' }} :: {{ reason | default('') | trim }}"

@@ -1,13 +1,15 @@
 ---
-# Capacity provisioning request. Deliberately provisions nothing: it records
-# an approval request with the days-to-full estimate, the fastest-growing
-# volumes and the other arrays with headroom.
-#
-# Production shape: the rulebook calls run_workflow_template against an AAP
-# workflow whose first node is a manual approval.
-- name: Raise a capacity provisioning request
+# Capacity approval request. Deliberately frees nothing: it writes a request
+# file (request_dir/<id>.json) describing the array, the days-to-full
+# estimate, the fastest-growing volumes, what is pending eradication and the
+# other arrays with headroom, and records it in the alert log. An approver
+# answers through the capacity approvals webhook (see the capacity rulebook)
+# or, in Ansible Automation Platform, through the workflow approval node.
+- name: Raise a capacity approval request
   hosts: localhost
   gather_facts: false
+  vars:
+    request_id: "{{ at_risk_array }}-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
   tasks:
     - name: Build the request
       ansible.builtin.set_fact:
@@ -15,13 +17,24 @@
           time: "{{ lookup('pipe', 'date -Is') }}"
           kind: capacity_request
           status: awaiting_approval
+          request_id: "{{ request_id }}"
           array: "{{ at_risk_array }}"
           used_pct: "{{ used_pct }}"
           used_bytes: "{{ used_bytes }}"
           capacity_bytes: "{{ capacity_bytes }}"
           days_to_full: "{{ days_to_full | default('') }}"
           top_growers: "{{ top_growers | default([]) }}"
+          pending_eradication_volumes: "{{ pending_eradication_volumes | default(0) }}"
+          pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(0) }}"
           candidate_targets: "{{ candidate_targets | default([]) }}"
+          proposed_actions:
+            - eradicate_pending
+
+    - name: Write the request file
+      ansible.builtin.copy:
+        dest: "{{ request_dir }}/{{ request_id }}.json"
+        mode: "0600"
+        content: "{{ capacity_request | to_nice_json }}"
 
     - name: Append to the alert log
       ansible.builtin.lineinfile:
@@ -33,6 +46,8 @@
     - name: Show the request
       ansible.builtin.debug:
         msg: >-
-          Capacity request: {{ at_risk_array }} at {{ used_pct }}% used
+          Capacity request {{ request_id }}: {{ at_risk_array }} at {{ used_pct }}% used
           (full in {{ days_to_full | default('n/a') }} days);
+          pending eradication {{ pending_eradication_volumes | default(0) }} volumes /
+          {{ pending_eradication_snapshots | default(0) }} snapshots;
           candidates with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}

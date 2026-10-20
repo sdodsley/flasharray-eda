@@ -559,7 +559,8 @@ def _performance_events(arr, state, args):
             "usec_per_write_op": vp.get("usec_per_write_op"),
             "reads_per_sec": vp.get("reads_per_sec"),
             "writes_per_sec": vp.get("writes_per_sec"),
-            "iops_share_pct": round(100.0 * iops / array_iops, 1) if array_iops else None,
+            # the array and volume samples are not taken at the same instant; clamp
+            "iops_share_pct": min(100.0, round(100.0 * iops / array_iops, 1)) if array_iops else None,
             "high_latency_polls": counters[name],
             "normal_polls": normal[name],
             "qos_iops_limit": qos.get(name, {}).get("iops"),

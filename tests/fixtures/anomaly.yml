@@ -1,0 +1,48 @@
+---
+# The three signals of the composite anomaly rule for one array, in the
+# order they would arrive: data reduction drop, snapshot surge, a human
+# destroying snapshots. REPLAY_ARRAY is substituted by the test. The action
+# runs for real on that array: immediate snapshots of every local protection
+# group and a longer eradication delay.
+fixture_events:
+  - purefa_capacity:
+      array: REPLAY_ARRAY
+      capacity_bytes: 1000
+      used_bytes: 500
+      used_pct: 50
+      data_reduction: 1.2
+      drr_week_ago: 2.0
+      drr_drop_pct: 40.0
+      drr_drop: true
+      snapshot_growth_pct: 5.0
+      snapshot_surge: false
+      days_to_full_known: false
+      top_growers: []
+      others: []
+  - purefa_capacity:
+      array: REPLAY_ARRAY
+      capacity_bytes: 1000
+      used_bytes: 520
+      used_pct: 52
+      data_reduction: 1.2
+      drr_week_ago: 2.0
+      drr_drop_pct: 40.0
+      drr_drop: true
+      snapshot_growth_pct: 60.0
+      snapshot_surge: true
+      days_to_full_known: false
+      top_growers: []
+      others: []
+  - purefa_audit:
+      array: REPLAY_ARRAY
+      maintenance_active: false
+      audit_id: "900000010"
+      time: 0
+      user: eda-human
+      user_interface: REST
+      origin: REPLAY_ARRAY
+      command: puresnap
+      subcommand: destroy
+      arguments: "prod-vol.hourly-01 prod-vol.hourly-02"
+      by_automation: false
+      system_user: false

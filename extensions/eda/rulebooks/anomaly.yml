@@ -1,0 +1,60 @@
+---
+# The composite rule for a bad day. One ruleset, two sources (telemetry and
+# audits), one multi-event condition with a timeout: data reduction well
+# below a week ago, snapshot space well above it or write bandwidth well above
+# last week's, and an audit record of someone destroying snapshots or
+# changing protection group retention, all on the same array inside the
+# window. The response only adds protection:
+#   1. an immediate snapshot of every local protection group (a clean
+#      recovery point from before the rule fired),
+#   2. a longer eradication delay (SafeMode allows that direction),
+#   3. a critical notification carrying the four signals.
+# Nothing is shortened, destroyed or disabled.
+
+- name: FlashArray anomaly
+  hosts: all
+
+  sources:
+    - purefa_events:
+        arrays: "{{ purefa_arrays }}"
+        signals: [telemetry, audits]
+        telemetry_interval: "{{ telemetry_interval }}"
+        audits_interval: "{{ audits_interval }}"
+        automation_users: "{{ automation_users }}"
+        drr_drop_pct: "{{ anomaly_drr_drop_pct }}"
+        snapshot_growth_pct: "{{ anomaly_snapshot_growth_pct }}"
+        write_surge_ratio: "{{ anomaly_write_surge_ratio }}"
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: Data reduction drop + snapshot or write surge + destructive snapshot change - protect now
+      condition:
+        all:
+          - events.cap << event.purefa_capacity.drr_drop == true
+          - events.surge << (event.purefa_capacity.snapshot_surge == true and event.purefa_capacity.array == events.cap.purefa_capacity.array) or
+                            (event.purefa_array_performance.write_surge == true and event.purefa_array_performance.array == events.cap.purefa_capacity.array)
+          - events.audit << event.purefa_audit.command in ["puresnap", "purepgroup", "purevol"] and
+                            event.purefa_audit.subcommand in ["destroy", "eradicate", "setattr", "retain"] and
+                            event.purefa_audit.by_automation == false and
+                            event.purefa_audit.array == events.cap.purefa_capacity.array
+        timeout: 15 minutes
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - events.cap.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/protect_now.yml
+          extra_vars:
+            target_array: "{{ events.cap.purefa_capacity.array }}"
+            drr_drop_pct: "{{ events.cap.purefa_capacity.drr_drop_pct }}"
+            snapshot_growth_pct: "{{ events.cap.purefa_capacity.snapshot_growth_pct }}"
+            audit_user: "{{ events.audit.purefa_audit.user }}"
+            audit_command: "{{ events.audit.purefa_audit.command }} {{ events.audit.purefa_audit.subcommand }} {{ events.audit.purefa_audit.arguments }}"
+            extend_eradication_by_s: "{{ anomaly_extend_eradication_by_s }}"
+            alert_log: "{{ alert_log }}"

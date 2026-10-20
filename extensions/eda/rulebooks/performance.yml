@@ -1,10 +1,15 @@
 ---
-# Performance: the slowest volumes (server-side sorted, top N per poll) with a
-# consecutive-poll counter, plus the array-level sample compared with the
-# same half hour one week ago from the array's own history.
+# Performance: the slowest volumes (server-side sorted, top N per poll) with
+# consecutive-poll counters, the array-level sample compared with the same
+# half hour one week ago, and a QoS cap with hysteresis.
 #
-# Action in this phase: notify. The QoS cap with hysteresis arrives in the
-# capacity/performance phase of the plan.
+# Cap:  a volume over the latency threshold for N polls, holding a large share
+#       of the array's IOPS while the array itself is hot, gets a temporary
+#       IOPS cap (purefa_volume) and an `eda/qos_cap` tag on the array.
+# Lift: a volume carrying that tag whose latency has been normal for M polls
+#       has the cap removed and the tag cleared.
+# The state lives on the array (the tag), not in the rulebook, so a restart
+# loses nothing and an operator can see why a volume is capped.
 
 - name: FlashArray performance
   hosts: all
@@ -25,12 +30,62 @@
         debug:
           msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
 
+    - name: Noisy neighbour on a hot array - apply a temporary QoS cap
+      condition: >-
+        event.purefa_volume_performance.high_latency_polls is defined and
+        event.purefa_volume_performance.high_latency_polls >= vars.hotspot_consecutive_polls and
+        event.purefa_volume_performance.iops_share_pct >= vars.qos_cap_min_iops_share_pct and
+        event.purefa_volume_performance.eda_capped == false and
+        (event.purefa_volume_performance.array_usec_per_read_op >= vars.array_hot_latency_usec or
+         event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec) and
+        vars.qos_auto_cap == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_volume_performance.array
+          - event.purefa_volume_performance.volume
+      action:
+        run_playbook:
+          name: playbooks/qos_cap.yml
+          extra_vars:
+            target_array: "{{ event.purefa_volume_performance.array }}"
+            volume: "{{ event.purefa_volume_performance.volume }}"
+            mode: cap
+            cap_iops: "{{ qos_cap_iops }}"
+            reason: >-
+              read={{ event.purefa_volume_performance.usec_per_read_op }}us
+              write={{ event.purefa_volume_performance.usec_per_write_op }}us
+              iops={{ event.purefa_volume_performance.reads_per_sec }}r/{{ event.purefa_volume_performance.writes_per_sec }}w
+              ({{ event.purefa_volume_performance.iops_share_pct }}% of the array) for {{ event.purefa_volume_performance.high_latency_polls }} polls;
+              array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us write={{ event.purefa_volume_performance.array_usec_per_write_op }}us
+            alert_log: "{{ alert_log }}"
+
+    - name: Capped volume back to normal - lift the cap
+      condition: >-
+        event.purefa_volume_performance.eda_capped == true and
+        event.purefa_volume_performance.normal_polls >= vars.qos_lift_normal_polls
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_volume_performance.array
+          - event.purefa_volume_performance.volume
+      action:
+        run_playbook:
+          name: playbooks/qos_cap.yml
+          extra_vars:
+            target_array: "{{ event.purefa_volume_performance.array }}"
+            volume: "{{ event.purefa_volume_performance.volume }}"
+            mode: lift
+            reason: "latency normal for {{ event.purefa_volume_performance.normal_polls }} polls (capped since {{ event.purefa_volume_performance.eda_cap_since }})"
+            alert_log: "{{ alert_log }}"
+
     - name: Sustained volume latency on a hot array - notify
       condition: >-
         event.purefa_volume_performance.high_latency_polls is defined and
         event.purefa_volume_performance.high_latency_polls >= vars.hotspot_consecutive_polls and
         (event.purefa_volume_performance.array_usec_per_read_op >= vars.array_hot_latency_usec or
-         event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec)
+         event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec) and
+        (vars.qos_auto_cap == false or event.purefa_volume_performance.iops_share_pct < vars.qos_cap_min_iops_share_pct)
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -46,6 +101,7 @@
               read={{ event.purefa_volume_performance.usec_per_read_op }}us
               write={{ event.purefa_volume_performance.usec_per_write_op }}us
               iops={{ event.purefa_volume_performance.reads_per_sec }}r/{{ event.purefa_volume_performance.writes_per_sec }}w
+              ({{ event.purefa_volume_performance.iops_share_pct }}% of the array)
               for {{ event.purefa_volume_performance.high_latency_polls }} polls;
               array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us
               write={{ event.purefa_volume_performance.array_usec_per_write_op }}us
