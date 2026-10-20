@@ -129,6 +129,13 @@ protection snapshot across every pgroup now, longer eradication delay
 
 ## 5. Phased plan
 
+Status 2026-10-20: all five phases implemented and exit-tested on the lab;
+see PHASE0.md to PHASE4.md for what ran and what each phase changed from
+this plan (the approval gate is a webhook ruleset standing in for the AAP
+workflow node; the syslog listener and the Prometheus rules are tested
+with replayed input because the lab arrays cannot reach the EDA host).
+
+
 | Phase | Scope | Exit criteria |
 | --- | --- | --- |
 | 0 | Fork fusion-eda. One `purefa_events` source with signals alerts, audits, health, telemetry, replication. Port the three rulebooks. | Lab: replica link pause, NTP drift, alert-watcher test, identify LED, maintenance window, QoS cap under fio all fire and act |

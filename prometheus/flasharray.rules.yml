@@ -1,0 +1,97 @@
+# Prometheus alerting rules for the FlashArray native OpenMetrics exporter
+# (Purity//FA 6.7+; enable it with everpure.flasharray.purefa_metrics or in
+# the GUI). Alertmanager forwards firing alerts to the stock
+# ansible.eda.alertmanager source; see extensions/eda/rulebooks/alertmanager.yml.
+#
+# Metric names follow the exporter specification:
+#   https://github.com/PureStorage-OpenConnect/pure-fa-openmetrics-exporter/blob/master/specification/metrics/purefa-metrics.md
+# Labels: every series carries the array (`array_name`, or `fa_array_name`
+# when the scrape job sets it). Thresholds are deliberately conservative;
+# tune them per site.
+groups:
+  - name: flasharray-eda
+    rules:
+      # --- alerts the array itself has open ----------------------------------
+      - alert: FlashArrayOpenAlertCritical
+        expr: purefa_alerts_open{severity="critical"} == 1
+        for: 1m
+        labels: {severity: critical, domain: alerts}
+        annotations:
+          summary: "{{ $labels.array_name }} has a critical open alert ({{ $labels.code }}, {{ $labels.component_type }})"
+
+      - alert: FlashArrayOpenAlertWarning
+        expr: purefa_alerts_open{severity="warning"} == 1
+        for: 5m
+        labels: {severity: warning, domain: alerts}
+        annotations:
+          summary: "{{ $labels.array_name }} has a warning alert open ({{ $labels.code }}, {{ $labels.component_type }})"
+
+      # --- hardware -------------------------------------------------------------
+      - alert: FlashArrayHardwareComponentNotOk
+        # 1 = ok; the exporter reports other statuses as 0
+        expr: purefa_hw_component_status == 0
+        for: 2m
+        labels: {severity: critical, domain: health}
+        annotations:
+          summary: "{{ $labels.array_name }} hardware component {{ $labels.component_name }} ({{ $labels.component_type }}) is not ok"
+
+      # --- capacity -------------------------------------------------------------
+      - alert: FlashArrayCapacityHigh
+        expr: 100 * purefa_array_space_used_bytes{space="total_physical"} / purefa_array_space_capacity_bytes > 85
+        for: 15m
+        labels: {severity: warning, domain: capacity}
+        annotations:
+          summary: "{{ $labels.array_name }} is {{ $value | printf \"%.1f\" }}% full"
+
+      - alert: FlashArrayFullWithin30Days
+        expr: |
+          (purefa_array_space_capacity_bytes - purefa_array_space_used_bytes{space="total_physical"})
+            / clamp_min(deriv(purefa_array_space_used_bytes{space="total_physical"}[7d]), 1) < 30 * 86400
+        for: 1h
+        labels: {severity: warning, domain: capacity}
+        annotations:
+          summary: "{{ $labels.array_name }} will be full within 30 days at the 7-day growth rate"
+
+      - alert: FlashArrayDataReductionDrop
+        expr: |
+          purefa_array_space_data_reduction_ratio
+            < 0.9 * avg_over_time(purefa_array_space_data_reduction_ratio[7d] offset 1d)
+        for: 30m
+        labels: {severity: warning, domain: anomaly}
+        annotations:
+          summary: "{{ $labels.array_name }} data reduction has dropped more than 10% below its weekly average"
+
+      # --- performance ----------------------------------------------------------
+      - alert: FlashArrayWriteLatencyVsLastWeek
+        expr: |
+          purefa_array_performance_latency_usec{dimension="write"} > 1000
+            and purefa_array_performance_latency_usec{dimension="write"}
+                > 3 * (purefa_array_performance_latency_usec{dimension="write"} offset 7d)
+        for: 10m
+        labels: {severity: warning, domain: performance}
+        annotations:
+          summary: "{{ $labels.array_name }} write latency is more than 3x the same time last week"
+
+      # --- replication ----------------------------------------------------------
+      - alert: FlashArrayReplicaLinkLag
+        expr: purefa_pod_replica_links_lag_msec > 300000
+        for: 10m
+        labels: {severity: warning, domain: replication}
+        annotations:
+          summary: "{{ $labels.array_name }} replica link {{ $labels.pod }} -> {{ $labels.remote_pod }} lag above the 5 minute RPO"
+
+      - alert: FlashArrayArrayConnectionDown
+        # 1 = connected
+        expr: purefa_array_connection_status == 0
+        for: 2m
+        labels: {severity: critical, domain: replication}
+        annotations:
+          summary: "{{ $labels.array_name }} connection to {{ $labels.remote_name }} is not connected"
+
+      # --- the exporter itself ------------------------------------------------
+      - alert: FlashArrayScrapeFailed
+        expr: up{job=~"flasharray.*"} == 0
+        for: 5m
+        labels: {severity: critical, domain: health}
+        annotations:
+          summary: "no metrics from {{ $labels.instance }} for 5 minutes: dead array or dead network"

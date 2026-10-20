@@ -1,0 +1,64 @@
+---
+# Push path: FlashArray syslog into the same policies, seconds after the
+# fact. purity.audit lines carry the user, so change control can react to a
+# human's action without waiting for the audit poll; purity.alert lines are
+# the alert stream without polling. Both still need the REST plugin for the
+# full record (alert action text, audit arguments), so this rulebook raises
+# the fast notification and leaves the reconcile to change_control.yml.
+
+- name: FlashArray syslog
+  hosts: all
+
+  sources:
+    - purefa_syslog:
+        host: 0.0.0.0
+        port: "{{ syslog_port }}"
+        automation_users: "{{ automation_users }}"
+        arrays: "{{ syslog_hostnames }}"
+
+  rules:
+    - name: Alert via syslog - notify
+      condition: event.purefa_syslog.kind == "alert"
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_syslog.array
+          - event.purefa_syslog.message
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ 'critical' if event.purefa_syslog.severity in ['emerg', 'alert', 'crit', 'err'] else 'warning' }}"
+            subject: "{{ event.purefa_syslog.array }} alert (syslog): {{ event.purefa_syslog.message }}"
+            detail: "syslog {{ event.purefa_syslog.severity }} from {{ event.purefa_syslog.source }} at {{ event.purefa_syslog.time }}"
+            target_array: "{{ event.purefa_syslog.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Human action via syslog audit - fast notification
+      condition: >-
+        event.purefa_syslog.kind == "audit" and
+        event.purefa_syslog.by_automation == false and
+        event.purefa_syslog.user is defined and
+        event.purefa_syslog.action is defined and
+        event.purefa_syslog.action not in ["login", "logout", "operation request"]
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefa_syslog.user }} on {{ event.purefa_syslog.array }}: {{ event.purefa_syslog.action }}"
+            detail: "{{ event.purefa_syslog.fields }}"
+            target_array: "{{ event.purefa_syslog.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Test message - log
+      condition: event.purefa_syslog.kind == "test"
+      action:
+        debug:
+          msg: "syslog path from {{ event.purefa_syslog.array }} is working: {{ event.purefa_syslog.message }}"
+
+    - name: Anything else from the array - log
+      condition: event.purefa_syslog.kind == "other"
+      action:
+        debug:
+          msg: "unparsed syslog from {{ event.purefa_syslog.source }}: {{ event.purefa_syslog.raw }}"

@@ -1,0 +1,21 @@
+# Decision environment for the FlashArray rulebooks: ansible-rulebook plus
+# the collections and the SDK the source plugins and playbooks need.
+# Build:  podman build -t flasharray-eda-de -f decision-environment/Containerfile .
+# Or with ansible-builder: ansible-builder build -f decision-environment/execution-environment.yml -t flasharray-eda-de
+FROM quay.io/ansible/ansible-rulebook:latest
+
+USER root
+COPY decision-environment/requirements.txt /tmp/requirements.txt
+COPY decision-environment/requirements.yml /tmp/requirements.yml
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+ && ansible-galaxy collection install -r /tmp/requirements.yml -p /usr/share/ansible/collections \
+ && rm -f /tmp/requirements.txt /tmp/requirements.yml
+
+# The project itself: rulebooks, the source plugins and the playbooks.
+COPY extensions /opt/flasharray-eda/extensions
+COPY playbooks /opt/flasharray-eda/playbooks
+COPY prometheus /opt/flasharray-eda/prometheus
+ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
+ENV ANSIBLE_LOCALHOST_WARNING=False
+WORKDIR /opt/flasharray-eda
+USER 1001

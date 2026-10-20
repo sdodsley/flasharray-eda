@@ -1,0 +1,97 @@
+---
+# Zero custom code path: Prometheus scrapes the array's native OpenMetrics
+# exporter, prometheus/flasharray.rules.yml raises alerts, Alertmanager
+# posts them here through the stock ansible.eda.alertmanager source, and the
+# same playbooks run. The `domain` label set by the rules file selects the
+# playbook; the array name comes from the alert's array_name label.
+#
+# Alertmanager receiver:
+#   receivers:
+#     - name: eda
+#       webhook_configs:
+#         - url: http://<eda host>:5002/alerts
+# The source wraps each alert as event.alert with labels, annotations, status.
+
+- name: FlashArray via Alertmanager
+  hosts: all
+
+  sources:
+    - ansible.eda.alertmanager:
+        host: 0.0.0.0
+        port: "{{ alertmanager_port }}"
+        data_alerts_path: alerts
+        data_host_path: labels.array_name
+        data_path_separator: .
+
+  rules:
+    - name: Hardware component not ok - identify LED and notify
+      condition: >-
+        event.alert.status == "firing" and
+        event.alert.labels.alertname == "FlashArrayHardwareComponentNotOk"
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.alert.labels.array_name
+          - event.alert.labels.component_name
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.alert.labels.array_name }}"
+            component: "{{ event.alert.labels.component_name }}"
+            component_type: "{{ event.alert.labels.component_type }}"
+            component_status: not_ok
+            component_details: "{{ event.alert.annotations.summary }}"
+            led_state: true
+            alert_log: "{{ alert_log }}"
+
+    - name: Capacity threshold - approval request
+      condition: >-
+        event.alert.status == "firing" and
+        event.alert.labels.alertname == "FlashArrayCapacityHigh"
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.alert.labels.array_name
+      action:
+        run_playbook:
+          name: playbooks/capacity_request.yml
+          extra_vars:
+            at_risk_array: "{{ event.alert.labels.array_name }}"
+            used_pct: "{{ event.alert.annotations.summary }}"
+            used_bytes: ""
+            capacity_bytes: ""
+            request_dir: "{{ request_dir }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Any other firing FlashArray alert - notify
+      condition: >-
+        event.alert.status == "firing" and
+        event.alert.labels.alertname is defined and
+        event.alert.labels.alertname not in ["FlashArrayHardwareComponentNotOk", "FlashArrayCapacityHigh"]
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.alert.labels.array_name
+          - event.alert.labels.alertname
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ event.alert.labels.severity }}"
+            subject: "{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary }}"
+            detail: "domain={{ event.alert.labels.domain }} labels={{ event.alert.labels }}"
+            target_array: "{{ event.alert.labels.array_name }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Resolved - log
+      condition: event.alert.status == "resolved"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "resolved: {{ event.alert.labels.alertname }} on {{ event.alert.labels.array_name }}"
+            detail: "{{ event.alert.annotations.summary }}"
+            target_array: "{{ event.alert.labels.array_name }}"
+            alert_log: "{{ alert_log }}"

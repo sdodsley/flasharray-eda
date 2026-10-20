@@ -1,0 +1,20 @@
+---
+# ansible-builder definition (v3) for the same decision environment.
+version: 3
+images:
+  base_image:
+    name: quay.io/ansible/ansible-rulebook:latest
+dependencies:
+  python: requirements.txt
+  galaxy: requirements.yml
+additional_build_files:
+  - src: ../extensions
+    dest: extensions
+  - src: ../playbooks
+    dest: playbooks
+additional_build_steps:
+  append_final:
+    - COPY _build/extensions /opt/flasharray-eda/extensions
+    - COPY _build/playbooks /opt/flasharray-eda/playbooks
+    - ENV ANSIBLE_LOCALHOST_WARNING=False
+    - WORKDIR /opt/flasharray-eda
