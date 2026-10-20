@@ -1,0 +1,30 @@
+---
+# Reapply the baseline management DNS configuration to one array.
+- name: Reapply baseline DNS
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    baseline_dns_nameservers: "{{ baseline_dns_nameservers_csv.split(',') }}"
+  tasks:
+    - name: Set DNS domain and nameservers to baseline
+      everpure.flasharray.purefa_dns:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: present
+        name: management
+        domain: "{{ baseline_dns_domain }}"
+        nameservers: "{{ baseline_dns_nameservers }}"
+      register: dns_result
+
+    - name: Record the remediation
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'remediation', 'array': inventory_hostname,
+              'setting': 'dns', 'observed': {'domain': observed_dns_domain | default(''), 'nameservers': observed_dns_nameservers | default('')},
+              'applied': {'domain': baseline_dns_domain, 'nameservers': baseline_dns_nameservers},
+              'changed': dns_result.changed} | to_json }}
+      delegate_to: localhost

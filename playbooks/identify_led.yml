@@ -1,0 +1,68 @@
+---
+# Light (or clear) the identify LED on a hardware component and record it.
+# Called by the health rulebook with target_array, component, component_type,
+# component_status, component_details, led_state and alert_log.
+#
+# The REST call is made directly with py-pure-client rather than through
+# everpure.flasharray.purefa_hardware: with py-pure-client 1.94.1 that module
+# sends an empty PATCH body (the Hardware model drops identify_enabled) and
+# the array answers 400 "No operation was specified". A dict body works, which
+# is what this does. Components without an identify LED return an error that
+# is recorded; the notification still goes out.
+- name: Identify LED on a hardware component
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Set the identify LED
+      ansible.builtin.command:
+        cmd: python3 -
+        stdin: |
+          import json, os, sys, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          name, want = os.environ["COMPONENT"], os.environ["LED"] == "on"
+          before = list(c.get_hardware(names=[name]).items)
+          if not before:
+              print(json.dumps({"changed": False, "error": "component not found"})); sys.exit(0)
+          if before[0].identify_enabled == want:
+              print(json.dumps({"changed": False, "identify_enabled": want})); sys.exit(0)
+          r = c.patch_hardware(names=[name], hardware={"identify_enabled": want})
+          if r.status_code != 200:
+              print(json.dumps({"changed": False, "error": r.errors[0].message})); sys.exit(0)
+          after = list(c.get_hardware(names=[name]).items)[0].identify_enabled
+          print(json.dumps({"changed": after == want, "identify_enabled": after}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        COMPONENT: "{{ component }}"
+        LED: "{{ 'on' if led_state | default(true) | bool else 'off' }}"
+      register: led_cmd
+      changed_when: (led_cmd.stdout | from_json).changed
+
+    - name: Parse the result
+      ansible.builtin.set_fact:
+        led_result: "{{ led_cmd.stdout | from_json }}"
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'hardware',
+              'severity': 'critical' if component_status | default('') in ['critical', 'unhealthy', 'failed'] else 'warning',
+              'array': inventory_hostname, 'component': component,
+              'type': component_type | default(''), 'status': component_status | default(''),
+              'details': component_details | default(''),
+              'identify_led': 'on' if led_state | default(true) | bool else 'off',
+              'led_changed': led_result.changed,
+              'led_error': led_result.error | default('')} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ component }} ({{ component_type | default('') }}) is {{ component_status | default('') }};
+          identify LED {{ 'on' if led_state | default(true) | bool else 'off' }}
+          {{ '(changed)' if led_result.changed else '(already)' if not led_result.error | default('') else '(failed: ' ~ led_result.error ~ ')' }}

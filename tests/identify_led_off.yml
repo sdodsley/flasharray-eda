@@ -1,0 +1,24 @@
+---
+# Test helper: clear an identify LED after the replay test (same direct REST
+# call as playbooks/identify_led.yml, see the note there).
+#   ansible-playbook -i inventory/local-lab.yml tests/identify_led_off.yml \
+#       -e target_array=<array> -e component=CT1
+- name: Clear an identify LED
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Turn the identify LED off
+      ansible.builtin.command:
+        cmd: python3 -
+        stdin: |
+          import os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          r = c.patch_hardware(names=[os.environ["COMPONENT"]], hardware={"identify_enabled": False})
+          print(r.status_code, [h.identify_enabled for h in c.get_hardware(names=[os.environ["COMPONENT"]]).items])
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        COMPONENT: "{{ component }}"
+      changed_when: true

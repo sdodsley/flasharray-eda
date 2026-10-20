@@ -1,0 +1,38 @@
+---
+# Capacity provisioning request. Deliberately provisions nothing: it records
+# an approval request with the days-to-full estimate, the fastest-growing
+# volumes and the other arrays with headroom.
+#
+# Production shape: the rulebook calls run_workflow_template against an AAP
+# workflow whose first node is a manual approval.
+- name: Raise a capacity provisioning request
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Build the request
+      ansible.builtin.set_fact:
+        capacity_request:
+          time: "{{ lookup('pipe', 'date -Is') }}"
+          kind: capacity_request
+          status: awaiting_approval
+          array: "{{ at_risk_array }}"
+          used_pct: "{{ used_pct }}"
+          used_bytes: "{{ used_bytes }}"
+          capacity_bytes: "{{ capacity_bytes }}"
+          days_to_full: "{{ days_to_full | default('') }}"
+          top_growers: "{{ top_growers | default([]) }}"
+          candidate_targets: "{{ candidate_targets | default([]) }}"
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ capacity_request | to_json }}"
+
+    - name: Show the request
+      ansible.builtin.debug:
+        msg: >-
+          Capacity request: {{ at_risk_array }} at {{ used_pct }}% used
+          (full in {{ days_to_full | default('n/a') }} days);
+          candidates with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}

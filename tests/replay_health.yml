@@ -1,0 +1,54 @@
+---
+# Replay recorded hardware events through the health rules.
+#   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<array>/; s/REPLAY_COMPONENT/CT1/" tests/fixtures/hardware_critical.yml; } > tests/out/vars_replay.yml
+#   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_health.yml
+# (ansible-rulebook takes one --vars file, -e is that file not key=value, and
+# values in it are not templated, hence the sed.)
+# The rules are copies of the ones in extensions/eda/rulebooks/health.yml;
+# ansible-rulebook has no include, and swapping a source for an event stream
+# is an EDA Controller feature. Keep them in step.
+- name: FlashArray health (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Hardware issue outside a maintenance window - identify LED and notify
+      condition: >-
+        event.purefa_hardware.status is defined and
+        event.purefa_hardware.maintenance_active == false
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.purefa_hardware.array }}"
+            component: "{{ event.purefa_hardware.component }}"
+            component_type: "{{ event.purefa_hardware.type }}"
+            component_status: "{{ event.purefa_hardware.status }}"
+            component_details: "{{ event.purefa_hardware.details }}"
+            led_state: true
+            alert_log: "{{ alert_log }}"
+
+    - name: Hardware issue during a maintenance window - log only
+      condition: >-
+        event.purefa_hardware.status is defined and
+        event.purefa_hardware.maintenance_active == true
+      action:
+        debug:
+          msg: "maintenance window active on {{ event.purefa_hardware.array }}: {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned"
+
+    - name: Controller failover - notify
+      condition: event.purefa_controller_failover.primary is defined
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}"
+            detail: "previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}"
+            target_array: "{{ event.purefa_controller_failover.array }}"
+            alert_log: "{{ alert_log }}"

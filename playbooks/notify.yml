@@ -1,0 +1,31 @@
+---
+# Notify-only action. Appends a JSON line to the alert log and prints it.
+# Swap or extend the tasks for mail / Slack / ServiceNow; the rulebooks pass
+# severity, subject, detail, target_array, alert_log and, for array alerts,
+# alert_id and alert_code.
+- name: Notify a human
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Build the alert record
+      ansible.builtin.set_fact:
+        alert_record:
+          time: "{{ lookup('pipe', 'date -Is') }}"
+          kind: notify
+          severity: "{{ severity | default('warning') }}"
+          array: "{{ target_array | default('') }}"
+          subject: "{{ subject }}"
+          detail: "{{ detail | default('') | trim }}"
+          alert_id: "{{ alert_id | default(omit) }}"
+          alert_code: "{{ alert_code | default(omit) }}"
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ alert_record | to_json }}"
+
+    - name: Show the alert
+      ansible.builtin.debug:
+        msg: "[{{ alert_record.severity | upper }}] {{ alert_record.subject }} :: {{ alert_record.detail }}"

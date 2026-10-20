@@ -1,0 +1,19 @@
+---
+# Test helper: pause or resume a pod replica link.
+#   ansible-playbook -i inventory/local-lab.yml tests/replica_link_pause.yml \
+#       -e target_array=<source array> -e pod=<local pod> -e remote_array=<target array> \
+#       -e remote_pod=<remote pod> -e pause=true
+- name: Pause or resume a pod replica link
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Set the link pause state
+      everpure.flasharray.purefa_pod_replica:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ pod }}"
+        target_array: "{{ remote_array }}"
+        target_pod: "{{ remote_pod }}"
+        pause: "{{ pause | bool }}"
+        state: present

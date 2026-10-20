@@ -1,0 +1,16 @@
+---
+# Test helper: push an array's NTP list away from the baseline so the config
+# drift rulebook has something to detect and repair.
+#   ansible-playbook -i inventory/local-lab.yml tests/induce_ntp_drift.yml \
+#       -e target_array=<array> -e baseline_ntp_servers_csv=pool.ntp.org
+- name: Induce NTP drift
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Add an extra NTP server
+      everpure.flasharray.purefa_ntp:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline_ntp_servers_csv.split(',') + ['time.google.com'] }}"

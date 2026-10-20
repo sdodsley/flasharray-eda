@@ -1,0 +1,111 @@
+---
+# Loaded by ansible-rulebook (--vars). Rulebooks forward what each playbook
+# needs as extra_vars, because run_playbook copies playbooks into a temporary
+# project directory where relative vars_files paths do not resolve.
+# Copy to vars/local-<site>.yml (gitignored) and edit. Comments give sane
+# production values; the lab file uses short intervals.
+
+# --- arrays the source plugin polls ---------------------------------------
+# name must match the inventory host name. Tokens and URLs come from the
+# environment (api_token_env / fa_url_env) so this file holds no secrets.
+purefa_arrays:
+  - name: array-a
+    fa_url_env: ARRAY_A_URL
+    api_token_env: ARRAY_A_TOKEN
+  - name: array-b
+    fa_url_env: ARRAY_B_URL
+    api_token_env: ARRAY_B_TOKEN
+
+# Arrays governed by the config drift ruleset: one baseline per ruleset.
+config_arrays:
+  - name: array-a
+    fa_url_env: ARRAY_A_URL
+    api_token_env: ARRAY_A_TOKEN
+
+alert_log: /var/log/flasharray-eda/alerts.log
+
+# --- polling intervals (seconds) ------------------------------------------
+alerts_interval: 30          # production: 60
+audits_interval: 15          # production: 15-60
+health_interval: 60          # production: 300
+telemetry_interval: 60       # production: 60-300
+replication_interval: 60     # production: 60
+config_interval: 300         # production: 300-900
+
+# --- config baseline for config_arrays ------------------------------------
+# List-valued settings are sorted, comma-joined strings: the plugin emits
+# them in that form so a rule compares with a single !=, and the remediation
+# playbooks split them back into lists.
+baseline_ntp_servers_csv: "0.pool.ntp.org,1.pool.ntp.org"
+baseline_dns_domain: example.com
+baseline_dns_nameservers_csv: "10.0.0.53,10.0.1.53"
+baseline_ldap_enabled: true
+baseline_ldap_uris_csv: "ldaps://ldap.example.com"
+baseline_ldap_base_dn: "DC=example,DC=com"
+# /arrays eradication_config.manual_eradication: all-enabled means SafeMode is
+# NOT engaged; a SafeMode-protected array reports all-disabled or partially.
+baseline_manual_eradication: all-enabled
+baseline_min_eradication_delay_ms: 86400000      # 24h; alert if shortened below
+baseline_max_login_attempts: 5
+baseline_lockout_duration_ms: 1000
+baseline_min_password_length: 1
+baseline_sso_enabled: false
+
+# --- thresholds -------------------------------------------------------------
+capacity_risk_pct: 85
+capacity_days_to_full_warning: 30
+hotspot_latency_usec: 2000        # per-volume read or write latency
+hotspot_consecutive_polls: 3
+array_hot_latency_usec: 1000      # array-level read or write latency
+hotspot_min_iops: 1
+baseline_latency_ratio: 3         # now vs the same half hour last week
+rpo_seconds: 300                  # replica-link lag above this is a breach
+
+# Cooldowns live in the rulebooks as literal `throttle: once_within:` values;
+# ansible-rulebook validates that field against its schema before variable
+# substitution, so it cannot be templated from here.
+
+# --- change control (audits signal) -----------------------------------------
+# The identity the remediation playbooks authenticate as. Audit records by
+# these users are logged, never reconciled. Use a dedicated service account.
+automation_users:
+  - svc-eda
+# Commands whose audit record triggers a reconcile (or a notification for the
+# ones the reconcile playbook does not rewrite).
+governed_commands:
+  - purentp
+  - puredns
+  - pureds
+  - purearray
+  - pureadmin
+  - puresmtp
+  - puresyslog
+  - puresnmp
+  - purealert
+# Human-run destructive commands worth a notification in their own right.
+destructive_commands:
+  - purevol
+  - puresnap
+  - purepgroup
+  - purepod
+  - purehost
+  - purehgroup
+destructive_subcommands:
+  - destroy
+  - eradicate
+  - disconnect
+# Checkout of the baseline repository (see baseline/README.md), absolute path.
+baseline_dir: /opt/flasharray-eda-baseline
+# Port the change control rulebook listens on for the git push webhook.
+webhook_port: 5000
+
+# --- alert runbooks (alerts signal) ---------------------------------------
+# alert code (as a string) -> how to route it. Unknown codes use `default`.
+# route: notify | ticket | tasks (ticket + include runbook_dir/<code>.yml)
+runbook_dir: /opt/flasharray-eda/playbooks/runbooks
+alert_runbooks:
+  default: {route: notify, note: ""}
+  "42": {route: ticket, severity: warning, note: "Hardware failure: check the identify LED, open a case with the alert text."}
+  "120": {route: ticket, severity: critical, note: "Stretched pod offline on peer: check the replication paths and the mediator before touching the pod."}
+  "122": {route: ticket, severity: critical, note: "Mediator unhealthy: verify DNS and outbound HTTPS from both arrays."}
+  "13": {route: notify, note: "NTP not synchronised: compare with the baseline NTP servers."}

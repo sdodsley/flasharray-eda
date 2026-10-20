@@ -1,0 +1,16 @@
+---
+# Test helper: open or close a maintenance window on an array.
+#   ansible-playbook -i inventory/local-lab.yml tests/maintenance_window.yml \
+#       -e target_array=<array> -e window_state=present -e window_seconds=3600
+# (Purity accepts 3600 to 172800 seconds.)
+- name: Open or close a maintenance window
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Set the maintenance window
+      everpure.flasharray.purefa_maintenance:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: "{{ window_state | default('present') }}"
+        timeout: "{{ window_seconds | default(3600) | int }}"

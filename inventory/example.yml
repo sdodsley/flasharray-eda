@@ -1,0 +1,20 @@
+---
+# One inventory host per array, named exactly as the `name` in purefa_arrays,
+# so an event's array field selects the host for the remediation playbooks.
+# Credentials come from the environment; nothing secret lives in this tree.
+# Copy to inventory/local-<site>.yml (gitignored) and edit.
+all:
+  vars:
+    ansible_connection: local
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  hosts:
+    # ansible-rulebook limits run_playbook to the ruleset's `hosts:` (all), and
+    # the implicit localhost is not part of `all`, so declare it explicitly for
+    # the notify / capacity-request playbooks.
+    localhost:
+    array-a:
+      fa_url: "{{ lookup('env', 'ARRAY_A_URL') }}"
+      api_token: "{{ lookup('env', 'ARRAY_A_TOKEN') }}"
+    array-b:
+      fa_url: "{{ lookup('env', 'ARRAY_B_URL') }}"
+      api_token: "{{ lookup('env', 'ARRAY_B_TOKEN') }}"

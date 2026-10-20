@@ -1,0 +1,136 @@
+---
+# Config drift: poll NTP / DNS / LDAP / eradication / admin settings on the
+# governed arrays, compare with the baseline in the vars file and act.
+#
+#   NTP, DNS    -> reapply the baseline with everpure.flasharray (idempotent)
+#   LDAP        -> notify only: rewriting the directory service needs the bind
+#                  password and a mistake locks admins out
+#   SafeMode    -> notify only, always: the setting exists to resist change
+#   admin/auth  -> notify only (lockout, login attempts, password length, SSO)
+#
+# One ruleset = one baseline. Arrays with different baselines get their own
+# ruleset (copy this one and point `arrays` at them).
+
+- name: FlashArray config drift
+  hosts: all
+
+  sources:
+    - purefa_events:
+        arrays: "{{ config_arrays }}"
+        signals: [config]
+        config_interval: "{{ config_interval }}"
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: NTP drift - reapply baseline
+      condition: >-
+        event.purefa_config.ntp_servers_csv is defined and
+        event.purefa_config.ntp_servers_csv != vars.baseline_ntp_servers_csv
+      throttle:
+        once_within: 10 minutes   # literal: validated before vars are substituted
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/remediate_ntp.yml
+          extra_vars:
+            target_array: "{{ event.purefa_config.array }}"
+            observed_ntp_servers: "{{ event.purefa_config.ntp_servers_csv }}"
+            baseline_ntp_servers_csv: "{{ baseline_ntp_servers_csv }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: DNS drift - reapply baseline
+      condition: >-
+        event.purefa_config.dns_nameservers_csv is defined and
+        (event.purefa_config.dns_nameservers_csv != vars.baseline_dns_nameservers_csv or
+         event.purefa_config.dns_domain != vars.baseline_dns_domain)
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/remediate_dns.yml
+          extra_vars:
+            target_array: "{{ event.purefa_config.array }}"
+            observed_dns_domain: "{{ event.purefa_config.dns_domain }}"
+            observed_dns_nameservers: "{{ event.purefa_config.dns_nameservers_csv }}"
+            baseline_dns_domain: "{{ baseline_dns_domain }}"
+            baseline_dns_nameservers_csv: "{{ baseline_dns_nameservers_csv }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: LDAP drift - notify only
+      condition: >-
+        event.purefa_config.ldap_uris_csv is defined and
+        (event.purefa_config.ldap_uris_csv != vars.baseline_ldap_uris_csv or
+         event.purefa_config.ldap_base_dn != vars.baseline_ldap_base_dn or
+         event.purefa_config.ldap_enabled != vars.baseline_ldap_enabled)
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "LDAP configuration drift on {{ event.purefa_config.array }}"
+            detail: >-
+              enabled={{ event.purefa_config.ldap_enabled }} uris={{ event.purefa_config.ldap_uris_csv }}
+              base_dn={{ event.purefa_config.ldap_base_dn }};
+              baseline enabled={{ baseline_ldap_enabled }} uris={{ baseline_ldap_uris_csv }} base_dn={{ baseline_ldap_base_dn }}
+            target_array: "{{ event.purefa_config.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: SafeMode / eradication drift - notify only, never remediate
+      condition: >-
+        event.purefa_config.manual_eradication is defined and
+        (event.purefa_config.manual_eradication != vars.baseline_manual_eradication or
+         event.purefa_config.eradication_delay_ms < vars.baseline_min_eradication_delay_ms)
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "SafeMode / eradication settings changed on {{ event.purefa_config.array }}"
+            detail: >-
+              manual_eradication={{ event.purefa_config.manual_eradication }}
+              eradication_delay_ms={{ event.purefa_config.eradication_delay_ms }};
+              baseline manual_eradication={{ baseline_manual_eradication }}
+              minimum delay={{ baseline_min_eradication_delay_ms }}
+            target_array: "{{ event.purefa_config.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Admin authentication settings drift - notify only
+      condition: >-
+        event.purefa_config.max_login_attempts is defined and
+        (event.purefa_config.max_login_attempts != vars.baseline_max_login_attempts or
+         event.purefa_config.lockout_duration_ms != vars.baseline_lockout_duration_ms or
+         event.purefa_config.min_password_length < vars.baseline_min_password_length or
+         event.purefa_config.sso_enabled != vars.baseline_sso_enabled)
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "Admin authentication settings drift on {{ event.purefa_config.array }}"
+            detail: >-
+              max_login_attempts={{ event.purefa_config.max_login_attempts }}
+              lockout_duration_ms={{ event.purefa_config.lockout_duration_ms }}
+              min_password_length={{ event.purefa_config.min_password_length }}
+              sso_enabled={{ event.purefa_config.sso_enabled }}
+            target_array: "{{ event.purefa_config.array }}"
+            alert_log: "{{ alert_log }}"

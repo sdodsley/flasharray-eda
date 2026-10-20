@@ -1,0 +1,105 @@
+---
+# Health: hardware components whose status is an issue, drives that are not
+# healthy, controller failover, maintenance windows and remote assist.
+#
+# A hardware issue outside a maintenance window lights the component's
+# identify LED (everpure.flasharray.purefa_hardware) and notifies. Inside a
+# maintenance window it only logs: someone is already working on the array.
+
+- name: FlashArray health
+  hosts: all
+
+  sources:
+    - purefa_events:
+        arrays: "{{ purefa_arrays }}"
+        signals: [health]
+        health_interval: "{{ health_interval }}"
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: Hardware issue outside a maintenance window - identify LED and notify
+      condition: >-
+        event.purefa_hardware.status is defined and
+        event.purefa_hardware.maintenance_active == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_hardware.array
+          - event.purefa_hardware.component
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.purefa_hardware.array }}"
+            component: "{{ event.purefa_hardware.component }}"
+            component_type: "{{ event.purefa_hardware.type }}"
+            component_status: "{{ event.purefa_hardware.status }}"
+            component_details: "{{ event.purefa_hardware.details }}"
+            led_state: true
+            alert_log: "{{ alert_log }}"
+
+    - name: Hardware issue during a maintenance window - log only
+      condition: >-
+        event.purefa_hardware.status is defined and
+        event.purefa_hardware.maintenance_active == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_hardware.array
+          - event.purefa_hardware.component
+      action:
+        debug:
+          msg: "maintenance window active on {{ event.purefa_hardware.array }}: {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned"
+
+    - name: Drive not healthy - notify
+      condition: event.purefa_health.drive_issue_count is defined and event.purefa_health.drive_issue_count > 0
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_health.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Drive issue on {{ event.purefa_health.array }}"
+            detail: "{{ event.purefa_health.drive_issues }}"
+            target_array: "{{ event.purefa_health.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Controller failover - notify
+      condition: event.purefa_controller_failover.primary is defined
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}"
+            detail: "previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}"
+            target_array: "{{ event.purefa_controller_failover.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Maintenance window active - log
+      condition: event.purefa_health.maintenance_active == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_health.array
+      action:
+        debug:
+          msg: "maintenance window active on {{ event.purefa_health.array }}: {{ event.purefa_health.maintenance_windows }}"
+
+    - name: Remote assist session open - log
+      condition: event.purefa_health.remote_assist_active == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_health.array
+      action:
+        debug:
+          msg: "remote assist is active on {{ event.purefa_health.array }}"

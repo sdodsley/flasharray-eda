@@ -11,3 +11,6 @@ collections/
 __pycache__/
 *.pyc
 .DS_Store
+tests/out/
+*.jsonl
+baseline/local-*.yml

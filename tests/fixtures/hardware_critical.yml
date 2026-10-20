@@ -1,0 +1,36 @@
+---
+# Recorded-shape events for replay through ansible.eda.generic. A drive bay
+# and a power supply failure as purefa_events would emit them; the lab cannot
+# fail real hardware, so the health rules are exercised from here.
+# REPLAY_ARRAY / REPLAY_COMPONENT are substituted with sed when the test builds
+# its vars file (a --vars file is not templated); REPLAY_COMPONENT is the
+# component the identify LED is set on
+# (a real controller on the lab array, so the actuator is proven on hardware).
+fixture_events:
+  - purefa_hardware:
+      array: "REPLAY_ARRAY"
+      component: "REPLAY_COMPONENT"
+      type: controller
+      status: critical
+      details: "replayed fixture: controller reported critical"
+      slot: null
+      serial: "FIXTURE"
+      identify_enabled: false
+      maintenance_active: false
+  - purefa_hardware:
+      array: "REPLAY_ARRAY"
+      component: CH0.BAY3
+      type: drive_bay
+      status: unhealthy
+      details: "replayed fixture: drive bay unhealthy during maintenance"
+      slot: 3
+      serial: "FIXTURE"
+      identify_enabled: false
+      maintenance_active: true
+  - purefa_controller_failover:
+      array: "REPLAY_ARRAY"
+      previous_primary: CT1
+      primary: CT0
+      controllers:
+        - {name: CT0, mode: primary, status: ready}
+        - {name: CT1, mode: secondary, status: ready}

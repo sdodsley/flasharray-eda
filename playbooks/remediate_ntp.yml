@@ -1,0 +1,30 @@
+---
+# Reapply the baseline NTP servers to one array. Called by the config drift
+# rulebook with target_array, baseline_ntp_servers_csv, observed_ntp_servers
+# and alert_log as extra_vars (ansible-rulebook copies playbooks into a
+# temporary project directory, so nothing is read from relative paths).
+- name: Reapply baseline NTP servers
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    baseline_ntp_servers: "{{ baseline_ntp_servers_csv.split(',') }}"
+  tasks:
+    - name: Set NTP servers to baseline
+      everpure.flasharray.purefa_ntp:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline_ntp_servers }}"
+      register: ntp_result
+
+    - name: Record the remediation
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'remediation', 'array': inventory_hostname,
+              'setting': 'ntp_servers', 'observed': observed_ntp_servers | default(''),
+              'applied': baseline_ntp_servers, 'changed': ntp_result.changed} | to_json }}
+      delegate_to: localhost

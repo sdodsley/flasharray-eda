@@ -1,0 +1,67 @@
+---
+# Capacity: physical utilisation, days-to-full from the array's own space
+# history, and the fastest-growing volumes since the previous poll.
+#
+# Nothing here frees space. Crossing the risk threshold records an approval
+# request listing the arrays with the most headroom; in Ansible Automation
+# Platform the same rule calls run_workflow_template against a workflow whose
+# first node is a manual approval.
+
+- name: FlashArray capacity
+  hosts: all
+
+  sources:
+    - purefa_events:
+        arrays: "{{ purefa_arrays }}"
+        signals: [telemetry]
+        telemetry_interval: "{{ telemetry_interval }}"
+        top_growers: 5
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: Array over capacity risk threshold - raise provisioning request
+      condition: >-
+        event.purefa_capacity.used_pct is defined and
+        event.purefa_capacity.used_pct >= vars.capacity_risk_pct
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/capacity_request.yml
+          extra_vars:
+            at_risk_array: "{{ event.purefa_capacity.array }}"
+            used_pct: "{{ event.purefa_capacity.used_pct }}"
+            used_bytes: "{{ event.purefa_capacity.used_bytes }}"
+            capacity_bytes: "{{ event.purefa_capacity.capacity_bytes }}"
+            days_to_full: "{{ event.purefa_capacity.days_to_full }}"
+            top_growers: "{{ event.purefa_capacity.top_growers }}"
+            candidate_targets: "{{ event.purefa_capacity.others }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Array will be full within the warning horizon - notify
+      condition: >-
+        event.purefa_capacity.days_to_full_known == true and
+        event.purefa_capacity.days_to_full <= vars.capacity_days_to_full_warning
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefa_capacity.array }} full in about {{ event.purefa_capacity.days_to_full }} days at the 7-day growth rate"
+            detail: >-
+              used={{ event.purefa_capacity.used_pct }}%
+              growth={{ event.purefa_capacity.growth_bytes_per_day }} bytes/day
+              top growers={{ event.purefa_capacity.top_growers }}
+            target_array: "{{ event.purefa_capacity.array }}"
+            alert_log: "{{ alert_log }}"

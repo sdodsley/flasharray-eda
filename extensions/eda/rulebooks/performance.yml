@@ -1,0 +1,76 @@
+---
+# Performance: the slowest volumes (server-side sorted, top N per poll) with a
+# consecutive-poll counter, plus the array-level sample compared with the
+# same half hour one week ago from the array's own history.
+#
+# Action in this phase: notify. The QoS cap with hysteresis arrives in the
+# capacity/performance phase of the plan.
+
+- name: FlashArray performance
+  hosts: all
+
+  sources:
+    - purefa_events:
+        arrays: "{{ purefa_arrays }}"
+        signals: [telemetry]
+        telemetry_interval: "{{ telemetry_interval }}"
+        latency_threshold_usec: "{{ hotspot_latency_usec }}"
+        min_iops: "{{ hotspot_min_iops }}"
+        top_volumes: 10
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: Sustained volume latency on a hot array - notify
+      condition: >-
+        event.purefa_volume_performance.high_latency_polls is defined and
+        event.purefa_volume_performance.high_latency_polls >= vars.hotspot_consecutive_polls and
+        (event.purefa_volume_performance.array_usec_per_read_op >= vars.array_hot_latency_usec or
+         event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec)
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefa_volume_performance.array
+          - event.purefa_volume_performance.volume
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "Sustained latency on {{ event.purefa_volume_performance.array }}/{{ event.purefa_volume_performance.volume }}"
+            detail: >-
+              read={{ event.purefa_volume_performance.usec_per_read_op }}us
+              write={{ event.purefa_volume_performance.usec_per_write_op }}us
+              iops={{ event.purefa_volume_performance.reads_per_sec }}r/{{ event.purefa_volume_performance.writes_per_sec }}w
+              for {{ event.purefa_volume_performance.high_latency_polls }} polls;
+              array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us
+              write={{ event.purefa_volume_performance.array_usec_per_write_op }}us
+            target_array: "{{ event.purefa_volume_performance.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Array write latency well above the same time last week - notify
+      condition: >-
+        event.purefa_array_performance.baseline_known == true and
+        event.purefa_array_performance.write_latency_ratio >= vars.baseline_latency_ratio and
+        event.purefa_array_performance.usec_per_write_op >= vars.array_hot_latency_usec
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefa_array_performance.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefa_array_performance.array }} write latency is {{ event.purefa_array_performance.write_latency_ratio }}x last week's"
+            detail: >-
+              now write={{ event.purefa_array_performance.usec_per_write_op }}us
+              iops={{ event.purefa_array_performance.writes_per_sec }};
+              same half hour last week write={{ event.purefa_array_performance.baseline_usec_per_write_op }}us
+              iops={{ event.purefa_array_performance.baseline_writes_per_sec }}
+            target_array: "{{ event.purefa_array_performance.array }}"
+            alert_log: "{{ alert_log }}"
