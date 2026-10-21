@@ -108,10 +108,16 @@ stand-in for that).
   maintenance windows take 3600 to 172800 seconds; the alert watcher test
   needs watcher names.
 - Purity logs NTP changes as `purearray setattr --ntpserver`, not `purentp`.
-- `purefa_hardware` (py-pure-client 1.94.1) sends an empty PATCH body for
-  the identify LED, and `purefa_dns` 1.44.0 refuses a management DNS
-  configuration that also serves file DNS. Both are called through the SDK
-  here until the collection fixes ship.
+- Four collection bugs were found and fixed upstream: `purefa_hardware`
+  sent an empty PATCH body for the identify LED
+  ([#1093](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1093)),
+  `purefa_volume_tags` truncated values containing colons
+  ([#1094](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1094)),
+  `purefa_eradication` reset the delay it was not asked to change
+  ([#1095](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1095)),
+  and `purefa_dns` 1.44.0 refused a management configuration that also serves
+  file DNS ([#1091](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1091)).
+  The playbooks call the SDK for those four operations until the fixes ship.
 - ansible-rulebook: no filters or arithmetic in conditions (the plugin emits
   the booleans), `once_within` must be a literal, `run_playbook` copies the
   playbook alone (absolute paths for included task files), `--vars` takes one
