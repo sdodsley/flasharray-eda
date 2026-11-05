@@ -287,6 +287,9 @@ The Alertmanager path is exercised by POSTing a webhook payload to
 
 ## Related
 
+- Blog post: "Your FlashArray is already an event source"
+  (https://theansibleguy.com/your-flasharray-is-already-an-event-source/),
+  the ideas and the plan this project was built from.
 - Predecessor: the "Fusion MCP + Ansible thought experiment"
   (https://github.com/sdodsley/fusion-ansible-mcp). The runnable
   Fusion-based EDA prototype that followed it, and that this project
