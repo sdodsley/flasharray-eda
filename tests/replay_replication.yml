@@ -1,8 +1,14 @@
 ---
 # Replay recorded replication events through the action rules.
-#   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<a>/g; s/REPLAY_PGROUP/<pg>/g; s/REPLAY_POD/<pod>/g; s/REPLAY_ONLINE/<a>/g; s/REPLAY_OFFLINE/<b>/g" tests/fixtures/replication.yml; } > tests/out/vars_replay.yml
+#   { cat vars/local-lab.yml; \
+#     sed "/^---$/d; s/REPLAY_ARRAY/<a>/g; s/REPLAY_PGROUP/<pg>/g; s/REPLAY_POD/<pod>/g; \
+#          s/REPLAY_ONLINE/<a>/g; s/REPLAY_OFFLINE/<b>/g" tests/fixtures/replication.yml; } \
+#     > tests/out/vars_replay.yml
 #   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_replication.yml
-# Rules are copies of the ones in extensions/eda/rulebooks/replication.yml.
+# Rules are copies of the ones in extensions/eda/rulebooks/replication.yml,
+# throttles included: each fixture hits a throttled rule once with its own key
+# and every run is a fresh process, so nothing is suppressed;
+# tests/unit/test_rulebooks.py fails if a copy drifts.
 # Note: the recovery event follows the degraded one by `delay` seconds, so
 # the online_arrays it carries must match what prefer_online applied.
 - name: FlashArray replication (replayed fixtures)
@@ -21,6 +27,11 @@
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
         event.purefa_pg_replication.maintenance_active == false and
         vars.replication_auto_replicate_now == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
       action:
         run_playbook:
           name: playbooks/replicate_now.yml
@@ -39,6 +50,11 @@
         event.purefa_stretched_pod.all_online == false and
         event.purefa_stretched_pod.maintenance_active == false and
         vars.activecluster_auto_prefer == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefa_stretched_pod.array
+          - event.purefa_stretched_pod.pod
       action:
         run_playbook:
           name: playbooks/preferred_array.yml

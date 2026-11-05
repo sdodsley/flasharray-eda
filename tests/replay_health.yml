@@ -1,12 +1,16 @@
 ---
 # Replay recorded hardware events through the health rules.
-#   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<array>/; s/REPLAY_COMPONENT/CT1/" tests/fixtures/hardware_critical.yml; } > tests/out/vars_replay.yml
+#   { cat vars/local-lab.yml; \
+#     sed "/^---$/d; s/REPLAY_ARRAY/<array>/; s/REPLAY_COMPONENT/CT1/" tests/fixtures/hardware_critical.yml; } \
+#     > tests/out/vars_replay.yml
 #   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_health.yml
 # (ansible-rulebook takes one --vars file, -e is that file not key=value, and
 # values in it are not templated, hence the sed.)
-# The rules are copies of the ones in extensions/eda/rulebooks/health.yml;
-# ansible-rulebook has no include, and swapping a source for an event stream
-# is an EDA Controller feature. Keep them in step.
+# The rules are copies of the ones in extensions/eda/rulebooks/health.yml,
+# throttles included: ansible-rulebook has no include, and swapping a source
+# for an event stream is an EDA Controller feature. Each fixture hits a
+# throttled rule once with its own key and every run is a fresh process, so
+# nothing is suppressed; tests/unit/test_rulebooks.py fails if a copy drifts.
 - name: FlashArray health (replayed fixtures)
   hosts: all
 
@@ -21,6 +25,11 @@
       condition: >-
         event.purefa_hardware.status is defined and
         event.purefa_hardware.maintenance_active == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_hardware.array
+          - event.purefa_hardware.component
       action:
         run_playbook:
           name: playbooks/identify_led.yml
@@ -37,9 +46,16 @@
       condition: >-
         event.purefa_hardware.status is defined and
         event.purefa_hardware.maintenance_active == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_hardware.array
+          - event.purefa_hardware.component
       action:
         debug:
-          msg: "maintenance window active on {{ event.purefa_hardware.array }}: {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned"
+          msg: >-
+            maintenance window active on {{ event.purefa_hardware.array }}:
+            {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned
 
     - name: Controller failover - notify
       condition: event.purefa_controller_failover.primary is defined

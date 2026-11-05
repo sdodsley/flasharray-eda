@@ -6,11 +6,18 @@
 # Nothing here frees space on its own. Crossing the risk threshold records an
 # approval request (with a request id) listing what could be reclaimed and
 # which other arrays have headroom. The second ruleset is the approval gate:
-# a POST to its webhook with {"request_id": ..., "approve": true, "action":
-# "eradicate_pending"} runs the reclaim playbook, anything else is logged.
+# a POST to its webhook with {"request_id": ..., "approve": true, "approver":
+# "<name>", "action": "eradicate_pending"} runs the reclaim playbook (only on
+# the candidates the request listed that are still pending), anything else
+# is logged.
 # In Ansible Automation Platform the first ruleset calls run_workflow_template
 # against a workflow whose first node is a manual approval and the webhook
 # ruleset is not needed.
+#
+# The approvals webhook needs a bearer token: APPROVAL_TOKEN comes from the
+# environment (run.sh passes it with --env-vars; it never sits in a vars file)
+# and an approver sends -H "Authorization: Bearer $APPROVAL_TOKEN". Keep the
+# approval port reachable only by approvers.
 
 - name: FlashArray capacity
   hosts: all
@@ -81,24 +88,34 @@
     - ansible.eda.webhook:
         host: 0.0.0.0
         port: "{{ approval_port }}"
+        token: "{{ APPROVAL_TOKEN }}"
 
   rules:
     - name: Approved request - reclaim
       condition: >-
         event.payload.request_id is defined and
-        event.payload.approve == true
+        event.payload.approve == true and
+        event.payload.action is defined
       action:
         run_playbook:
           name: playbooks/capacity_reclaim.yml
           extra_vars:
             request_id: "{{ event.payload.request_id }}"
-            approver: "{{ event.payload.approver }}"
+            approver: "{{ event.payload.approver | default('unknown') }}"
             reclaim_action: "{{ event.payload.action }}"
             request_dir: "{{ request_dir }}"
             alert_log: "{{ alert_log }}"
 
     - name: Rejected or malformed request - log
-      condition: event.payload.request_id is defined and event.payload.approve != true
+      condition: >-
+        event.payload.request_id is defined and
+        (event.payload.approve is not defined or
+         event.payload.approve != true or
+         event.payload.action is not defined)
       action:
         debug:
-          msg: "capacity request {{ event.payload.request_id }} rejected by {{ event.payload.approver }}"
+          msg: >-
+            capacity request {{ event.payload.request_id }} rejected or malformed
+            (approve={{ event.payload.approve | default('missing') }},
+            action={{ event.payload.action | default('missing') }})
+            by {{ event.payload.approver | default('unknown') }}

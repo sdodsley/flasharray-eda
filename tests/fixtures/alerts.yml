@@ -15,7 +15,9 @@ fixture_events:
       component_type: hardware
       component_name: ct0.eth7
       summary: "(hardware:ct0.eth7): failure"
-      action: "Review the linked Knowledge Base article. If the alert is not resolved or you need further assistance, contact Pure Storage Support and provide the alert text."
+      action: >-
+        Review the linked Knowledge Base article. If the alert is not resolved or you need
+        further assistance, contact Pure Storage Support and provide the alert text.
       knowledge_base_url: "https://support.purestorage.com/?cid=Alert_0042"
   - purefa_alert:
       array: "REPLAY_ARRAY"

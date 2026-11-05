@@ -2,7 +2,9 @@
 # Replay recorded alert events through the alert rules.
 #   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<array>/" tests/fixtures/alerts.yml; } > tests/out/vars_replay.yml
 #   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_alerts.yml
-# Rules are copies of the ones in extensions/eda/rulebooks/alerts.yml.
+# Rules are copies of the ones in extensions/eda/rulebooks/alerts.yml (neither
+# carries a throttle there either); tests/unit/test_rulebooks.py fails if a
+# copy drifts from the real rule.
 - name: FlashArray alerts (replayed fixtures)
   hosts: all
 
@@ -39,5 +41,4 @@
             alert_id: "{{ event.purefa_alert.alert_id }}"
             alert_code: "{{ event.purefa_alert.code }}"
             alert_runbooks: "{{ alert_runbooks }}"
-            runbook_dir: "{{ runbook_dir }}"
             alert_log: "{{ alert_log }}"

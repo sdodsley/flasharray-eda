@@ -1,6 +1,0 @@
----
-collections:
-  - name: ansible.eda
-    version: ">=2.13.0"
-  - name: everpure.flasharray
-    version: ">=1.44.0"

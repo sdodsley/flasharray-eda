@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Send representative FlashArray syslog lines to the purefa_syslog listener.
 
     python3 tests/syslog_send.py <host> <port> [udp|tcp] [array-name]
@@ -19,10 +21,10 @@ stamp = time.strftime("%b %d %H:%M:%S")
 utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 lines = [
     f"<182>{stamp} {array} purity.audit: (login message ID: 676886) Array name: '{array}' Controller: 0 Interface: 'REST' "
-    f"Module: '' Session: 'abc123' UTC Time: {utc} User: 'eda-human' Location '10.0.0.9' Sublocation: 'python-requests/2.32' "
+    f"Module: '' Session: 'abc123' UTC Time: {utc} User: 'eda-human' Location '203.0.113.9' Sublocation: 'python-requests/2.32' "
     f"Action: 'login' Method: '' Result: Success Description: ''",
     f"<182>{stamp} {array} purity.audit: (operation message ID: 676887) Array name: '{array}' Controller: 0 Interface: 'CLI' "
-    f"Module: 'purevol' Session: 'abc124' UTC Time: {utc} User: 'eda-human' Location '10.0.0.9' Sublocation: 'ssh' "
+    f"Module: 'purevol' Session: 'abc124' UTC Time: {utc} User: 'eda-human' Location '203.0.113.9' Sublocation: 'ssh' "
     f"Action: 'purevol destroy prod-vol' Method: '' Result: Success Description: 'volume destroyed'",
     f"<180>{stamp} {array} purity.alert: (hardware:ct0.eth7): failure [code 42, severity warning]",
     f"<182>{stamp} {array} purity.test: This is a test message from {array}",

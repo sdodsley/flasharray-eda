@@ -21,8 +21,9 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
   notify, resolved alerts are logged. No code from this project is needed on
   the array side of that path.
 - **Decision environment** under `decision-environment/`: a Containerfile
-  on `quay.io/ansible/ansible-rulebook`, an `ansible-builder` v3 definition,
-  Python and collection requirements.
+  on `quay.io/ansible/ansible-rulebook:v1.3.2`, an `ansible-builder` v3
+  definition on the same base that produces the same tree, the SDK
+  requirement, and the root `requirements.yml` for the collections.
 
 ## Test results
 
@@ -30,7 +31,7 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
 | --- | --- | --- |
 | syslog parser | representative audit, alert, test and garbage lines through `purefa_syslog.py parse` | audit: user, action, result and twelve fields parsed; alert and test recognised; garbage returns `kind: other` |
 | syslog listener | `syslog.yml` running, four lines sent over UDP then TCP with `tests/syslog_send.py` | both transports delivered; the human's `purevol destroy` and the alert produced notifications, the test line was logged |
-| Alertmanager | `alertmanager.yml` running, one Alertmanager webhook payload POSTed with a replica-link alert, a hardware alert and a resolved capacity alert | hardware alert lit the identify LED on CT1 of the real array (cleared afterwards); the others notified and logged |
+| Alertmanager | `alertmanager.yml` running, one Alertmanager webhook payload POSTed with a replica-link alert, a hardware alert and a resolved capacity alert (the body itself was not recorded; README "Testing" has a representative one) | hardware alert lit the identify LED on CT1 of the real array (cleared afterwards); the others notified and logged |
 
 ## Not yet proven on hardware
 
@@ -42,8 +43,13 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
   specification and not evaluated against a live Prometheus. Metric and
   label names should be checked against the exporter version in use.
 - The decision environment was not built here (no container runtime in
-  this WSL). The Containerfile and the builder definition are straight
-  forward and the requirements match what the lab venv runs.
+  this WSL), and CI runs only the static checks, not an image build. Both
+  definitions are pinned to `quay.io/ansible/ansible-rulebook:v1.3.2`, the
+  ansible-rulebook the lab ran; `latest` on that repository is not
+  guaranteed to be the newest release. The requirements match what the lab
+  venv runs. The image serves `ansible-rulebook --source-dir` runs only:
+  EDA Controller activations resolve custom event sources from installed
+  collections, so they additionally need the packaging below.
 
 ## Packaging
 
@@ -53,5 +59,7 @@ rulebooks under `extensions/eda/rulebooks`. Moving into `everpure.flasharray`
 means copying those two directories, renaming the sources in the rulebooks
 to `everpure.flasharray.purefa_events` and `everpure.flasharray.purefa_syslog`,
 and shipping the playbooks as the collection's `playbooks/`. The
-certification track then needs the event source documentation blocks and
-the tests Red Hat asks for.
+certification track then needs the tests Red Hat asks for (the event
+sources already carry their documentation blocks). The step-by-step list, including why the
+source names stay bare in this repository, is [PACKAGING.md](PACKAGING.md);
+none of it has been started.

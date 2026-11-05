@@ -5,7 +5,8 @@
 # stuck transfers), plus a scheduled DR drill.
 #
 # Actions (each gated by a var so a site can start with notify only):
-#   overdue or stuck protection group  -> replicate now (purefa_pgsnap now+remote)
+#   overdue or stuck protection group  -> replicate now (purefa_pgsnap remote: true,
+#                                         an immediate replicated snapshot)
 #   stretched pod member offline       -> move host preferred arrays to the
 #                                         online side; move them back on recovery
 #   RPO breached for N polls           -> escalate to critical
@@ -46,8 +47,13 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_array_connection.array }} connection to {{ event.purefa_array_connection.remote }} is {{ event.purefa_array_connection.status }}"
-            detail: "type={{ event.purefa_array_connection.type }} paths {{ event.purefa_array_connection.paths_connected }}/{{ event.purefa_array_connection.paths_total }} connected; failed: {{ event.purefa_array_connection.failed_paths }}"
+            subject: >-
+              {{ event.purefa_array_connection.array }} connection to {{ event.purefa_array_connection.remote }}
+              is {{ event.purefa_array_connection.status }}
+            detail: >-
+              type={{ event.purefa_array_connection.type }}
+              paths {{ event.purefa_array_connection.paths_connected }}/{{ event.purefa_array_connection.paths_total }} connected;
+              failed: {{ event.purefa_array_connection.failed_paths }}
             target_array: "{{ event.purefa_array_connection.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -66,7 +72,9 @@
           extra_vars:
             severity: warning
             subject: "{{ event.purefa_array_connection.array }} has failed replication paths to {{ event.purefa_array_connection.remote }}"
-            detail: "{{ event.purefa_array_connection.paths_connected }} of {{ event.purefa_array_connection.paths_total }} paths connected; failed: {{ event.purefa_array_connection.failed_paths }}"
+            detail: >-
+              {{ event.purefa_array_connection.paths_connected }} of {{ event.purefa_array_connection.paths_total }} paths connected;
+              failed: {{ event.purefa_array_connection.failed_paths }}
             target_array: "{{ event.purefa_array_connection.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -82,8 +90,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "Replica link {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_array }}:{{ event.purefa_replica_link.remote_pod }} is paused"
-            detail: "status={{ event.purefa_replica_link.status }} paused for {{ event.purefa_replica_link.paused_for_s }}s (since this rulebook noticed), recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old"
+            subject: >-
+              Replica link {{ event.purefa_replica_link.local_pod }} ->
+              {{ event.purefa_replica_link.remote_array }}:{{ event.purefa_replica_link.remote_pod }} is paused
+            detail: >-
+              status={{ event.purefa_replica_link.status }} paused for {{ event.purefa_replica_link.paused_for_s }}s
+              (since this rulebook noticed), recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old
             target_array: "{{ event.purefa_replica_link.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -101,8 +113,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "Replica link {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_pod }} is {{ event.purefa_replica_link.status }}"
-            detail: "direction={{ event.purefa_replica_link.direction }} lag={{ event.purefa_replica_link.lag_ms }}ms recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old"
+            subject: >-
+              Replica link {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_pod }}
+              is {{ event.purefa_replica_link.status }}
+            detail: >-
+              direction={{ event.purefa_replica_link.direction }} lag={{ event.purefa_replica_link.lag_ms }}ms
+              recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old
             target_array: "{{ event.purefa_replica_link.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -121,8 +137,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "Replica link {{ event.purefa_replica_link.local_pod }} lag {{ event.purefa_replica_link.lag_s }}s exceeds RPO {{ event.purefa_replica_link.rpo_seconds }}s"
-            detail: "recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old, status={{ event.purefa_replica_link.status }}, breached for {{ event.purefa_replica_link.rpo_breach_polls }} polls"
+            subject: >-
+              Replica link {{ event.purefa_replica_link.local_pod }} lag {{ event.purefa_replica_link.lag_s }}s
+              exceeds RPO {{ event.purefa_replica_link.rpo_seconds }}s
+            detail: >-
+              recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old,
+              status={{ event.purefa_replica_link.status }}, breached for {{ event.purefa_replica_link.rpo_breach_polls }} polls
             target_array: "{{ event.purefa_replica_link.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -141,8 +161,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "RPO breach on {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_array }} has persisted for {{ event.purefa_replica_link.rpo_breach_polls }} polls"
-            detail: "lag {{ event.purefa_replica_link.lag_s }}s vs RPO {{ event.purefa_replica_link.rpo_seconds }}s, recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old"
+            subject: >-
+              RPO breach on {{ event.purefa_replica_link.local_pod }} -> {{ event.purefa_replica_link.remote_array }}
+              has persisted for {{ event.purefa_replica_link.rpo_breach_polls }} polls
+            detail: >-
+              lag {{ event.purefa_replica_link.lag_s }}s vs RPO {{ event.purefa_replica_link.rpo_seconds }}s,
+              recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old
             target_array: "{{ event.purefa_replica_link.array }}"
             alert_log: "{{ alert_log }}"
 
@@ -241,7 +265,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "Protection group {{ event.purefa_pg_replication.pgroup }} on {{ event.purefa_pg_replication.array }} is {{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
+            subject: >-
+              Protection group {{ event.purefa_pg_replication.pgroup }} on {{ event.purefa_pg_replication.array }}
+              is {{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}
             detail: >-
               last completed {{ event.purefa_pg_replication.since_last_completed_s }}s ago,
               schedule every {{ event.purefa_pg_replication.frequency_ms }}ms,

@@ -2,7 +2,9 @@
 # Notify-only action. Appends a JSON line to the alert log and prints it.
 # Swap or extend the tasks for mail / Slack / ServiceNow; the rulebooks pass
 # severity, subject, detail, target_array, alert_log and, for array alerts,
-# alert_id and alert_code.
+# alert_id and alert_code. Every alert-log line, whichever playbook writes it,
+# carries time, kind, severity and array plus kind-specific fields; keep that
+# shape when adding a playbook.
 - name: Notify a human
   hosts: localhost
   gather_facts: false
@@ -10,7 +12,7 @@
     - name: Build the alert record
       ansible.builtin.set_fact:
         alert_record:
-          time: "{{ lookup('pipe', 'date -Is') }}"
+          time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
           kind: notify
           severity: "{{ severity | default('warning') }}"
           array: "{{ target_array | default('') }}"

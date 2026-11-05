@@ -9,23 +9,100 @@ events and acts on them through the `everpure.flasharray` collection. No
 Pure1, no Fusion and no external monitoring stack are required; a
 Prometheus/Alertmanager path exists for sites that already run one.
 
-Status: all five phases of [docs/PLAN.md](docs/PLAN.md) are implemented and
-exit-tested against two Purity//FA 6.10.6 arrays (2026-10-20). Records per
-phase: [PHASE0](docs/PHASE0.md) sources and rulebooks, [PHASE1](docs/PHASE1.md)
-change control, [PHASE2](docs/PHASE2.md) replication, [PHASE3](docs/PHASE3.md)
-capacity, QoS and the anomaly rule, [PHASE4](docs/PHASE4.md) push, Prometheus
-and packaging. This is a prototype, not a supported product.
+Status: all five phases of [docs/PLAN.md](docs/PLAN.md) are implemented.
+Phases 0-3 are exit-tested against two Purity//FA 6.10.6 arrays
+(2026-10-20); Phase 4's syslog listener and Prometheus rules are tested with
+replayed input (the lab arrays cannot reach the EDA host), the Alertmanager
+path drove a real identify LED, and the decision environment is unbuilt
+(see [PHASE4](docs/PHASE4.md)). Records per phase: [PHASE0](docs/PHASE0.md)
+sources and rulebooks, [PHASE1](docs/PHASE1.md) change control,
+[PHASE2](docs/PHASE2.md) replication, [PHASE3](docs/PHASE3.md) capacity,
+QoS and the anomaly rule, [PHASE4](docs/PHASE4.md) push, Prometheus and
+packaging. This is a prototype, not a supported product.
+
+Three transports feed the same rulebooks and the same playbooks:
+
+```mermaid
+flowchart LR
+  subgraph fa["FlashArray"]
+    rest["REST API<br/>alerts, audits, hardware, space,<br/>performance, replication, config"]
+    slog["syslog<br/>purity.alert / purity.audit / purity.test"]
+    om["OpenMetrics exporter<br/>(Purity 6.7+)"]
+  end
+  subgraph rb["ansible-rulebook"]
+    events["purefa_events<br/>(pull, six signals)"]
+    pes["purefa_syslog<br/>(push, UDP/TCP)"]
+    am["ansible.eda.alertmanager"]
+    rules["rulebooks<br/>gated by maintenance windows,<br/>automation_users and per-site switches"]
+  end
+  prom["Prometheus rules<br/>+ Alertmanager"]
+  pb["playbooks<br/>everpure.flasharray modules"]
+  rest -->|poll| events --> rules
+  slog -->|UDP/TCP| pes --> rules
+  om -->|scrape| prom -->|webhook| am --> rules
+  rules -->|run_playbook| pb -->|"revert, light, cap, snapshot, ask"| fa
+```
+
+## Quick start
+
+Requirements: Python 3.9+ and Java 17+ (for ansible-rulebook);
+ansible-rulebook 1.3.x and ansible-core 2.17 (the tested versions;
+`requirements.txt` holds the minimums); `everpure.flasharray` >= 1.46.0 and
+`ansible.eda` >= 2.13.0 (`requirements.yml`); py-pure-client >= 1.94.1.
+Tested against Purity//FA 6.10.6 (REST 2.46).
+
+```
+python3 -m venv venv && . venv/bin/activate
+make deps                                   # pip install -r requirements.txt; ansible-galaxy collection install -r requirements.yml
+cp env.example ~/.flasharray-eda.env        # URLs and tokens for both arrays, APPROVAL_TOKEN, GIT_WEBHOOK_SECRET; chmod 600
+cp vars/example.yml vars/local-lab.yml      # edit: arrays, absolute paths (alert_log, request_dir, baseline_dir), baselines, thresholds, switches
+cp inventory/example.yml inventory/local-lab.yml
+./run.sh extensions/eda/rulebooks/alerts.yml -v
+```
+
+`run.sh` sources `env.sh`, which loads `~/.flasharray-eda.env` (override
+with `FAEDA_ENV`), activates `./venv` (`FAEDA_VENV`) or else expects
+`ansible-rulebook` on the PATH and says so, puts `~/.ansible/collections`
+(plus `./collections` when that directory exists) on
+`ANSIBLE_COLLECTIONS_PATH`, and defaults `FAEDA_VARS` to
+`vars/local-lab.yml` and `FAEDA_INVENTORY` to `inventory/local-lab.yml`.
+It then starts the rulebook with
+`--source-dir extensions/eda/plugins/event_source` and hands
+`APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` to ansible-rulebook with
+`--env-vars` when they are set in the environment; that is how the webhook
+rulesets read them (`{{ APPROVAL_TOKEN }}` in a rulebook is an environment
+variable, not a vars-file key).
+
+Three things to get right on the first run:
+
+- **Arrays.** The example vars and inventory name two arrays. Either fill in
+  both the `ARRAY_A_*` and `ARRAY_B_*` pairs in the env file, or remove
+  `array-b` from `purefa_arrays`, from the inventory and from the
+  `dr_drills` entry. The source plugin refuses to start when a listed
+  array's environment variables are empty.
+- **Paths.** `alert_log` and `request_dir` default under `/var`, which needs
+  root or a directory created and chowned beforehand; for a local run point
+  them at a directory the rulebook user can write. `baseline_dir` is a
+  separate checkout of the baseline repository
+  ([baseline/README.md](baseline/README.md)), not this tree. The `/var` and
+  `/opt` defaults are the decision-environment image layout.
+- **Credentials.** Tokens and URLs reach the plugin through
+  `api_token_env` / `fa_url_env` and the playbooks through the inventory's
+  `lookup('env', ...)`, so no vars file holds a secret. Give the polling
+  token a read-only array role; the plugin only issues GETs. The remediation
+  playbooks use the inventory credential, which should be a dedicated
+  service account named in `automation_users`.
 
 ## What it does
 
 | Rulebook | Source | Fires on | Action |
 | --- | --- | --- | --- |
 | `alerts.yml` | alerts | alert opened / closed | routes through the alert-code runbook map: notify, ticket, or per-code tasks, with the array's own action text and KB link |
-| `change_control.yml` | audits, webhook | a governed setting changed by anyone but the automation account; a destructive command by a human; a git push | reconcile from the git baseline (NTP, DNS) and report who; notify; apply the baseline forward |
+| `change_control.yml` | audits, webhook | a governed setting changed by anyone but the automation account; a destructive command by a human; a signed git push | reconcile from the git baseline (NTP, DNS) and report who; notify; apply the baseline forward |
 | `config_drift.yml` | config | NTP, DNS, LDAP, SafeMode/eradication, admin auth settings vs baseline (poll-based fallback) | NTP and DNS reapplied; the rest notify |
-| `health.yml` | health | hardware component not ok, drive not healthy, controller failover, maintenance window, remote assist | identify LED on the component + notify, suppressed inside a window |
+| `health.yml` | health | hardware component not ok; drive not healthy; controller failover; maintenance window; remote assist | hardware component not ok: identify LED + notify, logged only inside a maintenance window; drive not healthy, controller failover: notify; maintenance window, remote assist: logged |
 | `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a schedule | notify; move host preferred arrays to the online side and back; replicate now; DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
-| `capacity.yml` | telemetry, webhook | used % over threshold; days-to-full from the array's 7-day history; an approval | approval request with request id; reclaim pending-eradication objects only when approved |
+| `capacity.yml` | telemetry, webhook | used % over threshold; days-to-full from the array's 7-day history; an approval (bearer token) | approval request with request id; reclaim pending-eradication objects only when approved |
 | `performance.yml` | telemetry | noisy neighbour on a hot array; capped volume back to normal; array write latency vs the same half hour last week | temporary IOPS cap with an `eda/qos_cap` tag on the array; cap lifted; notify |
 | `anomaly.yml` | telemetry + audits | data reduction drop + snapshot or write surge + a human destroying snapshots, all on one array inside 15 minutes | snapshot every local protection group now, lengthen the eradication delay, page |
 | `syslog.yml` | purefa_syslog | `purity.audit` / `purity.alert` / `purity.test` lines pushed by the array | fast notification seconds after the fact |
@@ -35,7 +112,8 @@ Every remediation is gated: `maintenance_active` on the event (one cached
 `/maintenance-windows` read per array), an `automation_users` list so the
 automation never reacts to itself, and per-site switches
 (`qos_auto_cap`, `activecluster_auto_prefer`, `replication_auto_replicate_now`)
-that fall back to notify.
+that fall back to notify. Every record a playbook writes to the alert log
+carries `time`, `kind`, `severity` and `array`.
 
 ## Layout
 
@@ -44,28 +122,32 @@ extensions/eda/plugins/event_source/   purefa_events.py (REST pull, six signals)
 extensions/eda/rulebooks/              one rulebook per domain (table above)
 playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now,
                                        preferred_array, dr_drill, capacity_request/reclaim, qos_cap, protect_now,
-                                       alert_runbook (+ runbooks/<code>.yml), set_dns
-baseline/                              desired state per array (the git baseline; README has the schema)
-prometheus/flasharray.rules.yml        alert rules for the native exporter
-decision-environment/                  Containerfile, ansible-builder definition, requirements
+                                       alert_runbook (+ runbooks/<code>.yml, included relative to the playbook)
+baseline/                              schema of the git baseline (README); the real files live in a separate checkout
+prometheus/flasharray.rules.yml        alert rules for the native exporter (belongs on the Prometheus server)
+decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2 (unbuilt)
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)
-tests/                                 lab induction playbooks, fixtures, replay rulebooks, e2e_phase*.sh
-docs/                                  PLAN.md and the PHASE records
-run.sh                                 launcher
+env.example, env.sh, run.sh            env file template, shared environment setup, launcher
+tests/                                 unit/ (no array needed), lab induction playbooks, fixtures, replay rulebooks,
+                                       e2e_phase*.sh (everything they write goes under tests/out/)
+docs/                                  PLAN.md, the PHASE records, PACKAGING.md (moving into the collection)
+Makefile                               `make check` runs what CI runs; `make de` builds the image
+requirements.txt, requirements.yml     Python packages and the two collections (everpure.flasharray >= 1.46.0)
 ```
 
 ## The source plugins
 
 `purefa_events` polls one or more arrays with py-pure-client and emits plain
 fact events; policy lives in the rulebooks. One instance can run several
-signals, each on its own interval:
+signals, each on its own interval; every REST call is bounded by
+`request_timeout` (default 30 s):
 
 | Signal | Endpoints | Events |
 | --- | --- | --- |
 | alerts | `/alerts` (state != closed), diffed locally | `purefa_alert` with transition initial / opened / updated / closing / closed |
 | audits | `/audits` newest N, cut at a local time cursor | `purefa_audit` with user, command, subcommand, arguments, by_automation |
 | health | `/hardware`, `/drives`, `/controllers`, `/maintenance-windows`, `/support` | `purefa_health`, `purefa_hardware` per issue, `purefa_controller_failover` |
-| telemetry | `/arrays/space` (+ 7-day history), `/volumes/space`, `/arrays/performance` (+ same half hour last week), `/volumes/performance` top N, volume QoS and tags | `purefa_capacity` (days_to_full, top growers, pending eradication, drr_drop, snapshot_surge), `purefa_array_performance` (baseline ratios, write_surge), `purefa_volume_performance` (streak counters, iops share, QoS limit, eda_capped) |
+| telemetry | `/arrays/space` (+ 7-day history), `/volumes/space` (growth tracked across the `growth_volumes`, default 500, largest live volumes), `/arrays/performance` (+ same half hour last week), `/volumes/performance` top N (plus any volume tagged `eda/qos_cap`, whatever its rank), volume QoS and tags | `purefa_capacity` (days_to_full, top growers, pending eradication, drr_drop, snapshot_surge), `purefa_array_performance` (baseline ratios, write_surge), `purefa_volume_performance` (streak counters, iops share, QoS limit, eda_capped) |
 | replication | `/array-connections` (+ paths), `/pod-replica-links`, `/pods` (stretched), `/protection-groups` (+ targets, transfers) | `purefa_array_connection` (failed paths), `purefa_replica_link` (rpo_breached, breach streak, paused_for_s), `purefa_stretched_pod` (online/offline arrays, recovered), `purefa_pg_replication` (overdue, stuck) |
 | config | `/arrays`, `/dns`, `/directory-services`, `/admins/settings`, `/syslog-servers`, `/smtp-servers`, `/alert-watchers`, `/support` | `purefa_config` |
 
@@ -75,31 +157,72 @@ and polling continues. Full argument and field lists are in the plugin
 docstrings.
 
 `purefa_syslog` listens on UDP and TCP for the array's own syslog and emits
-`purefa_syslog` with the audit fields parsed.
+`purefa_syslog` with the audit fields parsed. `allowed_sources` restricts the
+senders it accepts (empty = any) and `arrays` maps an array's own name or
+its syslog hostname to the inventory name (the message's "Array name" field
+is tried first, then the syslog hostname).
 
-## Running it
+The zero-code path needs neither plugin: Prometheus scrapes the array's
+native OpenMetrics exporter, `prometheus/flasharray.rules.yml` raises alerts
+carrying a `domain` label, Alertmanager posts them to
+`ansible.eda.alertmanager`, and `alertmanager.yml` runs the same playbooks.
+Caveat: the rules were written against the exporter's metric specification
+and have not been evaluated against a live Prometheus; check the metric and
+label names against the exporter version in use before relying on them.
 
-```
-python3 -m venv venv && . venv/bin/activate
-pip install ansible-rulebook ansible-core py-pure-client
-ansible-galaxy collection install everpure.flasharray ansible.eda
-cp vars/example.yml vars/local-lab.yml        # edit: arrays, baselines, thresholds, switches
-cp inventory/example.yml inventory/local-lab.yml
-export ARRAY_A_URL=https://... ARRAY_A_TOKEN=...   # or an env file, see run.sh
-./run.sh extensions/eda/rulebooks/alerts.yml -v
-```
+## Listeners
 
-Java 17+ must be on the path for ansible-rulebook. Tokens and URLs reach
-the plugin through `api_token_env` / `fa_url_env`, so no vars file holds a
-secret. Give the polling token a read-only array role; the plugin only
-issues GETs. The remediation playbooks use the inventory credential, which
-should be a dedicated service account named in `automation_users`.
+Four rulesets listen on the network. Each is bound and authenticated
+differently (see also [SECURITY.md](SECURITY.md)):
 
-In Ansible Automation Platform the rulebooks run as activations with the
-decision environment under `decision-environment/`; replace `run_playbook`
-with `run_job_template` and point the capacity rule at a workflow whose
+- **Capacity approvals** (`approval_port`, default 5001): the POST must
+  carry `Authorization: Bearer $APPROVAL_TOKEN`.
+
+      curl -s -X POST http://<eda host>:5001/endpoint \
+        -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"request_id": "<id>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
+
+- **Git push** (`webhook_port`, default 5000): the POST must carry GitHub's
+  `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the exact body>` made
+  with `GIT_WEBHOOK_SECRET`; GitHub adds it when the webhook has a secret.
+  By hand:
+
+      BODY='{"ref":"refs/heads/main","after":"<sha>"}'
+      SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$GIT_WEBHOOK_SECRET" | awk '{print $NF}')
+      curl -s -X POST http://<eda host>:5000/endpoint \
+        -H "X-Hub-Signature-256: sha256=$SIG" -H 'Content-Type: application/json' -d "$BODY"
+
+- **Alertmanager** (`alertmanager_host`, `alertmanager_port`, default
+  5002): `ansible.eda.alertmanager` has no token option. Bind it to an
+  interface only Alertmanager can reach and put it behind the EDA
+  controller's event streams or a reverse proxy that authenticates.
+- **Syslog** (`syslog_host`, `syslog_port`, default 5140):
+  `syslog_allowed_sources` lists the addresses or CIDR prefixes the listener
+  accepts (empty = any). It is a filter, not authentication; UDP source
+  addresses can be forged, which is one reason `syslog.yml` only notifies.
+
+## Decision environment and Ansible Automation Platform
+
+`decision-environment/` holds a Containerfile and an ansible-builder
+definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
+the same tree: the plugins, rulebooks and playbooks under
+`/opt/flasharray-eda`, the two collections and py-pure-client. Neither has
+been built or run in this lab ([PHASE4](docs/PHASE4.md)); CI does not build
+them either. The image is self-contained for
+`ansible-rulebook --source-dir` runs: the Containerfile header has the
+`podman run` line, which mounts `vars/`, `inventory/` and the baseline
+checkout and passes the credentials as environment variables.
+
+Running the rulebooks as EDA Controller activations is a further step.
+Activations pass no `--source-dir` and resolve custom event sources only
+from collections installed in the decision environment, so the two plugins
+must first be packaged as a collection and the source names in the
+rulebooks switched to FQCNs ([docs/PACKAGING.md](docs/PACKAGING.md)). In
+Ansible Automation Platform `run_playbook` becomes `run_job_template`, and
+the capacity rule uses `run_workflow_template` against a workflow whose
 first node is a manual approval (the webhook approval ruleset is the
-stand-in for that).
+stand-in for that). The AAP path, the decision environment build and the
+workflow approval were not exercised in this lab.
 
 ## Things the hardware taught us
 
@@ -117,29 +240,70 @@ stand-in for that).
   ([#1095](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1095)),
   and `purefa_dns` 1.44.0 refused a management configuration that also serves
   file DNS ([#1091](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1091)).
-  The playbooks call the SDK for those four operations until the fixes ship.
+  All four shipped in everpure.flasharray 1.46.0, which the playbooks now
+  require; the SDK workarounds used during the build are gone.
 - ansible-rulebook: no filters or arithmetic in conditions (the plugin emits
-  the booleans), `once_within` must be a literal, `run_playbook` copies the
-  playbook alone (absolute paths for included task files), `--vars` takes one
-  untemplated file, `localhost` must be in the inventory.
+  the booleans; actions may use filters); `once_within` must be a literal
+  and is rejected on a multi-event condition (`anomaly.yml` carries no
+  throttle; its 15 minute `timeout` bounds re-firing); `run_playbook` copies
+  the playbook's whole directory into a temporary project, so relative
+  includes under `playbooks/` work and files outside it do not; `--vars`
+  takes one untemplated file; `localhost` must be in the inventory.
 - State that must survive a rulebook restart lives on the array: the QoS
   cap is a volume tag in namespace `eda`, the approval request is a file.
 
 ## Testing
 
-`tests/e2e_phase0.sh` to `tests/e2e_phase3.sh` run each phase against the
+`make check` needs no array: black, pyflakes and yamllint; the unit tests
+(`python -m pytest tests/unit`: a fake SDK client drives the alert diff and
+the audit cursor, the syslog parser gets representative lines, and static
+checks validate every rulebook against ansible-rulebook's own schema,
+require every lowercase variable a rulebook references to be documented in
+`vars/example.yml` and every playbook a rule runs to exist); and a playbook
+syntax check. GitHub Actions runs the same on every push.
+
+`tests/replay_*.yml` are copies of the live rules driven by
+`ansible.eda.generic` from the fixtures under `tests/fixtures/`
+(ansible-rulebook has no include). They must stay rule-for-rule identical
+to the real rulebooks, throttles included; the unit test fails when they
+drift.
+
+`tests/e2e_phase0.sh` to `tests/e2e_phase3.sh` run each phase against a
 lab, inducing what can be induced (NTP drift, a second user's changes, a
 paused replica link, a maintenance window, a pending-eradication volume, a
-busy volume capped and uncapped) and replaying recorded fixtures for what
-cannot (hardware failures, a degraded stretched pod, the anomaly signals);
-the replayed events still drive the real actions on the array.
-`tests/syslog_send.py` exercises the syslog listener.
+busy volume capped and uncapped) and replaying fixtures for what cannot
+(hardware failures, a degraded stretched pod, the anomaly signals); the
+replayed events still drive the real actions on the array. They source
+`env.sh`; read the array credentials from the environment variables named
+by `A_URL_ENV` / `A_TOKEN_ENV` (default `ARRAY_A_URL` / `ARRAY_A_TOKEN`);
+take array and object names from environment variables with no defaults
+(each script prints a usage line when one is missing); derive their own
+vars file into `tests/out/vars_test.yml` from `FAEDA_VARS` with
+`alert_log` and `request_dir` rewritten under `tests/out/`; and never
+delete anything outside `tests/out/`. Phase 3 refuses its eradicate step
+when the array already holds pending-eradication objects, unless
+`E2E_ERADICATE_ALL=1` is set.
+
+`tests/syslog_send.py` sends representative lines to the syslog listener.
+The Alertmanager path is exercised by POSTing a webhook payload to
+`alertmanager.yml`; this one is representative (the body used on
+2026-10-20 was not recorded):
+
+    curl -s -X POST http://127.0.0.1:5002/alerts -H 'Content-Type: application/json' -d '{
+      "status": "firing", "alerts": [{"status": "firing",
+        "labels": {"alertname": "FlashArrayHardwareComponentNotOk", "array_name": "array-a",
+                   "component_name": "CT1", "component_type": "controller",
+                   "severity": "critical", "domain": "health"},
+        "annotations": {"summary": "CT1 is critical"}}]}'
 
 ## Related
 
-- Predecessor: Fusion MCP -> EDA, the runnable follow-up to the
-  "Fusion MCP + Ansible thought experiment" blog.
+- Predecessor: the "Fusion MCP + Ansible thought experiment"
+  (https://github.com/sdodsley/fusion-ansible-mcp). The runnable
+  Fusion-based EDA prototype that followed it, and that this project
+  forked, is unpublished.
 - Collection: https://github.com/Everpure-Ansible/FlashArray-Collection
+  (module bugs go there, not here)
 - Rulebook docs: https://docs.ansible.com/projects/rulebook/en/latest/
 
 ## Licence

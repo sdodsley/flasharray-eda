@@ -1,20 +1,56 @@
 # Decision environment for the FlashArray rulebooks: ansible-rulebook plus
-# the collections and the SDK the source plugins and playbooks need.
-# Build:  podman build -t flasharray-eda-de -f decision-environment/Containerfile .
-# Or with ansible-builder: ansible-builder build -f decision-environment/execution-environment.yml -t flasharray-eda-de
-FROM quay.io/ansible/ansible-rulebook:latest
+# the collections and the SDK the source plugins and playbooks need. A
+# self-contained image for `ansible-rulebook --source-dir` runs. It has not
+# been built or run in the lab yet (docs/PHASE4.md) and CI does not build it.
+#
+# Build, from the repository root (the ansible-builder definition next to
+# this file produces the same tree):
+#   podman build -t flasharray-eda-de -f decision-environment/Containerfile .
+#   ansible-builder build -f decision-environment/execution-environment.yml -t flasharray-eda-de
+#
+# Run one rulebook. No CMD is set on purpose; the command is explicit. Mount
+# vars/ and inventory/ from a checkout and the baseline repository at the
+# path baseline_dir names; pass the credentials as environment variables.
+#   podman run --rm \
+#     -e ARRAY_A_URL -e ARRAY_A_TOKEN -e ARRAY_B_URL -e ARRAY_B_TOKEN \
+#     -v ./vars:/opt/flasharray-eda/vars:Z -v ./inventory:/opt/flasharray-eda/inventory:Z \
+#     -v /opt/flasharray-eda-baseline:/opt/flasharray-eda-baseline:Z \
+#     flasharray-eda-de ansible-rulebook \
+#       --rulebook extensions/eda/rulebooks/alerts.yml \
+#       --source-dir extensions/eda/plugins/event_source \
+#       --inventory inventory/local-lab.yml --vars vars/local-lab.yml
+# For capacity.yml add `-e APPROVAL_TOKEN -p 5001:5001` and
+# `--env-vars APPROVAL_TOKEN`; for change_control.yml `-e GIT_WEBHOOK_SECRET
+# -p 5000:5000` and `--env-vars GIT_WEBHOOK_SECRET` (never name an unset
+# variable in --env-vars); for syslog.yml publish 5140/udp and 5140/tcp, for
+# alertmanager.yml 5002. The alert log and the request directory default to
+# /var/log/flasharray-eda and /var/lib/flasharray-eda/requests, created below
+# for the runtime user; mount them to keep records across runs.
+#
+# EDA Controller activations pass no --source-dir and resolve custom event
+# sources only from collections installed in the image, so running these
+# rulebooks as activations needs the two plugins packaged as a collection
+# with FQCN source names (docs/PACKAGING.md).
+#
+# quay.io publishes v-prefixed release tags; v1.3.2 is the ansible-rulebook
+# the lab ran. `latest` on that repository is not guaranteed to be the newest
+# release, so the tag is pinned here and in execution-environment.yml.
+FROM quay.io/ansible/ansible-rulebook:v1.3.2
 
 USER root
 COPY decision-environment/requirements.txt /tmp/requirements.txt
-COPY decision-environment/requirements.yml /tmp/requirements.yml
+COPY requirements.yml /tmp/requirements.yml
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
  && ansible-galaxy collection install -r /tmp/requirements.yml -p /usr/share/ansible/collections \
- && rm -f /tmp/requirements.txt /tmp/requirements.yml
+ && rm -f /tmp/requirements.txt /tmp/requirements.yml \
+ && mkdir -p /var/log/flasharray-eda /var/lib/flasharray-eda/requests \
+ && chown -R 1001:0 /var/log/flasharray-eda /var/lib/flasharray-eda \
+ && chmod -R g+rwX /var/log/flasharray-eda /var/lib/flasharray-eda
 
-# The project itself: rulebooks, the source plugins and the playbooks.
+# The project itself: rulebooks, the source plugins and the playbooks. The
+# Prometheus rules file belongs on the Prometheus server, not in this image.
 COPY extensions /opt/flasharray-eda/extensions
 COPY playbooks /opt/flasharray-eda/playbooks
-COPY prometheus /opt/flasharray-eda/prometheus
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 ENV ANSIBLE_LOCALHOST_WARNING=False
 WORKDIR /opt/flasharray-eda

@@ -28,6 +28,8 @@ them. Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client
 | test alert | `tests/send_test_alert.py` | array sent its test alert to the configured watcher |
 | capacity, performance steady state | 45 s each | events flowed, nothing fired (lab at 2.6 % used, idle) |
 
+> Update 2026-11-04: the purefa_hardware bug noted below was fixed upstream in everpure.flasharray 1.46.0 (PR 1093); `identify_led.yml` uses the module again.
+
 ## What the hardware taught us
 
 - `/audits` rejects a filter on `time` ("Unknown attribute"); the cursor is
@@ -56,5 +58,7 @@ them. Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client
 - `--vars` takes one file and `-e` is that file; values in it are not
   templated. Replay tests build a single-document vars file with `sed`.
 - `throttle.once_within` must be a literal; `run_playbook` copies the
-  playbook alone, so everything arrives as `extra_vars`; `localhost` must be
-  in the inventory.
+  playbook's directory into a temporary project (not the repository), so
+  vars files outside `playbooks/` are absent and everything arrives as
+  `extra_vars`, while relative includes under `playbooks/` do resolve;
+  `localhost` must be in the inventory.

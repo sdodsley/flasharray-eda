@@ -21,8 +21,8 @@
         telemetry_interval: "{{ telemetry_interval }}"
         audits_interval: "{{ audits_interval }}"
         automation_users: "{{ automation_users }}"
-        drr_drop_pct: "{{ anomaly_drr_drop_pct }}"
-        snapshot_growth_pct: "{{ anomaly_snapshot_growth_pct }}"
+        drr_drop_threshold_pct: "{{ anomaly_drr_drop_pct }}"
+        snapshot_growth_threshold_pct: "{{ anomaly_snapshot_growth_pct }}"
         write_surge_ratio: "{{ anomaly_write_surge_ratio }}"
 
   rules:
@@ -43,10 +43,8 @@
                             event.purefa_audit.by_automation == false and
                             event.purefa_audit.array == events.cap.purefa_capacity.array
         timeout: 15 minutes
-      throttle:
-        once_within: 1 hour
-        group_by_attributes:
-          - events.cap.purefa_capacity.array
+      # no throttle: ansible-rulebook rejects once_within on a multi-event
+      # condition; the 15 minute timeout bounds how often this can re-fire
       action:
         run_playbook:
           name: playbooks/protect_now.yml

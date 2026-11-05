@@ -10,6 +10,10 @@
 #
 # The second ruleset listens for a git push webhook and applies the baseline
 # forward to every array: merges apply, out-of-band changes revert.
+# The push is verified with GitHub's signature header: GIT_WEBHOOK_SECRET
+# comes from the environment (run.sh --env-vars), the sender signs the exact
+# body as X-Hub-Signature-256: sha256=<hex hmac>, and unsigned or wrongly
+# signed posts are rejected by the source.
 
 - name: FlashArray change control
   hosts: all
@@ -46,7 +50,6 @@
           extra_vars:
             target_array: "{{ event.purefa_audit.array }}"
             baseline_dir: "{{ baseline_dir }}"
-            set_dns_tasks: "{{ set_dns_tasks }}"
             audit_user: "{{ event.purefa_audit.user }}"
             audit_interface: "{{ event.purefa_audit.user_interface }}"
             audit_command: "{{ event.purefa_audit.command }}"
@@ -63,7 +66,9 @@
         event.purefa_audit.maintenance_active == true
       action:
         debug:
-          msg: "maintenance window on {{ event.purefa_audit.array }}: {{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}; not reconciled"
+          msg: >-
+            maintenance window on {{ event.purefa_audit.array }}: {{ event.purefa_audit.user }} ran
+            {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}; not reconciled
 
     - name: Destructive command by a human - notify
       condition: >-
@@ -86,7 +91,9 @@
       condition: event.purefa_audit.by_automation == true
       action:
         debug:
-          msg: "automation ({{ event.purefa_audit.user }}) on {{ event.purefa_audit.array }}: {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}"
+          msg: >-
+            automation ({{ event.purefa_audit.user }}) on {{ event.purefa_audit.array }}:
+            {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}
 
 - name: FlashArray baseline apply on git push
   hosts: all
@@ -95,10 +102,14 @@
     - ansible.eda.webhook:
         host: 0.0.0.0
         port: "{{ webhook_port }}"
+        hmac_secret: "{{ GIT_WEBHOOK_SECRET }}"
+        hmac_algo: sha256
+        hmac_header: x-hub-signature-256
+        hmac_format: hex
 
   rules:
     - name: Push to the baseline repository - apply the baseline to every array
-      condition: event.payload.ref is defined
+      condition: event.payload.ref is defined and event.payload.after is defined
       throttle:
         once_within: 1 minute
         group_by_attributes:
@@ -108,7 +119,6 @@
           name: playbooks/apply_baseline.yml
           extra_vars:
             baseline_dir: "{{ baseline_dir }}"
-            set_dns_tasks: "{{ set_dns_tasks }}"
             git_ref: "{{ event.payload.ref }}"
-            git_after: "{{ event.payload.after }}"
+            git_after: "{{ event.payload.after | default('') }}"
             alert_log: "{{ alert_log }}"

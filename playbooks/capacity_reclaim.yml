@@ -4,17 +4,31 @@
 # performs the approved action and marks the request done.
 #
 # Actions:
-#   eradicate_pending  eradicate volumes and volume snapshots already in
-#                      pending eradication on the array. Objects under a
+#   eradicate_pending  eradicate the volumes and volume snapshots the request
+#                      listed as candidates, and only those still in pending
+#                      eradication now. Anything recovered, or already
+#                      eradicated by the array's own timer, since the request
+#                      was raised is reported as skipped; objects under a
 #                      SafeMode retention lock are refused by the array and
 #                      reported, never forced.
+# request_id arrives in a webhook body, so it is checked against the shape
+# capacity_request.yml generates (<array>-<digits>) before it is used in a
+# path.
 - name: Reclaim capacity on an approved request
   hosts: localhost
   gather_facts: false
+  vars:
+    request_file: "{{ request_dir }}/{{ request_id }}.json"
   tasks:
+    - name: Refuse a request id that is not a plain file name
+      ansible.builtin.assert:
+        that:
+          - request_id is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+        fail_msg: "request id {{ request_id | string | truncate(80) }} is not a valid request id"
+
     - name: Load the request
       ansible.builtin.set_fact:
-        request: "{{ lookup('file', request_dir ~ '/' ~ request_id ~ '.json') | from_json }}"
+        request: "{{ lookup('file', request_file) | from_json }}"
 
     - name: Refuse anything that is not awaiting approval or not a proposed action
       ansible.builtin.assert:
@@ -23,36 +37,52 @@
           - reclaim_action in request.proposed_actions
         fail_msg: "request {{ request_id }} is {{ request.status }} or does not propose {{ reclaim_action }}"
 
-    - name: Eradicate pending objects
+    - name: Eradicate the listed candidates that are still pending eradication
       when: reclaim_action == 'eradicate_pending'
       ansible.builtin.command:
-        cmd: python3 -
+        cmd: "{{ ansible_playbook_python }} -"
         stdin: |
           import json, os, urllib3
           urllib3.disable_warnings()
           from pypureclient import flasharray
           c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
-          done, refused = [], []
-          snaps = [s.name for s in c.get_volume_snapshots(destroyed=True).items]
-          for n in snaps:
-              r = c.delete_volume_snapshots(names=[n])
-              (done if r.status_code == 200 else refused).append({"snapshot": n, **({} if r.status_code == 200 else {"error": r.errors[0].message})})
-          vols = [v.name for v in c.get_volumes(destroyed=True).items]
-          for n in vols:
-              r = c.delete_volumes(names=[n])
-              (done if r.status_code == 200 else refused).append({"volume": n, **({} if r.status_code == 200 else {"error": r.errors[0].message})})
-          print(json.dumps({"eradicated": done, "refused": refused}))
+          with open(os.environ["REQUEST_FILE"]) as f:
+              cand = json.load(f).get("candidates") or {}
+          pending = {"snapshot": {s.name for s in c.get_volume_snapshots(destroyed=True).items},
+                     "volume": {v.name for v in c.get_volumes(destroyed=True).items}}
+          done, refused, skipped = [], [], []
+          for kind, names, delete in (("snapshot", cand.get("snapshots") or [], c.delete_volume_snapshots),
+                                      ("volume", cand.get("volumes") or [], c.delete_volumes)):
+              for n in names:
+                  if n not in pending[kind]:
+                      skipped.append({kind: n, "reason": "no longer pending eradication"})
+                      continue
+                  r = delete(names=[n])
+                  if r.status_code == 200:
+                      done.append({kind: n})
+                  else:
+                      refused.append({kind: n, "error": r.errors[0].message})
+          print(json.dumps({"eradicated": done, "refused": refused, "skipped": skipped}))
       environment:
         FA_HOST: "{{ hostvars[request.array].fa_url | regex_replace('^https?://', '') }}"
         FA_TOKEN: "{{ hostvars[request.array].api_token }}"
+        REQUEST_FILE: "{{ request_file }}"
       register: reclaim
       changed_when: (reclaim.stdout | from_json).eradicated | length > 0
+      no_log: true
+
+    - name: Parse the result
+      ansible.builtin.set_fact:
+        reclaim_result: "{{ reclaim.stdout | default('{}') | from_json }}"
 
     - name: Mark the request done
       ansible.builtin.copy:
-        dest: "{{ request_dir }}/{{ request_id }}.json"
+        dest: "{{ request_file }}"
         mode: "0600"
-        content: "{{ request | combine({'status': 'done', 'approver': approver | default(''), 'action': reclaim_action, 'result': reclaim.stdout | default('{}') | from_json, 'done_at': lookup('pipe', 'date -Is')}) | to_nice_json }}"
+        content: >-
+          {{ request | combine({'status': 'done', 'approver': approver | default(''),
+                                'action': reclaim_action, 'result': reclaim_result,
+                                'done_at': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ')}) | to_nice_json }}
 
     - name: Record the outcome
       ansible.builtin.lineinfile:
@@ -60,10 +90,14 @@
         create: true
         mode: "0600"
         line: >-
-          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'capacity_reclaim', 'severity': 'info',
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'capacity_reclaim', 'severity': 'info',
               'array': request.array, 'request_id': request_id, 'approver': approver | default(''),
-              'action': reclaim_action, 'result': reclaim.stdout | default('{}') | from_json} | to_json }}
+              'action': reclaim_action, 'result': reclaim_result} | to_json }}
 
     - name: Show the outcome
       ansible.builtin.debug:
-        msg: "request {{ request_id }} approved by {{ approver | default('?') }}: {{ reclaim_action }} on {{ request.array }} -> {{ reclaim.stdout | default('{}') }}"
+        msg: >-
+          request {{ request_id }} approved by {{ approver | default('?') }}: {{ reclaim_action }} on {{ request.array }} ->
+          eradicated {{ reclaim_result.eradicated | default([]) | length }},
+          refused {{ reclaim_result.refused | default([]) | length }},
+          skipped {{ reclaim_result.skipped | default([]) | length }}: {{ reclaim_result }}

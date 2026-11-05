@@ -2,30 +2,80 @@
 # Capacity approval request. Deliberately frees nothing: it writes a request
 # file (request_dir/<id>.json) describing the array, the days-to-full
 # estimate, the fastest-growing volumes, what is pending eradication and the
-# other arrays with headroom, and records it in the alert log. An approver
-# answers through the capacity approvals webhook (see the capacity rulebook)
-# or, in Ansible Automation Platform, through the workflow approval node.
+# other arrays with headroom, and records it in the alert log. The names of
+# the destroyed volumes and snapshots are read here (one read-only SDK call)
+# and stored as `candidates`: an approval may later eradicate those and
+# nothing destroyed since. An approver answers through the capacity approvals
+# webhook (see the capacity rulebook) or, in Ansible Automation Platform,
+# through the workflow approval node.
 - name: Raise a capacity approval request
   hosts: localhost
   gather_facts: false
-  vars:
-    request_id: "{{ at_risk_array }}-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
   tasks:
+    - name: Refuse an array name that is not a plain file name
+      ansible.builtin.assert:
+        that:
+          - at_risk_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+        fail_msg: "array name {{ at_risk_array | string | truncate(80) }} is not a valid array name"
+
+    - name: Pin the request id and time
+      ansible.builtin.set_fact:
+        request_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+        request_id: "{{ at_risk_array }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+
+    - name: Make sure the request directory exists
+      ansible.builtin.file:
+        path: "{{ request_dir }}"
+        state: directory
+        mode: "0700"
+
+    # The Alertmanager path may name an array that is not in the inventory,
+    # and a failed read must not lose the request: the candidate list is then
+    # empty (an approval eradicates nothing) and the error is recorded.
+    - name: List what is pending eradication on the array (the reclaim candidates)
+      when: at_risk_array in hostvars
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          print(json.dumps({"volumes": [v.name for v in c.get_volumes(destroyed=True).items],
+                            "snapshots": [s.name for s in c.get_volume_snapshots(destroyed=True).items]}))
+      environment:
+        FA_HOST: "{{ hostvars[at_risk_array].fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ hostvars[at_risk_array].api_token }}"
+      register: candidates_cmd
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Parse the candidates
+      ansible.builtin.set_fact:
+        candidates: "{{ (candidates_cmd.stdout | from_json) if (candidates_cmd.rc | default(1)) == 0 else {'volumes': [], 'snapshots': []} }}"
+        candidates_error: >-
+          {{ '' if (candidates_cmd.rc | default(1)) == 0
+             else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory')) }}
+
     - name: Build the request
       ansible.builtin.set_fact:
         capacity_request:
-          time: "{{ lookup('pipe', 'date -Is') }}"
+          time: "{{ request_time }}"
           kind: capacity_request
+          severity: warning
           status: awaiting_approval
           request_id: "{{ request_id }}"
           array: "{{ at_risk_array }}"
-          used_pct: "{{ used_pct }}"
-          used_bytes: "{{ used_bytes }}"
-          capacity_bytes: "{{ capacity_bytes }}"
+          used_pct: "{{ used_pct | default('') }}"
+          used_bytes: "{{ used_bytes | default('') }}"
+          capacity_bytes: "{{ capacity_bytes | default('') }}"
           days_to_full: "{{ days_to_full | default('') }}"
           top_growers: "{{ top_growers | default([]) }}"
-          pending_eradication_volumes: "{{ pending_eradication_volumes | default(0) }}"
-          pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(0) }}"
+          pending_eradication_volumes: "{{ pending_eradication_volumes | default(candidates.volumes | length) }}"
+          pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(candidates.snapshots | length) }}"
+          candidates: "{{ candidates }}"
+          candidates_error: "{{ candidates_error | trim }}"
           candidate_targets: "{{ candidate_targets | default([]) }}"
           proposed_actions:
             - eradicate_pending
@@ -46,8 +96,8 @@
     - name: Show the request
       ansible.builtin.debug:
         msg: >-
-          Capacity request {{ request_id }}: {{ at_risk_array }} at {{ used_pct }}% used
+          Capacity request {{ request_id }}: {{ at_risk_array }} at {{ used_pct | default('?') }}% used
           (full in {{ days_to_full | default('n/a') }} days);
-          pending eradication {{ pending_eradication_volumes | default(0) }} volumes /
-          {{ pending_eradication_snapshots | default(0) }} snapshots;
-          candidates with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}
+          candidates pending eradication: {{ candidates.volumes | length }} volumes /
+          {{ candidates.snapshots | length }} snapshots{{ (' (' ~ candidates_error | trim ~ ')') if candidates_error | trim else '' }};
+          arrays with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}

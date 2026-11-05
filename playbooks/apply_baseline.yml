@@ -3,19 +3,48 @@
 # Called by the change control rulebook on a git push webhook (git_ref,
 # git_after) or by hand:
 #   ansible-playbook -i inventory/local-lab.yml playbooks/apply_baseline.yml \
-#       -e baseline_dir=$PWD/baseline -e set_dns_tasks=$PWD/playbooks/set_dns.yml -e alert_log=$PWD/alerts.log
-# Pulls the baseline repository first when it is a git checkout.
+#       -e baseline_dir=/opt/flasharray-eda-baseline -e alert_log=$PWD/alerts.log
+# When baseline_dir is a git checkout it is fast-forwarded first and the
+# commit actually applied is recorded as git_head beside the git_after the
+# webhook asked for; a pull that cannot fast-forward fails the run before
+# anything is applied from a stale checkout.
 - name: Refresh the baseline checkout
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Pull the baseline repository
+    - name: Check whether the baseline directory is a git checkout
+      ansible.builtin.stat:
+        path: "{{ baseline_dir }}/.git"
+      register: baseline_git
+
+    # A checkout with no upstream (a local-only baseline repository) has
+    # nothing to pull from; one with an upstream must fast-forward cleanly.
+    - name: Check whether the checkout tracks an upstream branch  # noqa: command-instead-of-module
+      when: baseline_git.stat.exists
+      ansible.builtin.command:
+        cmd: git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}"
+        chdir: "{{ baseline_dir }}"
+      register: baseline_upstream
+      changed_when: false
+      failed_when: false
+
+    # ansible.builtin.git needs repo:; this only fast-forwards an existing
+    # checkout, so a diverged branch or an unreachable remote fails here.
+    - name: Pull the baseline repository  # noqa: command-instead-of-module
+      when: baseline_git.stat.exists and baseline_upstream.rc == 0
       ansible.builtin.command:
         cmd: git pull --ff-only
         chdir: "{{ baseline_dir }}"
       register: pull
       changed_when: "'Already up to date' not in pull.stdout"
-      failed_when: false
+
+    - name: Record the commit the checkout is at  # noqa: command-instead-of-module
+      when: baseline_git.stat.exists
+      ansible.builtin.command:
+        cmd: git rev-parse HEAD
+        chdir: "{{ baseline_dir }}"
+      register: baseline_head
+      changed_when: false
 
 - name: Apply the baseline to each array
   hosts: all:!localhost
@@ -49,21 +78,27 @@
 
         - name: DNS
           when: baseline.dns is defined
-          ansible.builtin.include_tasks:
-            file: "{{ set_dns_tasks }}"
-          vars:
-            dns_domain: "{{ baseline.dns.domain }}"
-            dns_nameservers: "{{ baseline.dns.nameservers }}"
+          everpure.flasharray.purefa_dns:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: management
+            domain: "{{ baseline.dns.domain }}"
+            nameservers: "{{ baseline.dns.nameservers }}"
+          register: dns_result
 
+        # This task runs in the array host's variable context (it is only
+        # delegated to localhost), so the pull result comes via hostvars.
         - name: Record the apply
           ansible.builtin.lineinfile:
             path: "{{ alert_log }}"
             create: true
             mode: "0600"
             line: >-
-              {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'baseline_apply',
-                  'array': inventory_hostname, 'git_ref': git_ref | default('manual'),
-                  'git_after': git_after | default(''),
+              {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'baseline_apply',
+                  'severity': 'info', 'array': inventory_hostname,
+                  'git_ref': git_ref | default('manual'), 'git_after': git_after | default(''),
+                  'git_head': hostvars['localhost'].baseline_head.stdout | default(''),
                   'ntp_changed': ntp_result.changed | default(false),
                   'dns_changed': dns_result.changed | default(false)} | to_json }}
           delegate_to: localhost

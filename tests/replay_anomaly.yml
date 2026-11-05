@@ -2,7 +2,9 @@
 # Replay the three anomaly signals through the composite rule.
 #   { cat vars/local-lab.yml; sed "/^---$/d; s/REPLAY_ARRAY/<array>/g" tests/fixtures/anomaly.yml; } > tests/out/vars_replay.yml
 #   FAEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_anomaly.yml
-# The rule is a copy of the one in extensions/eda/rulebooks/anomaly.yml.
+# The rule is a copy of the one in extensions/eda/rulebooks/anomaly.yml,
+# throttle-less like the original (ansible-rulebook rejects once_within on a
+# multi-event condition); tests/unit/test_rulebooks.py fails if it drifts.
 - name: FlashArray anomaly (replayed fixtures)
   hosts: all
 

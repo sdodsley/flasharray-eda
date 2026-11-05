@@ -2,7 +2,8 @@
 # One inventory host per array, named exactly as the `name` in purefa_arrays,
 # so an event's array field selects the host for the remediation playbooks.
 # Credentials come from the environment; nothing secret lives in this tree.
-# Copy to inventory/local-<site>.yml (gitignored) and edit.
+# Copy to inventory/local-<site>.yml (gitignored) and edit. For a single
+# array delete array-b here and in vars (purefa_arrays, dr_drills).
 all:
   vars:
     ansible_connection: local

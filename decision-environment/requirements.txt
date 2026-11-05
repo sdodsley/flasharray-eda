@@ -1,2 +1,7 @@
+# Python packages added on top of quay.io/ansible/ansible-rulebook. The base
+# image already ships ansible-rulebook, ansible-core and aiohttp (which the
+# ansible.eda webhook and alertmanager sources need), so only the SDK the
+# plugins and playbooks import is listed. The root requirements.txt is the
+# venv list for a checkout and is not installed here. The collection list is
+# shared with the checkout: ../requirements.yml.
 py-pure-client>=1.94.1
-aiohttp>=3.9

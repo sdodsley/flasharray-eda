@@ -1,12 +1,15 @@
 ---
-# ansible-builder definition (v3) for the same decision environment.
+# ansible-builder definition (v3) for the same decision environment as the
+# Containerfile; both produce the same tree. Paths are relative to this file.
+#   ansible-builder build -f decision-environment/execution-environment.yml -t flasharray-eda-de
+# (writes its build context to ./context, which is gitignored)
 version: 3
 images:
   base_image:
-    name: quay.io/ansible/ansible-rulebook:latest
+    name: quay.io/ansible/ansible-rulebook:v1.3.2
 dependencies:
   python: requirements.txt
-  galaxy: requirements.yml
+  galaxy: ../requirements.yml
 additional_build_files:
   - src: ../extensions
     dest: extensions
@@ -16,5 +19,8 @@ additional_build_steps:
   append_final:
     - COPY _build/extensions /opt/flasharray-eda/extensions
     - COPY _build/playbooks /opt/flasharray-eda/playbooks
+    - RUN mkdir -p /var/log/flasharray-eda /var/lib/flasharray-eda/requests && chown -R 1001:0 /var/log/flasharray-eda /var/lib/flasharray-eda && chmod -R g+rwX /var/log/flasharray-eda /var/lib/flasharray-eda
     - ENV ANSIBLE_LOCALHOST_WARNING=False
     - WORKDIR /opt/flasharray-eda
+options:
+  user: "1001"

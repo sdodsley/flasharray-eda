@@ -3,18 +3,18 @@
 # target_array, the signal values, audit_user, audit_command,
 # extend_eradication_by_s and alert_log.
 #   1. immediate snapshot of every local, non-destroyed protection group
-#   2. eradication delay lengthened by extend_eradication_by_s (never shortened;
-#      set with the SDK because purefa_eradication cannot change an array whose
-#      enabled and disabled delays have diverged, and it would default the
-#      disabled delay to one day)
+#   2. the enabled eradication delay lengthened by extend_eradication_by_s,
+#      rounded up to whole days, never shortened, the disabled delay kept
+#      (everpure.flasharray >= 1.46.0: earlier purefa_eradication releases
+#      reset the delay that was not given to one day)
 #   3. critical record with everything that fired
 - name: Protect now
   hosts: "{{ target_array }}"
   gather_facts: false
   tasks:
-    - name: List local protection groups and the current eradication timer
+    - name: List local protection groups and the current eradication delays
       ansible.builtin.command:
-        cmd: python3 -
+        cmd: "{{ ansible_playbook_python }} -"
         stdin: |
           import json, os, urllib3
           urllib3.disable_warnings()
@@ -22,18 +22,27 @@
           c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
           pgs = [p.name for p in c.get_protection_groups(filter="is_local='true' and destroyed='false'").items]
           e = list(c.get_arrays().items)[0].to_dict().get("eradication_config") or {}
-          print(json.dumps({"pgroups": pgs, "eradication_delay_ms": e.get("enabled_delay") or e.get("eradication_delay"),
+          print(json.dumps({"pgroups": pgs, "enabled_delay_ms": e.get("enabled_delay") or e.get("eradication_delay"),
                             "disabled_delay_ms": e.get("disabled_delay"), "manual_eradication": e.get("manual_eradication")}))
       environment:
         FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
         FA_TOKEN: "{{ api_token }}"
       register: discovery
       changed_when: false
+      no_log: true
 
     - name: Parse
       ansible.builtin.set_fact:
         protect: "{{ discovery.stdout | from_json }}"
-        snap_suffix: "eda-protect-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+        snap_suffix: "eda-protect-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+
+    - name: Show what was found
+      ansible.builtin.debug:
+        var: protect
+
+    - name: Work out the new enabled delay in whole days (the module takes 1-30)
+      ansible.builtin.set_fact:
+        new_enabled_days: "{{ [30, ((protect.enabled_delay_ms | int) / 86400000 + (extend_eradication_by_s | int) / 86400) | round(0, 'ceil') | int] | min }}"
 
     - name: Snapshot every local protection group now
       everpure.flasharray.purefa_pgsnap:
@@ -48,33 +57,15 @@
       register: snaps
       ignore_errors: true
 
-    - name: Lengthen the eradication delay (enabled delay only; the disabled delay is kept)
-      when: extend_eradication_by_s | int > 0
-      ansible.builtin.command:
-        cmd: python3 -
-        stdin: |
-          import json, os, urllib3
-          urllib3.disable_warnings()
-          from pypureclient import flasharray
-          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
-          cur, add = int(os.environ["CUR_MS"]), int(os.environ["ADD_S"]) * 1000
-          new = cur + add
-          cfg = flasharray.EradicationConfig(enabled_delay=new, disabled_delay=int(os.environ["DIS_MS"]))
-          r = c.patch_arrays(array=flasharray.Arrays(eradication_config=cfg))
-          ok = r.status_code == 200
-          print(json.dumps({"changed": ok, "enabled_delay_ms": new if ok else cur, "error": "" if ok else r.errors[0].message}))
-      environment:
-        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
-        FA_TOKEN: "{{ api_token }}"
-        CUR_MS: "{{ protect.eradication_delay_ms }}"
-        DIS_MS: "{{ protect.disabled_delay_ms }}"
-        ADD_S: "{{ extend_eradication_by_s }}"
-      register: erad_cmd
-      changed_when: (erad_cmd.stdout | from_json).changed
-
-    - name: Parse
-      ansible.builtin.set_fact:
-        erad: "{{ (erad_cmd.stdout | default('{\"changed\": false, \"error\": \"\"}')) | from_json }}"
+    - name: Lengthen the enabled eradication delay
+      when: extend_eradication_by_s | int > 0 and (new_enabled_days | int) * 86400000 > protect.enabled_delay_ms | int
+      everpure.flasharray.purefa_eradication:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        enabled_delay: "{{ new_enabled_days | int }}"
+      register: erad
+      ignore_errors: true
 
     - name: Record
       ansible.builtin.lineinfile:
@@ -82,20 +73,22 @@
         create: true
         mode: "0600"
         line: >-
-          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'protect_now', 'severity': 'critical',
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'protect_now', 'severity': 'critical',
               'array': inventory_hostname,
               'signals': {'drr_drop_pct': drr_drop_pct | default(''), 'snapshot_growth_pct': snapshot_growth_pct | default(''),
                           'audit_user': audit_user | default(''), 'audit_command': audit_command | default('')},
               'snapshots': snaps.results | map(attribute='item') | list, 'snapshot_suffix': snap_suffix,
               'snapshot_failures': snaps.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list,
-              'eradication_delay_before_ms': protect.eradication_delay_ms,
-              'eradication_changed': erad.changed | default(false), 'eradication_delay_after_ms': erad.enabled_delay_ms | default(''),
-              'eradication_error': erad.error | default('')} | to_json }}
+              'eradication_delay_before_ms': protect.enabled_delay_ms,
+              'eradication_delay_after_days': new_enabled_days | int,
+              'eradication_changed': erad.changed | default(false),
+              'eradication_error': (erad.msg | default('')) if erad.failed | default(false) else ''} | to_json }}
       delegate_to: localhost
 
     - name: Show
       ansible.builtin.debug:
         msg: >-
           PROTECT NOW on {{ inventory_hostname }}: snapshots {{ snap_suffix }} on {{ protect.pgroups }};
-          eradication delay {{ 'lengthened' if erad.changed | default(false) else 'unchanged' }};
-          trigger: DRR -{{ drr_drop_pct | default('?') }}%, snapshots +{{ snapshot_growth_pct | default('?') }}%, {{ audit_user | default('?') }} ran {{ audit_command | default('?') }}
+          eradication delay {{ 'lengthened to ' ~ new_enabled_days ~ ' days' if erad.changed | default(false) else 'unchanged' }};
+          trigger: DRR -{{ drr_drop_pct | default('?') }}%, snapshots +{{ snapshot_growth_pct | default('?') }}%,
+          {{ audit_user | default('?') }} ran {{ audit_command | default('?') }}

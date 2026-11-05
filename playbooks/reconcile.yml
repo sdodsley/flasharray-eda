@@ -1,16 +1,18 @@
 ---
 # Reconcile one array with its git baseline after an audited change.
-# Called by the change control rulebook with target_array, baseline_dir,
-# set_dns_tasks (absolute path of playbooks/set_dns.yml) and the audit fields
-# (audit_user, audit_interface, audit_command, audit_subcommand,
-# audit_arguments, audit_time) as extra_vars.
+# Called by the change control rulebook with target_array, baseline_dir and
+# the audit fields (audit_user, audit_interface, audit_command,
+# audit_subcommand, audit_arguments, audit_time) as extra_vars.
 #
 # Which commands reconcile and which only notify is decided here, next to
-# the code that would do the write. Purity logs NTP changes as
+# the modules that would do the write. Purity logs NTP changes as
 # `purearray setattr --ntpserver ...` (there is no purentp command), DNS as
 # `puredns setattr ...`:
 #   purearray setattr --ntpserver, puredns -> reapplied from the baseline
 #   everything else                        -> notified; a human decides
+# An array without baseline_dir/<array>.yml is recorded as 'no baseline for
+# this array' instead of failing. purefa_dns compares nameservers as an
+# ordered list, so keep the baseline's order the same as the array's.
 - name: Reconcile an array with its baseline
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -20,6 +22,7 @@
     is_dns: "{{ audit_command == 'puredns' }}"
   tasks:
     - name: Load the baseline for this array
+      when: baseline_file is file
       ansible.builtin.include_vars:
         file: "{{ baseline_file }}"
         name: baseline
@@ -36,16 +39,28 @@
 
     - name: Reapply DNS from the baseline
       when: is_dns | bool and baseline.dns is defined
-      ansible.builtin.include_tasks:
-        file: "{{ set_dns_tasks }}"
-      vars:
-        dns_domain: "{{ baseline.dns.domain }}"
-        dns_nameservers: "{{ baseline.dns.nameservers }}"
+      everpure.flasharray.purefa_dns:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: management
+        domain: "{{ baseline.dns.domain }}"
+        nameservers: "{{ baseline.dns.nameservers }}"
+      register: dns_result
 
     - name: Work out what happened
       ansible.builtin.set_fact:
         reconciled: "{{ is_ntp | bool or is_dns | bool }}"
         changed_back: "{{ (ntp_result.changed | default(false)) or (dns_result.changed | default(false)) }}"
+        has_baseline: "{{ baseline is defined }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ 'notified, not reconciled' if not reconciled
+             else 'no baseline for this array' if not has_baseline
+             else 'reverted to baseline' if changed_back
+             else 'already at baseline' }}
 
     - name: Record the change control event
       ansible.builtin.lineinfile:
@@ -53,12 +68,12 @@
         create: true
         mode: "0600"
         line: >-
-          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'change_control',
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'change_control',
               'severity': 'warning', 'array': inventory_hostname,
               'user': audit_user, 'interface': audit_interface | default(''),
               'command': audit_command ~ ' ' ~ (audit_subcommand | default('')),
               'arguments': audit_arguments | default(''), 'audit_time': audit_time | default(''),
-              'outcome': ('reverted to baseline' if changed_back else 'already at baseline') if reconciled else 'notified, not reconciled',
+              'outcome': outcome,
               'baseline': baseline_file} | to_json }}
       delegate_to: localhost
 
@@ -67,4 +82,4 @@
         msg: >-
           {{ inventory_hostname }}: {{ audit_user }} ran {{ audit_command }} {{ audit_subcommand | default('') }}
           {{ audit_arguments | default('') }} ->
-          {{ ('reverted to baseline' if changed_back else 'already at baseline') if reconciled else 'notified, not reconciled' }}
+          {{ outcome }}

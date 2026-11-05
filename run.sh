@@ -1,39 +1,46 @@
 #!/bin/bash
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
 # Launch one rulebook.
 #   ./run.sh extensions/eda/rulebooks/alerts.yml
 #   ./run.sh extensions/eda/rulebooks/config_drift.yml -v --print-events
-# Environment:
-#   FAEDA_ENV        file sourced for array URLs/tokens (default ~/.pure_test_env)
+# Environment (read by env.sh, which this script sources; see env.example):
+#   FAEDA_ENV        env file with the array URLs/tokens and webhook secrets
+#                    (default $HOME/.flasharray-eda.env)
 #   FAEDA_VENV       virtualenv with ansible-rulebook + py-pure-client
+#                    (default <repo>/venv; otherwise ansible-rulebook on PATH)
 #   FAEDA_VARS       vars file (default vars/local-lab.yml)
 #   FAEDA_INVENTORY  inventory file (default inventory/local-lab.yml)
+#   APPROVAL_TOKEN, GIT_WEBHOOK_SECRET
+#                    webhook secrets for capacity.yml and change_control.yml;
+#                    each one that is set is passed with --env-vars, an unset
+#                    one is not (ansible-rulebook rejects a name it cannot find)
 set -eu
 cd "$(dirname "$0")"
-
-ENV_FILE=${FAEDA_ENV:-$HOME/.pure_test_env}
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
-
-VENV=${FAEDA_VENV:-$HOME/fusion-eda/venv}
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
-# ansible.eda (webhook, tick, generic sources) and everpure.flasharray must both
-# be on the collections path; a collections/ dir beside the venv is included.
-COLL_DEFAULT=$HOME/.ansible/collections
-[ -d "$(dirname "$VENV")/collections" ] && COLL_DEFAULT="$(dirname "$VENV")/collections:$COLL_DEFAULT"
-export ANSIBLE_COLLECTIONS_PATH=${ANSIBLE_COLLECTIONS_PATH:-$COLL_DEFAULT}
-export ANSIBLE_LOCALHOST_WARNING=False
+# shellcheck source=env.sh
+source ./env.sh
 
 RULEBOOK=${1:-extensions/eda/rulebooks/alerts.yml}
 shift || true
 
-exec ansible-rulebook \
-  --rulebook "$RULEBOOK" \
-  --inventory "${FAEDA_INVENTORY:-inventory/local-lab.yml}" \
-  --vars "${FAEDA_VARS:-vars/local-lab.yml}" \
-  --source-dir extensions/eda/plugins/event_source \
-  "$@"
+ARGS=(
+  --rulebook "$RULEBOOK"
+  --inventory "$FAEDA_INVENTORY"
+  --vars "$FAEDA_VARS"
+  --source-dir extensions/eda/plugins/event_source
+)
+# ansible-rulebook exposes to the rulebook only the environment variables
+# named in --env-vars; the rulebooks read the secrets as {{ APPROVAL_TOKEN }}
+# and {{ GIT_WEBHOOK_SECRET }}.
+ENV_VARS=""
+for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET; do
+  if [ -n "${!name:-}" ]; then
+    ENV_VARS="${ENV_VARS:+$ENV_VARS,}$name"
+  fi
+done
+if [ -n "$ENV_VARS" ]; then
+  ARGS+=(--env-vars "$ENV_VARS")
+fi
+
+exec ansible-rulebook "${ARGS[@]}" "$@"

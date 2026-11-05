@@ -5,14 +5,19 @@
 # the alert stream without polling. Both still need the REST plugin for the
 # full record (alert action text, audit arguments), so this rulebook raises
 # the fast notification and leaves the reconcile to change_control.yml.
+#
+# Syslog carries no authentication: the listener binds to syslog_host and,
+# when syslog_allowed_sources lists addresses or CIDR prefixes, drops
+# anything from elsewhere (an empty list accepts any source).
 
 - name: FlashArray syslog
   hosts: all
 
   sources:
     - purefa_syslog:
-        host: 0.0.0.0
+        host: "{{ syslog_host }}"
         port: "{{ syslog_port }}"
+        allowed_sources: "{{ syslog_allowed_sources }}"
         automation_users: "{{ automation_users }}"
         arrays: "{{ syslog_hostnames }}"
 
@@ -38,8 +43,8 @@
       condition: >-
         event.purefa_syslog.kind == "audit" and
         event.purefa_syslog.by_automation == false and
-        event.purefa_syslog.user is defined and
-        event.purefa_syslog.action is defined and
+        event.purefa_syslog.fields.user is defined and
+        event.purefa_syslog.fields.action is defined and
         event.purefa_syslog.action not in ["login", "logout", "operation request"]
       action:
         run_playbook:

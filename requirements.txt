@@ -1,0 +1,10 @@
+# Python requirements for running the rulebooks and the source plugins.
+ansible-rulebook>=1.1
+ansible-core>=2.16
+py-pure-client>=1.94.1
+# development and CI
+black
+pyflakes
+yamllint
+pytest
+jsonschema

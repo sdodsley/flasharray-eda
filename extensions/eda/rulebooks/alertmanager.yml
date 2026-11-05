@@ -3,7 +3,8 @@
 # exporter, prometheus/flasharray.rules.yml raises alerts, Alertmanager
 # posts them here through the stock ansible.eda.alertmanager source, and the
 # same playbooks run. The `domain` label set by the rules file selects the
-# playbook; the array name comes from the alert's array_name label.
+# playbook; the array name comes from the alert's array_name label (the
+# scrape-failure alert only has `instance`, so it gets its own rule).
 #
 # Alertmanager receiver:
 #   receivers:
@@ -11,16 +12,28 @@
 #       webhook_configs:
 #         - url: http://<eda host>:5002/alerts
 # The source wraps each alert as event.alert with labels, annotations, status.
+#
+# ansible.eda.alertmanager has no authentication option. The listener binds
+# to alertmanager_host (vars); keep that an interface only Alertmanager can
+# reach, or put it behind the controller's event streams or a reverse proxy
+# with TLS and basic auth (Alertmanager webhook_configs.http_config). Anyone
+# who can POST here can light LEDs and raise approval requests.
+#
+# data_host_path is "" on purpose: the source's default copies a label into
+# meta.hosts and ansible-rulebook turns that into the playbook's --limit,
+# which skips the localhost plays (notify.yml, capacity_request.yml). With it
+# disabled the ruleset's `hosts: all` applies and identify_led.yml still
+# targets the array named by its target_array extra var.
 
 - name: FlashArray via Alertmanager
   hosts: all
 
   sources:
     - ansible.eda.alertmanager:
-        host: 0.0.0.0
+        host: "{{ alertmanager_host }}"
         port: "{{ alertmanager_port }}"
         data_alerts_path: alerts
-        data_host_path: labels.array_name
+        data_host_path: ""
         data_path_separator: .
 
   rules:
@@ -39,9 +52,10 @@
           extra_vars:
             target_array: "{{ event.alert.labels.array_name }}"
             component: "{{ event.alert.labels.component_name }}"
-            component_type: "{{ event.alert.labels.component_type }}"
+            component_type: "{{ event.alert.labels.component_type | default('') }}"
             component_status: not_ok
-            component_details: "{{ event.alert.annotations.summary }}"
+            component_details: "{{ event.alert.annotations.summary | default('') }}"
+            severity: "{{ event.alert.labels.severity | default('critical') }}"
             led_state: true
             alert_log: "{{ alert_log }}"
 
@@ -58,17 +72,38 @@
           name: playbooks/capacity_request.yml
           extra_vars:
             at_risk_array: "{{ event.alert.labels.array_name }}"
-            used_pct: "{{ event.alert.annotations.summary }}"
+            # the rules file puts the bare percentage in annotations.value;
+            # summary is the sentence for humans
+            used_pct: "{{ event.alert.annotations.value | default('') }}"
             used_bytes: ""
             capacity_bytes: ""
             request_dir: "{{ request_dir }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Scrape failed - notify
+      # up{} carries the scrape target's instance, not an array_name label
+      condition: >-
+        event.alert.status == "firing" and
+        event.alert.labels.alertname == "FlashArrayScrapeFailed"
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.alert.labels.instance
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ event.alert.labels.severity | default('critical') }}"
+            subject: "FlashArrayScrapeFailed: {{ event.alert.annotations.summary | default('') }}"
+            detail: "instance={{ event.alert.labels.instance | default('') }} labels={{ event.alert.labels }}"
+            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}"
             alert_log: "{{ alert_log }}"
 
     - name: Any other firing FlashArray alert - notify
       condition: >-
         event.alert.status == "firing" and
         event.alert.labels.alertname is defined and
-        event.alert.labels.alertname not in ["FlashArrayHardwareComponentNotOk", "FlashArrayCapacityHigh"]
+        event.alert.labels.alertname not in ["FlashArrayHardwareComponentNotOk", "FlashArrayCapacityHigh", "FlashArrayScrapeFailed"]
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -78,10 +113,10 @@
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
-            severity: "{{ event.alert.labels.severity }}"
-            subject: "{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary }}"
-            detail: "domain={{ event.alert.labels.domain }} labels={{ event.alert.labels }}"
-            target_array: "{{ event.alert.labels.array_name }}"
+            severity: "{{ event.alert.labels.severity | default('warning') }}"
+            subject: "{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary | default('') }}"
+            detail: "domain={{ event.alert.labels.domain | default('') }} labels={{ event.alert.labels }}"
+            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}"
             alert_log: "{{ alert_log }}"
 
     - name: Resolved - log
@@ -91,7 +126,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "resolved: {{ event.alert.labels.alertname }} on {{ event.alert.labels.array_name }}"
-            detail: "{{ event.alert.annotations.summary }}"
-            target_array: "{{ event.alert.labels.array_name }}"
+            subject: >-
+              resolved: {{ event.alert.labels.alertname | default('') }}
+              on {{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}
+            detail: "{{ event.alert.annotations.summary | default('') }}"
+            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}"
             alert_log: "{{ alert_log }}"

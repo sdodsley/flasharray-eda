@@ -129,20 +129,22 @@ protection snapshot across every pgroup now, longer eradication delay
 
 ## 5. Phased plan
 
-Status 2026-10-20: all five phases implemented and exit-tested on the lab;
+Status 2026-10-20: all five phases implemented; 0-3 exit-tested on the lab;
 see PHASE0.md to PHASE4.md for what ran and what each phase changed from
 this plan (the approval gate is a webhook ruleset standing in for the AAP
 workflow node; the syslog listener and the Prometheus rules are tested
-with replayed input because the lab arrays cannot reach the EDA host).
+with replayed input because the lab arrays cannot reach the EDA host; the
+decision environment is unbuilt and the collection packaging is a
+checklist, docs/PACKAGING.md).
 
 
 | Phase | Scope | Exit criteria |
 | --- | --- | --- |
-| 0 | Fork fusion-eda. One `purefa_events` source with signals alerts, audits, health, telemetry, replication. Port the three rulebooks. | Lab: replica link pause, NTP drift, alert-watcher test, identify LED, maintenance window, QoS cap under fio all fire and act |
+| 0 | Fork the unpublished Fusion MCP prototype. One `purefa_events` source with signals alerts, audits, health, telemetry, replication. Port the three rulebooks. | Lab: replica link pause, NTP drift, alert-watcher test, identify LED, maintenance window, QoS cap under fio all fire and act |
 | 1 | Audit-triggered drift, service account, git baseline repo. Maintenance-window suppression. Alert-code -> runbook map with action/KB forwarding. | Unsanctioned NTP change reverted within one poll; window suppresses it |
 | 2 | Replication RPO engine, stuck transfer handling, path tests, ActiveCluster preferred-array shift, scheduled DR drill. | Lab two-array pair exercised end to end |
 | 3 | Capacity trend + approval workflows in EDA Controller. QoS hysteresis loop. Composite anomaly rule. | Approval node proven; cap applied and lifted automatically |
-| 4 | Syslog listener source. Prometheus rules file + Alertmanager rulebook. Package as `extensions/eda` in the collection with filters, fixtures, decision environment. Red Hat EDA certification track. | Collection release with EDA content |
+| 4 | Syslog listener source. Prometheus rules file + Alertmanager rulebook. Package as `extensions/eda` in the collection with filters, fixtures, decision environment. Red Hat EDA certification track. | Syslog, Prometheus and Alertmanager paths tested; packaging into the collection and the certification track remain open |
 
 ## 6. Lab test matrix
 
@@ -157,9 +159,12 @@ recorded fixtures through the `generic` source.
 
 ## 7. Traps and open questions
 
-- ansible-rulebook: `throttle.once_within` must be a literal; `run_playbook`
-  copies playbooks so pass everything as extra_vars; declare `localhost` in
-  the inventory.
+- ansible-rulebook: `throttle.once_within` must be a literal and is rejected
+  on a multi-event (`all`) condition, so the composite rule relies on its
+  `timeout` to bound re-firing; `run_playbook` copies the playbook's
+  directory, not the repository, so pass everything as extra_vars (relative
+  includes under `playbooks/` do work); declare `localhost` in the
+  inventory.
 - Older Purity lacks `/alerts/events`: fall back to `/alerts` with an
   `updated` cursor.
 - Per-array tokens: read-only role for the source, write role only for the

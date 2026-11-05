@@ -3,12 +3,14 @@
 # ticket record carrying the array's own action text and KB link.
 #
 # The alerts rulebook passes the alert fields plus `alert_runbooks` (a map of
-# alert code -> {severity, route, note}) and `runbook_dir`. A code with no
-# entry takes the `default` entry. `route` is one of:
+# alert code -> {severity, route, note}). A code with no entry takes the
+# `default` entry. `route` is one of:
 #   notify   -> alert log only (same shape as notify.yml)
 #   ticket   -> alert log + a ticket record; swap the lineinfile for
 #               servicenow.itsm.incident or jira when connected
-#   tasks    -> also include runbook_dir/<code>.yml (per-code tasks)
+#   tasks    -> also include runbooks/<code>.yml from beside this playbook
+#               (ansible-rulebook copies the playbook's whole directory into
+#               its project dir, so the relative path resolves)
 - name: Alert runbook
   hosts: localhost
   gather_facts: false
@@ -20,7 +22,7 @@
     - name: Build the record
       ansible.builtin.set_fact:
         alert_record:
-          time: "{{ lookup('pipe', 'date -Is') }}"
+          time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
           kind: "{{ 'ticket' if runbook.route in ['ticket', 'tasks'] else 'notify' }}"
           severity: "{{ runbook.severity | default(severity) }}"
           array: "{{ target_array }}"
@@ -44,8 +46,10 @@
     - name: Run the per-code runbook tasks
       when: runbook.route == 'tasks'
       ansible.builtin.include_tasks:
-        file: "{{ runbook_dir }}/{{ alert_code }}.yml"
+        file: "{{ playbook_dir }}/runbooks/{{ alert_code }}.yml"
 
     - name: Show the record
       ansible.builtin.debug:
-        msg: "[{{ alert_record.severity | upper }}] {{ alert_record.route }} :: {{ alert_record.subject }} :: {{ alert_record.array_action }} {{ alert_record.knowledge_base_url }} {{ alert_record.runbook_note }}"
+        msg: >-
+          [{{ alert_record.severity | upper }}] {{ alert_record.route }} :: {{ alert_record.subject }} ::
+          {{ alert_record.array_action }} {{ alert_record.knowledge_base_url }} {{ alert_record.runbook_note }}

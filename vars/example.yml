@@ -1,13 +1,20 @@
 ---
 # Loaded by ansible-rulebook (--vars). Rulebooks forward what each playbook
-# needs as extra_vars, because run_playbook copies playbooks into a temporary
-# project directory where relative vars_files paths do not resolve.
+# needs as extra_vars, because run_playbook copies the playbook's directory
+# (playbooks/) into a temporary project; vars/ is not there, so relative
+# vars_files paths do not resolve.
 # Copy to vars/local-<site>.yml (gitignored) and edit. Comments give sane
 # production values; the lab file uses short intervals.
+# Uppercase names in the rulebooks ({{ APPROVAL_TOKEN }},
+# {{ GIT_WEBHOOK_SECRET }}) are environment variables handed over with
+# --env-vars (run.sh does that), never keys in this file.
 
 # --- arrays the source plugin polls ---------------------------------------
 # name must match the inventory host name. Tokens and URLs come from the
 # environment (api_token_env / fa_url_env) so this file holds no secrets.
+# Every array listed here needs both variables set (see env.example); the
+# plugin refuses to start otherwise. For a single array remove array-b here,
+# in the inventory and from dr_drills below.
 purefa_arrays:
   - name: array-a
     fa_url_env: ARRAY_A_URL
@@ -16,12 +23,18 @@ purefa_arrays:
     fa_url_env: ARRAY_B_URL
     api_token_env: ARRAY_B_TOKEN
 
-# Arrays governed by the config drift ruleset: one baseline per ruleset.
+# Arrays polled by the config drift ruleset (one vars baseline per ruleset;
+# copy the ruleset for arrays with a different baseline) and by the change
+# control ruleset (baseline per array under baseline_dir).
 config_arrays:
   - name: array-a
     fa_url_env: ARRAY_A_URL
     api_token_env: ARRAY_A_TOKEN
 
+# Every playbook appends one JSON line per action here (time, kind, severity,
+# array, ...). Absolute path; the directory must exist and be writable by the
+# rulebook user. The /var default needs root or a pre-created, chowned
+# directory; for a local run point it somewhere under $HOME.
 alert_log: /var/log/flasharray-eda/alerts.log
 
 # --- polling intervals (seconds) ------------------------------------------
@@ -38,7 +51,7 @@ config_interval: 300         # production: 300-900
 # playbooks split them back into lists.
 baseline_ntp_servers_csv: "0.pool.ntp.org,1.pool.ntp.org"
 baseline_dns_domain: example.com
-baseline_dns_nameservers_csv: "10.0.0.53,10.0.1.53"
+baseline_dns_nameservers_csv: "192.0.2.53,192.0.2.54"
 baseline_ldap_enabled: true
 baseline_ldap_uris_csv: "ldaps://ldap.example.com"
 baseline_ldap_base_dn: "DC=example,DC=com"
@@ -46,9 +59,14 @@ baseline_ldap_base_dn: "DC=example,DC=com"
 # NOT engaged; a SafeMode-protected array reports all-disabled or partially.
 baseline_manual_eradication: all-enabled
 baseline_min_eradication_delay_ms: 86400000      # 24h; alert if shortened below
+# Admin authentication baseline (notify-only rule). These are example
+# hardened values, not factory defaults: set them to the site's own policy,
+# because the rule fires whenever the array differs from what is written
+# here (a weaker baseline than the array would warn on every poll after
+# someone hardens it).
 baseline_max_login_attempts: 5
-baseline_lockout_duration_ms: 1000
-baseline_min_password_length: 1
+baseline_lockout_duration_ms: 1800000            # 30 minutes
+baseline_min_password_length: 12
 baseline_sso_enabled: false
 
 # --- thresholds -------------------------------------------------------------
@@ -93,17 +111,19 @@ destructive_subcommands:
   - destroy
   - eradicate
   - disconnect
-# Checkout of the baseline repository (see baseline/README.md), absolute path.
+# Checkout of the baseline repository (see baseline/README.md), absolute
+# path. A separate checkout, not this tree: apply_baseline.yml runs
+# `git pull` in it.
 baseline_dir: /opt/flasharray-eda-baseline
-# Port the change control rulebook listens on for the git push webhook.
+# Port the change control rulebook listens on for the git push webhook. The
+# POST must carry X-Hub-Signature-256 (GitHub's hex HMAC-SHA256 of the body)
+# made with the GIT_WEBHOOK_SECRET environment variable.
 webhook_port: 5000
-# Absolute path of playbooks/set_dns.yml (run_playbook copies only the playbook).
-set_dns_tasks: /opt/flasharray-eda/playbooks/set_dns.yml
 
 # --- alert runbooks (alerts signal) ---------------------------------------
 # alert code (as a string) -> how to route it. Unknown codes use `default`.
-# route: notify | ticket | tasks (ticket + include runbook_dir/<code>.yml)
-runbook_dir: /opt/flasharray-eda/playbooks/runbooks
+# route: notify | ticket | tasks (ticket + include playbooks/runbooks/<code>.yml,
+# found relative to the playbook; ansible-rulebook copies all of playbooks/)
 alert_runbooks:
   default: {route: notify, note: ""}
   "42": {route: ticket, severity: warning, note: "Hardware failure: check the identify LED, open a case with the alert text."}
@@ -116,7 +136,8 @@ rpo_escalate_polls: 4                 # RPO breached this many polls in a row ->
 replication_auto_replicate_now: true  # overdue/stuck protection group -> immediate replicated snapshot
 activecluster_auto_prefer: true       # stretched pod member offline -> host preferred arrays to the online side
 # Scheduled DR drill: copy a volume from the latest replicated snapshot on the
-# target, verify it, destroy it. One entry per replicated protection group.
+# target, verify it, destroy it. One entry per replicated protection group
+# (needs two arrays; drop the entry for a single array).
 dr_drill_interval_s: 86400
 dr_drills:
   - target_array: array-b
@@ -126,8 +147,12 @@ dr_drills:
     prefix: eda-drill
 
 # --- capacity approvals and QoS (telemetry signal) --------------------------
-# Approval requests are written here and answered on the approvals webhook:
-#   curl -X POST http://<eda host>:<approval_port>/endpoint -H 'Content-Type: application/json' \
+# Approval requests are written to request_dir (absolute path, writable by
+# the rulebook user, same caveat as alert_log) and answered on the approvals
+# webhook, which needs the APPROVAL_TOKEN environment variable as a bearer
+# token:
+#   curl -X POST http://<eda host>:<approval_port>/endpoint \
+#        -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
 #        -d '{"request_id": "<id>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
 request_dir: /var/lib/flasharray-eda/requests
 approval_port: 5001
@@ -143,8 +168,16 @@ anomaly_write_surge_ratio: 3      # write bandwidth this many times last week's
 anomaly_extend_eradication_by_s: 86400   # lengthen the eradication delay by a day
 
 # --- push and zero-code paths ----------------------------------------------
-# purefa_syslog listener (point the arrays' syslog target here; 514 needs root)
+# purefa_syslog listener (point the arrays' syslog target here; 514 needs
+# root). The listener has no authentication: bind it to an interface the
+# arrays reach and list the arrays' addresses in syslog_allowed_sources.
+syslog_host: 0.0.0.0
 syslog_port: 5140
-syslog_hostnames: {}             # syslog hostname -> inventory array name, when they differ
-# ansible.eda.alertmanager listener for prometheus/flasharray.rules.yml
+syslog_allowed_sources: []       # [] = accept any sender; otherwise IPv4/IPv6 addresses or CIDR prefixes, e.g. ["192.0.2.0/24", "2001:db8::10"]
+syslog_hostnames: {}             # array name or syslog hostname -> inventory array name, when they differ
+# ansible.eda.alertmanager listener for prometheus/flasharray.rules.yml. The
+# stock source has no token option: bind it to an interface only Alertmanager
+# reaches, or put it behind the EDA controller's event streams / a reverse
+# proxy that authenticates.
+alertmanager_host: 0.0.0.0
 alertmanager_port: 5002

@@ -4,7 +4,8 @@
 # written to an env file (mode 0600) and never printed.
 #   ansible-playbook -i inventory/local-lab.yml tests/human_user.yml \
 #       -e target_array=<array> -e human_user=eda-human -e human_password=... \
-#       -e human_env_file=$HOME/.flasharray-eda-human.env [-e user_state=absent]
+#       -e human_env_file=tests/out/human.env [-e user_state=absent]
+# (e2e_phase1.sh keeps the file under tests/out and removes it on exit.)
 - name: Lab "human" user for change control tests
   hosts: "{{ target_array }}"
   gather_facts: false

@@ -1,13 +1,23 @@
-# Prometheus alerting rules for the FlashArray native OpenMetrics exporter
-# (Purity//FA 6.7+; enable it with everpure.flasharray.purefa_metrics or in
-# the GUI). Alertmanager forwards firing alerts to the stock
-# ansible.eda.alertmanager source; see extensions/eda/rulebooks/alertmanager.yml.
+---
+# Prometheus alerting rules for FlashArray metrics. Alertmanager forwards
+# firing alerts to the stock ansible.eda.alertmanager source; see
+# extensions/eda/rulebooks/alertmanager.yml.
 #
-# Metric names follow the exporter specification:
+# CAVEAT: these rules have not been evaluated against a live Prometheus. The
+# metric and label names follow the specification of the off-array
+# pure-fa-openmetrics-exporter:
 #   https://github.com/PureStorage-OpenConnect/pure-fa-openmetrics-exporter/blob/master/specification/metrics/purefa-metrics.md
+# The array's native OpenMetrics endpoint (Purity//FA 6.7+, enabled with
+# everpure.flasharray.purefa_metrics or in the GUI) documents its families as
+# purefa_info/alerts/array/hw/network/drive/host/pod/volume/directory;
+# whether every series used here exists under these names on that endpoint
+# has not been checked. Before relying on the file, run purefa_metrics with
+# subset: all against your array and reconcile each expr, in particular
+# purefa_pod_replica_links_lag_msec and purefa_array_connection_status.
 # Labels: every series carries the array (`array_name`, or `fa_array_name`
 # when the scrape job sets it). Thresholds are deliberately conservative;
-# tune them per site.
+# tune them per site. FlashArrayCapacityHigh puts the bare percentage in
+# annotations.value for the rulebook; summary is the sentence for humans.
 groups:
   - name: flasharray-eda
     rules:
@@ -42,6 +52,7 @@ groups:
         labels: {severity: warning, domain: capacity}
         annotations:
           summary: "{{ $labels.array_name }} is {{ $value | printf \"%.1f\" }}% full"
+          value: "{{ $value | printf \"%.1f\" }}"
 
       - alert: FlashArrayFullWithin30Days
         expr: |

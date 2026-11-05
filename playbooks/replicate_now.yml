@@ -13,7 +13,7 @@
         api_token: "{{ api_token }}"
         disable_warnings: true
         name: "{{ pgroup }}"
-        suffix: "eda-{{ reason }}-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+        suffix: "eda-{{ reason }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
         remote: true          # immediate snapshot replicated to the targets (the module forbids now+remote together)
         apply_retention: true
         state: present
@@ -25,7 +25,7 @@
         create: true
         mode: "0600"
         line: >-
-          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'replicate_now', 'severity': 'warning',
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'replicate_now', 'severity': 'warning',
               'array': inventory_hostname, 'pgroup': pgroup, 'reason': reason,
               'since_last_completed_s': since_last_completed_s | default(''),
               'frequency_ms': frequency_ms | default(''), 'in_progress': in_progress | default(''),

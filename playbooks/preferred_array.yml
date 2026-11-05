@@ -15,7 +15,7 @@
   tasks:
     - name: Find the hosts connected to the pod's volumes
       ansible.builtin.command:
-        cmd: python3 -
+        cmd: "{{ ansible_playbook_python }} -"
         stdin: |
           import json, os, urllib3
           urllib3.disable_warnings()
@@ -39,11 +39,16 @@
         POD: "{{ pod }}"
       register: discovery
       changed_when: false
+      no_log: true
 
     - name: Parse the discovery
       ansible.builtin.set_fact:
         pod_hosts: "{{ (discovery.stdout | from_json).hosts }}"
         pod_volumes: "{{ (discovery.stdout | from_json).volumes }}"
+
+    - name: Show the discovery
+      ansible.builtin.debug:
+        var: pod_hosts
 
     - name: Prefer the online arrays on hosts with no explicit preference
       when: mode == 'prefer_online' and item.preferred | length == 0 and online_arrays | length > 0
@@ -77,11 +82,13 @@
         create: true
         mode: "0600"
         line: >-
-          {{ {'time': lookup('pipe', 'date -Is'), 'kind': 'preferred_array', 'severity': 'critical' if mode == 'prefer_online' else 'info',
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'preferred_array',
+              'severity': 'critical' if mode == 'prefer_online' else 'info',
               'array': inventory_hostname, 'pod': pod, 'mode': mode,
               'online_arrays': online_arrays, 'offline_arrays': offline_arrays | default([]),
               'hosts': pod_hosts | map(attribute='host') | list,
-              'changed_hosts': ((prefer.results | default([])) + (restore.results | default([]))) | selectattr('changed', 'defined') | selectattr('changed') | map(attribute='item.host') | list,
+              'changed_hosts': ((prefer.results | default([])) + (restore.results | default([])))
+                               | selectattr('changed', 'defined') | selectattr('changed') | map(attribute='item.host') | list,
               'left_alone': pod_hosts | selectattr('preferred', '!=', []) | map(attribute='host') | list if mode == 'prefer_online' else []} | to_json }}
       delegate_to: localhost
 

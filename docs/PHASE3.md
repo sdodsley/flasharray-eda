@@ -34,6 +34,8 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
 | QoS lift | thresholds raised so the same volume read as normal | after two normal polls the limit was cleared and the tags removed |
 | anomaly | three replayed signals for the array | the multi-event condition fired; snapshots created on every protection group with members (empty groups reported as failures); enabled eradication delay went from 1 to 2 days and was restored by the test; the snapshot in a SafeMode-protected group could not be eradicated afterwards, as designed |
 
+> Update 2026-11-04: the purefa_volume_tags and purefa_eradication behaviours below were fixed upstream in everpure.flasharray 1.46.0 (PRs 1094, 1095); `qos_cap.yml` and `protect_now.yml` use the modules again.
+
 ## What the lab taught us
 
 - SDK models raise `AttributeError` for fields the array did not return
@@ -51,4 +53,6 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
   the IOPS share is clamped to 100 %.
 - The multi-event `all` condition with `events.x <<` assignment, an `or`
   across two event types and a `timeout` parses and fires on
-  ansible-rulebook 1.3.2.
+  ansible-rulebook 1.3.2. Found later: a `throttle` on that condition does
+  not (ansible-rulebook rejects `once_within` on a multi-event condition),
+  so `anomaly.yml` carries none and the 15 minute timeout bounds re-firing.

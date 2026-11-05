@@ -31,6 +31,8 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
 | git push | empty commit in the baseline repo, push payload POSTed to the webhook | `apply_baseline.yml` pulled and reapplied NTP and DNS to the array |
 | runbook map | four replayed alerts: code 42, code 9999 (tasks), unknown 777, one inside a window | ticket, ticket plus per-code tasks, default notify, logged-not-routed |
 
+> Update 2026-11-04: the purefa_dns failure below was fixed upstream in everpure.flasharray 1.46.0 (PR 1091); the playbooks use the module again and the SDK task file is gone.
+
 ## What the lab taught us
 
 - Another identity was using the same account on the array (a QA harness
@@ -41,8 +43,9 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
 - `ansible-rulebook --vars` values are not templated and `-e` means a file,
   so replay tests substitute fixture placeholders with `sed`.
 - `ansible.eda` must be on `ANSIBLE_COLLECTIONS_PATH` for the webhook and
-  generic sources; the launcher now adds a `collections/` directory beside
-  the venv.
+  generic sources; the launcher (now `env.sh`, shared by `run.sh` and the
+  e2e scripts) adds a `collections/` directory in the checkout when it
+  exists.
 - The DR drill and the QoS state later in the plan both need array-side
   state; FlashArray tags (namespace `eda`) are used for that rather than
   rulebook facts, so a restart of the rulebook loses nothing.

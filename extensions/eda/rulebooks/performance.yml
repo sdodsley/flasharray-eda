@@ -8,6 +8,8 @@
 #       IOPS cap (purefa_volume) and an `eda/qos_cap` tag on the array.
 # Lift: a volume carrying that tag whose latency has been normal for M polls
 #       has the cap removed and the tag cleared.
+# The plugin reports a tagged volume on every poll even when it is outside
+# the top-N or below min_iops, so the lift rule always sees it.
 # The state lives on the array (the tag), not in the rulebook, so a restart
 # loses nothing and an operator can see why a volume is capped.
 
@@ -76,7 +78,9 @@
             target_array: "{{ event.purefa_volume_performance.array }}"
             volume: "{{ event.purefa_volume_performance.volume }}"
             mode: lift
-            reason: "latency normal for {{ event.purefa_volume_performance.normal_polls }} polls (capped since {{ event.purefa_volume_performance.eda_cap_since }})"
+            reason: >-
+              latency normal for {{ event.purefa_volume_performance.normal_polls }} polls
+              (capped since {{ event.purefa_volume_performance.eda_cap_since }})
             alert_log: "{{ alert_log }}"
 
     - name: Sustained volume latency on a hot array - notify

@@ -1,16 +1,22 @@
 # credentials and local state never belong here
 auth-config*.json
 *.token
-.pure_test_env
+.env
+*.env
 vars/local*.yml
 inventory/local*.yml
-alerts.log
+# real baselines live in the repository baseline_dir points at; one dropped
+# here for a hand run stays out of git
+baseline/*.yml
+!baseline/example.yml
 *.log
+*.jsonl
+tests/out/
+# build and tool output
 venv/
 collections/
+context/
 __pycache__/
 *.pyc
+.pytest_cache/
 .DS_Store
-tests/out/
-*.jsonl
-baseline/local-*.yml

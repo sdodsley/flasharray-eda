@@ -1,0 +1,10 @@
+---
+# Collections the rulebooks and playbooks use.
+#   ansible-galaxy collection install -r requirements.yml
+# everpure.flasharray 1.46.0 carries the four module fixes this project found
+# (purefa_hardware, purefa_dns, purefa_volume_tags, purefa_eradication).
+collections:
+  - name: ansible.eda
+    version: ">=2.13.0"
+  - name: everpure.flasharray
+    version: ">=1.46.0"

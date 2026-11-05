@@ -3,8 +3,9 @@
 # healthy, controller failover, maintenance windows and remote assist.
 #
 # A hardware issue outside a maintenance window lights the component's
-# identify LED (everpure.flasharray.purefa_hardware) and notifies. Inside a
-# maintenance window it only logs: someone is already working on the array.
+# identify LED (playbooks/identify_led.yml, everpure.flasharray.purefa_hardware)
+# and records it to the alert log. Inside a maintenance window it only logs:
+# someone is already working on the array.
 
 - name: FlashArray health
   hosts: all
@@ -54,7 +55,9 @@
           - event.purefa_hardware.component
       action:
         debug:
-          msg: "maintenance window active on {{ event.purefa_hardware.array }}: {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned"
+          msg: >-
+            maintenance window active on {{ event.purefa_hardware.array }}:
+            {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned
 
     - name: Drive not healthy - notify
       condition: event.purefa_health.drive_issue_count is defined and event.purefa_health.drive_issue_count > 0

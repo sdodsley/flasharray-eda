@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Ask an array to send its test alert to every configured alert watcher.
 
     FA_URL=https://<array> FA_TOKEN=<token> python3 tests/send_test_alert.py
