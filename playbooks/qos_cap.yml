@@ -5,14 +5,12 @@
 # volume, mode (cap | lift), cap_iops, reason and alert_log.
 #
 # The cap uses everpure.flasharray.purefa_volume (iops_qos) and the tags
-# everpure.flasharray.purefa_volume_tags; both need everpure.flasharray
-# >= 1.46.0 (earlier purefa_volume_tags truncated values at a colon, which
-# an ISO timestamp contains). The pre-read of the volume's QoS and tags stays
-# on the SDK: no module reads one volume's tags. In cap mode the tag is
-# written before the limit, so a volume is never capped without the tag the
-# plugin and the lift rule depend on. Lifting restores the previous IOPS
-# limit carried in the tag, or clears it (module value 0, which the array
-# stores as its "no limit" value 100000000).
+# everpure.flasharray.purefa_volume_tags. The pre-read of the volume's QoS
+# and tags stays on the SDK: no module reads one volume's tags. In cap mode
+# the tag is written before the limit, so a volume is never capped without
+# the tag the plugin and the lift rule depend on. Lifting restores the
+# previous IOPS limit carried in the tag, or clears it (module value 0,
+# which the array stores as its "no limit" value 100000000).
 - name: Volume QoS cap with hysteresis
   hosts: "{{ target_array }}"
   gather_facts: false

@@ -134,11 +134,15 @@ def test_documentation_block_covers_every_argument(syslog):
 
 # --- source allow-list -------------------------------------------------------
 def test_allowed_sources_accept_lists_and_strings(syslog):
-    nets = syslog._networks(["198.51.100.0/24", "192.168.1.5", "fd00::/8"])
-    assert [str(n) for n in nets] == ["198.51.100.0/24", "192.168.1.5/32", "fd00::/8"]
-    assert [str(n) for n in syslog._networks("198.51.100.0/24, 192.168.1.5")] == [
+    nets = syslog._networks(["198.51.100.0/24", "192.0.2.5", "2001:db8:1::/48"])
+    assert [str(n) for n in nets] == [
         "198.51.100.0/24",
-        "192.168.1.5/32",
+        "192.0.2.5/32",
+        "2001:db8:1::/48",
+    ]
+    assert [str(n) for n in syslog._networks("198.51.100.0/24, 192.0.2.5")] == [
+        "198.51.100.0/24",
+        "192.0.2.5/32",
     ]
     assert syslog._networks(None) == [] and syslog._networks("") == []
     with pytest.raises(ValueError):
@@ -146,18 +150,20 @@ def test_allowed_sources_accept_lists_and_strings(syslog):
 
 
 def test_source_allowed(syslog):
-    nets = syslog._networks(["198.51.100.0/24", "192.168.1.5", "fd00::/8"])
+    nets = syslog._networks(["198.51.100.0/24", "192.0.2.5", "2001:db8:1::/48"])
     assert syslog._source_allowed("198.51.100.3", nets)
-    assert syslog._source_allowed("192.168.1.5", nets)
-    assert syslog._source_allowed("fd00::1", nets)
+    assert syslog._source_allowed("192.0.2.5", nets)
+    assert syslog._source_allowed("2001:db8:1::1", nets)
     assert syslog._source_allowed("fe80::1%eth0", nets) is False
     assert syslog._source_allowed("::ffff:198.51.100.3", nets)  # dual-stack socket
-    assert syslog._source_allowed("192.168.1.6", nets) is False
-    assert syslog._source_allowed("8.8.8.8", nets) is False
+    assert syslog._source_allowed("192.0.2.6", nets) is False
+    assert syslog._source_allowed("203.0.113.8", nets) is False
     assert syslog._source_allowed(None, nets) is False
     assert syslog._source_allowed("garbage", nets) is False
     # no allow-list: everything, even an unknown peer, is accepted
-    assert syslog._source_allowed("8.8.8.8", []) and syslog._source_allowed(None, [])
+    assert syslog._source_allowed("203.0.113.8", []) and syslog._source_allowed(
+        None, []
+    )
 
 
 def test_emitter_filters_senders_and_queues_locally(syslog):

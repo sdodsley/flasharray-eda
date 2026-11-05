@@ -137,7 +137,6 @@ with replayed input because the lab arrays cannot reach the EDA host; the
 decision environment is unbuilt and the collection packaging is a
 checklist, docs/PACKAGING.md).
 
-
 | Phase | Scope | Exit criteria |
 | --- | --- | --- |
 | 0 | Fork the unpublished Fusion MCP prototype. One `purefa_events` source with signals alerts, audits, health, telemetry, replication. Port the three rulebooks. | Lab: replica link pause, NTP drift, alert-watcher test, identify LED, maintenance window, QoS cap under fio all fire and act |

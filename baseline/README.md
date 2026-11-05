@@ -24,7 +24,7 @@ Settings the reconcile and apply playbooks currently manage:
 | Key | Module | On audit of |
 | --- | --- | --- |
 | `ntp_servers` | `everpure.flasharray.purefa_ntp` | `purearray setattr --ntpserver` |
-| `dns.domain`, `dns.nameservers` | `everpure.flasharray.purefa_dns` (>= 1.46.0) | `puredns setattr` |
+| `dns.domain`, `dns.nameservers` | `everpure.flasharray.purefa_dns` | `puredns setattr` |
 
 Other governed commands (directory services, eradication config, admin
 settings, SMTP, syslog, SNMP, alert watchers) are reported with the audit

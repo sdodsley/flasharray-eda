@@ -2,8 +2,6 @@
 # Reapply the baseline management DNS configuration to one array. Called by
 # the config drift rulebook with target_array, baseline_dns_domain,
 # baseline_dns_nameservers_csv, the observed values and alert_log.
-# Needs everpure.flasharray >= 1.46.0 (earlier purefa_dns releases refused a
-# management configuration that also served file DNS).
 - name: Reapply baseline DNS
   hosts: "{{ target_array }}"
   gather_facts: false

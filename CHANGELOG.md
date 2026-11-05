@@ -9,10 +9,7 @@ First tagged state of the prototype.
 - Ten rulebooks: alerts, change control, config drift, health, replication
   (with the DR drill), capacity (with the approval gate), performance (QoS
   cap with hysteresis), anomaly, syslog, alertmanager.
-- Playbooks act through `everpure.flasharray` 1.46.0 or later; the four
-  module bugs this work found (purefa_hardware, purefa_dns,
-  purefa_volume_tags, purefa_eradication) are fixed in that release, so the
-  SDK workarounds used during the build are gone.
+- Playbooks act through `everpure.flasharray` 1.46.0 or later.
 - Prometheus rules for the native OpenMetrics exporter, a decision
   environment definition, lab test scripts and replayable fixtures.
 - Unit tests for the plugins and static checks over the rulebooks (schema,

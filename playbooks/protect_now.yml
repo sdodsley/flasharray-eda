@@ -5,8 +5,6 @@
 #   1. immediate snapshot of every local, non-destroyed protection group
 #   2. the enabled eradication delay lengthened by extend_eradication_by_s,
 #      rounded up to whole days, never shortened, the disabled delay kept
-#      (everpure.flasharray >= 1.46.0: earlier purefa_eradication releases
-#      reset the delay that was not given to one day)
 #   3. critical record with everything that fired
 - name: Protect now
   hosts: "{{ target_array }}"

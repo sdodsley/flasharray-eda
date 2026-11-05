@@ -9,6 +9,7 @@ The lines follow the layout Pure's SIEM partners publish for purity.audit
 (login/operation records as `Key: 'value'` pairs) plus purity.alert and
 purity.test examples. They are representative, not captured from an array.
 """
+
 import socket
 import sys
 import time

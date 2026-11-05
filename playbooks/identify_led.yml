@@ -4,10 +4,8 @@
 # component_status, component_details, led_state and alert_log; the
 # Alertmanager rulebook also passes `severity` (the alert's label), which
 # overrides the severity otherwise derived from component_status.
-# Needs everpure.flasharray >= 1.46.0: earlier purefa_hardware releases sent
-# an empty PATCH body and the LED never changed. Components without an
-# identify LED make the module fail; that is recorded and the notification
-# still goes out.
+# Components without an identify LED make the module fail; that is recorded
+# and the notification still goes out.
 - name: Identify LED on a hardware component
   hosts: "{{ target_array }}"
   gather_facts: false

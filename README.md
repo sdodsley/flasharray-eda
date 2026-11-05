@@ -231,17 +231,6 @@ workflow approval were not exercised in this lab.
   maintenance windows take 3600 to 172800 seconds; the alert watcher test
   needs watcher names.
 - Purity logs NTP changes as `purearray setattr --ntpserver`, not `purentp`.
-- Four collection bugs were found and fixed upstream: `purefa_hardware`
-  sent an empty PATCH body for the identify LED
-  ([#1093](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1093)),
-  `purefa_volume_tags` truncated values containing colons
-  ([#1094](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1094)),
-  `purefa_eradication` reset the delay it was not asked to change
-  ([#1095](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1095)),
-  and `purefa_dns` 1.44.0 refused a management configuration that also serves
-  file DNS ([#1091](https://github.com/Everpure-Ansible/FlashArray-Collection/pull/1091)).
-  All four shipped in everpure.flasharray 1.46.0, which the playbooks now
-  require; the SDK workarounds used during the build are gone.
 - ansible-rulebook: no filters or arithmetic in conditions (the plugin emits
   the booleans; actions may use filters); `once_within` must be a literal
   and is rejected on a multi-event condition (`anomaly.yml` carries no

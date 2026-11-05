@@ -31,8 +31,6 @@ Date: 2026-10-20. Same lab and tooling as [PHASE0.md](PHASE0.md).
 | git push | empty commit in the baseline repo, push payload POSTed to the webhook | `apply_baseline.yml` pulled and reapplied NTP and DNS to the array |
 | runbook map | four replayed alerts: code 42, code 9999 (tasks), unknown 777, one inside a window | ticket, ticket plus per-code tasks, default notify, logged-not-routed |
 
-> Update 2026-11-04: the purefa_dns failure below was fixed upstream in everpure.flasharray 1.46.0 (PR 1091); the playbooks use the module again and the SDK task file is gone.
-
 ## What the lab taught us
 
 - Another identity was using the same account on the array (a QA harness

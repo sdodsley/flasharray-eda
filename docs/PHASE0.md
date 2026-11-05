@@ -4,7 +4,7 @@ Date: 2026-10-20. Arrays: two Purity//FA 6.10.6 systems (REST 2.46), one
 pair connected for sync replication, with one async pod replica link, one
 stretched (ActiveCluster) pod and one replicating protection group between
 them. Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client
-1.94.1, everpure.flasharray 1.44.0, ansible.eda 2.13.0.
+1.94.1, ansible.eda 2.13.0.
 
 ## What was built
 
@@ -28,8 +28,6 @@ them. Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client
 | test alert | `tests/send_test_alert.py` | array sent its test alert to the configured watcher |
 | capacity, performance steady state | 45 s each | events flowed, nothing fired (lab at 2.6 % used, idle) |
 
-> Update 2026-11-04: the purefa_hardware bug noted below was fixed upstream in everpure.flasharray 1.46.0 (PR 1093); `identify_led.yml` uses the module again.
-
 ## What the hardware taught us
 
 - `/audits` rejects a filter on `time` ("Unknown attribute"); the cursor is
@@ -41,10 +39,6 @@ them. Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client
   Anything else is "Invalid resolution".
 - Maintenance windows accept 3600 to 172800 seconds, not minutes.
 - `GET /alert-watchers/test` needs explicit watcher names.
-- `everpure.flasharray.purefa_hardware` sends an empty PATCH body with
-  py-pure-client 1.94.1 (the `Hardware` model drops `identify_enabled`), so
-  the array answers 400 "No operation was specified". A dict body works; the
-  identify-LED playbook calls the SDK directly until the module is fixed.
 - Another automation identity was active on the lab array during the run
   (a QA harness using the same user). Its audit records showed up exactly as
   change control would see an operator's: the service-account split matters.
