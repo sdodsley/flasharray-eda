@@ -63,7 +63,7 @@ Every figure a slide may show. Source key: REPO = repository files; PLAN/PHASEn 
 
 | Figure | Value | Source | Note |
 |---|---|---|---|
-| Git commits | 10: 8 dated 2026-10-20, 2 dated 2026-11-05 | git log (DERIVED) | plan and skeleton; licence; Phase 0; Phase 1; Phase 2; Phase 3; Phase 4; README link; public-repository cleanup; documentation trim |
+| Git commits | 8 build commits dated 2026-10-20, then documentation and cleanup commits from 2026-11-05 on | git log (DERIVED) | plan and skeleton; licence; Phase 0; Phase 1; Phase 2; Phase 3; Phase 4; README link; then the cleanup and documentation commits (count them in git log before quoting a total) |
 | Source plugins | 2: purefa_events 850 lines, purefa_syslog 180 lines (1,030 lines of Python) | wc -l (DERIVED) | |
 | Signals in purefa_events | 6: alerts, audits, health, telemetry, replication, config | README; PHASE0 | plan said five; config was added |
 | Event types | 15: 14 from purefa_events (incl. purefa_poll_error) plus purefa_syslog | plugin docstrings | listed in section 6, table C footnote |
@@ -514,7 +514,7 @@ From the repository (verbatim, attributed to the file):
 
 ## 13. Sources and links
 
-- Repository: https://github.com/sdodsley/flasharray-eda (public, Apache 2.0, branch main, 10 commits: 8 dated 2026-10-20 and 2 dated 2026-11-05). Note: the unused extensions/eda/plugins/event_filter/ placeholder was removed in the 2026-11-04 cleanup. Files drawn on: README.md; docs/PLAN.md; docs/PHASE0.md to docs/PHASE4.md; extensions/eda/rulebooks/*.yml (ten); extensions/eda/plugins/event_source/purefa_events.py and purefa_syslog.py; playbooks/*.yml (fifteen plus runbooks/9999.yml); prometheus/flasharray.rules.yml; decision-environment/; tests/; baseline/README.md and example.yml; vars/example.yml; inventory/example.yml; run.sh.
+- Repository: https://github.com/sdodsley/flasharray-eda (public, Apache 2.0, branch main; 8 build commits dated 2026-10-20 followed by documentation and cleanup commits from 2026-11-05 on). Note: the unused extensions/eda/plugins/event_filter/ placeholder was removed in the 2026-11-04 cleanup. Files drawn on: README.md; docs/PLAN.md; docs/PHASE0.md to docs/PHASE4.md; extensions/eda/rulebooks/*.yml (ten); extensions/eda/plugins/event_source/purefa_events.py and purefa_syslog.py; playbooks/*.yml (fifteen plus runbooks/9999.yml); prometheus/flasharray.rules.yml; decision-environment/; tests/; baseline/README.md and example.yml; vars/example.yml; inventory/example.yml; run.sh.
 - Upstream collection: https://github.com/Everpure-Ansible/FlashArray-Collection.
 - Blog post: "Your FlashArray is already an event source", Simon Dodsley, published 2026-10-20: https://theansibleguy.com/your-flasharray-is-already-an-event-source/ (source of all quotes in section 11).
 - Lab evidence: tests/out/*.log and tests/out/requests/*.json from the 2026-10-20 run (gitignored, internal; contains unscrubbed names and must never be shown or distributed; summarised as evidence_pack.md; quote only the scrubbed lines in section 9).
