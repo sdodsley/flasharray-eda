@@ -30,14 +30,22 @@
       aap_hostname: "{{ aap_hostname }}"
       aap_token: "{{ aap_token }}"
       aap_validate_certs: "{{ aap_validate_certs }}"
+      aap_request_timeout: "{{ aap_request_timeout }}"
+    # ansible.controller 4.8.0 (the build shipped with the 2.7 installer)
+    # declares aap_token but authenticates with HTTP basic auth only, so the
+    # controller objects need AAP_USERNAME and AAP_PASSWORD as well.
     group/ansible.controller.controller:
       aap_hostname: "{{ aap_hostname }}"
+      aap_username: "{{ aap_username | default(omit, true) }}"
+      aap_password: "{{ aap_password | default(omit, true) }}"
       aap_token: "{{ aap_token }}"
       aap_validate_certs: "{{ aap_validate_certs }}"
+      aap_request_timeout: "{{ aap_request_timeout }}"
     group/ansible.eda.eda:
       aap_hostname: "{{ aap_hostname }}"
       aap_token: "{{ aap_token }}"
       aap_validate_certs: "{{ aap_validate_certs }}"
+      aap_request_timeout: "{{ aap_request_timeout }}"
   vars:
     array_credential_prefix: "FlashArray - "
     orchestrator_credential_name: "Orchestrator service account - flasharray-eda"
@@ -368,6 +376,19 @@
         label: "{{ item.name }}"
       no_log: true
 
+    # ansible.eda.rulebook_activation cannot update an activation and, in
+    # 2.13, creates it enabled whatever `enabled` says; so existing ones are
+    # skipped and the enabled flag is enforced through the API afterwards.
+    - name: Activations that already exist
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashArray%20rulebook%20-"
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        return_content: true
+      register: existing_activations
+      no_log: true
+
     - name: One rulebook activation per rulebook (disabled until the plugins are packaged)
       ansible.eda.rulebook_activation:
         name: "FlashArray rulebook - {{ item | splitext | first }}"
@@ -377,9 +398,38 @@
         decision_environment_name: "{{ aap_eda_de_name }}"
         organization_name: "{{ aap_organization }}"
         extra_vars: "{{ lookup('file', aap_eda_vars_file) }}"
-        eda_credentials: "{{ aap_arrays | map(attribute='name') | map('regex_replace', '^', array_credential_prefix) | list }}"
+        # No array credentials are attached: the controller rejects two
+        # credentials of one injecting type on an activation ("Key: fa_url
+        # already exists in extra_vars"), and the plugins read their tokens
+        # from the environment anyway (aap/README.md).
         enabled: "{{ aap_eda_activations_enabled | bool }}"
         restart_policy: "{{ aap_eda_restart_policy }}"
         log_level: "{{ aap_eda_log_level }}"
         state: present
+      when: ('FlashArray rulebook - ' ~ (item | splitext | first)) not in (existing_activations.json.results | map(attribute='name') | list)
       loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/*.yml') | map('basename') | sort }}"
+
+    - name: Activations as they stand now
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashArray%20rulebook%20-"
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        return_content: true
+      register: all_activations
+      no_log: true
+
+    - name: Enforce the enabled flag on every FlashArray activation
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/eda/v1/activations/{{ item.id }}/{{ 'enable' if aap_eda_activations_enabled | bool else 'disable' }}/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        status_code: [200, 202, 204]
+      loop: "{{ all_activations.json.results }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: (item.is_enabled | bool) != (aap_eda_activations_enabled | bool)
+      changed_when: true
+      no_log: true

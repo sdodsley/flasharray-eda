@@ -11,7 +11,15 @@
 # token is enough for re-runs once the organization exists).
 aap_hostname: "{{ lookup('env', 'AAP_HOST') }}"
 aap_token: "{{ lookup('env', 'AAP_TOKEN') }}"
+# ansible.controller 4.8.0 (shipped with the 2.7 installer) authenticates
+# with basic auth only, so the controller objects also need the account's
+# username and password; the gateway and EDA modules use the token.
+aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
+aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
 aap_validate_certs: true
+# Seconds each API call may take; a platform that is still finishing its
+# install or running jobs can need more than the modules' 10-second default.
+aap_request_timeout: 60
 
 # --- names of the objects the seed creates ---------------------------------
 aap_organization: FlashArray

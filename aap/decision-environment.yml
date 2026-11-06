@@ -21,6 +21,12 @@ images:
     name: registry.redhat.io/ansible-automation-platform-27/de-supported-rhel9:latest
 
 dependencies:
+  # The supported images run Ansible on python3.12. Without this pin
+  # ansible-builder installs system packages that bring in python3 (3.9)
+  # and /usr/bin/python3 ends up without pip in the build stage.
+  python_interpreter:
+    package_system: python3.12
+    python_path: /usr/bin/python3.12
   python:
     - py-pure-client>=1.94.1
   galaxy:

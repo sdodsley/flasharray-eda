@@ -18,7 +18,11 @@ It creates nothing on an array and nothing in the automation orchestrator
   first run creates the organization, which needs a platform
   administrator's token; after that an organization administrator's token
   is enough. The token is read from the environment only; it is never
-  written to a file by the seed.
+  written to a file by the seed. `ansible.controller` 4.8.0, the build
+  shipped with the 2.7 installer, declares `aap_token` but authenticates
+  with HTTP basic auth only, so set `AAP_USERNAME` and `AAP_PASSWORD` for
+  the same account as well; the gateway and Event-Driven Ansible modules
+  use the token.
 - The `ARRAY_*_URL` / `ARRAY_*_TOKEN` pairs for every array in `aap_arrays`
   (the same names `env.example` uses), and, if the orchestrator credential
   is wanted, `AO_URL`, `AO_CLIENT_ID` and `AO_CLIENT_SECRET`. The seed
@@ -128,6 +132,23 @@ credential store's rotation and audit. A custom credential type has fixed
 fields, so one credential cannot carry a token per array either. The
 inventory therefore holds names only.
 
+## Images on a containerized platform
+
+On a containerized Ansible Automation Platform the controller's task
+container and the Event-Driven Ansible activation workers each keep their
+own container image store, separate from the host user's. An image that
+exists only in the host store (for example `localhost/flasharray-eda-ee`
+built on the same machine) fails at job start with "pinging container
+registry localhost", because the job's podman looks for a registry called
+localhost. Either push the image to a registry the platform can pull from
+(the private automation hub counts) and reference it by that name, or load
+it into the stores that need it:
+
+    podman save localhost/flasharray-eda-ee:latest \n      | podman exec -i automation-controller-task podman load
+    podman save localhost/flasharray-eda-de:latest \n      | podman exec -i automation-eda-activation-worker-1 podman load
+
+Repeat the second line for every activation worker.
+
 ## Paths inside the execution environment
 
 A job runs in a fresh container. `aap_job_extra_vars` points `alert_log`,
@@ -200,7 +221,10 @@ this tree are not yet done:
 
 The array credentials are still seeded as EDA credentials (type
 `FlashArray API`, injected as `fa_url` / `api_token`) so nothing secret has
-to be typed in later. `APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` are not
+to be typed in later, but they are not attached to the activations: the
+controller refuses two credentials of one injecting type on an activation
+("Key: fa_url already exists in extra_vars"), so a fleet of arrays needs
+either one credential type per array or a type that carries the whole list. `APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` are not
 seeded; on the platform the webhook rulesets become event streams with
 their own credentials.
 
