@@ -240,6 +240,25 @@ changed on every run. `ansible.eda.rulebook_activation` cannot modify an
 existing activation; to change one, delete it in the UI and re-run. The
 seed never deletes anything.
 
+## What ran on a platform (2026-11-06)
+
+Ansible Automation Platform 2.7, containerized growth topology on one RHEL
+9.8 host, seeded by this playbook from empty (two runs: the second changed
+only the EDA credentials, as documented above). Execution environment built
+from `aap/Containerfile.ee` and loaded into the controller's task container.
+
+| Check | Result |
+| --- | --- |
+| `FlashArray - notify` launched with `subject`, `severity`, `target_array`, `detail` | successful; artifacts `record_kind`, `severity`, `array` |
+| `FlashArray - capacity reclaim (controller tier)` launched with the capacity rule's variables for array A | request job read the array's pending-eradication objects (4 protection-group snapshot members), wrote the request and the alert record, published `request_id`, `candidate_count`, `candidates`; the workflow paused at the approval node |
+| Approval by a platform user | recorded on the approval (`approved_or_denied_by`); the reclaim node ran with `rebuild_from_artifacts`, rebuilt the request from the artifacts (`rebuilt_from: job artifacts`), asked the array to eradicate the four candidates and recorded the array's refusal of each ("Cannot eradicate volume snapshot because it belongs to a protection group snapshot"); nothing eradicated, `result: refused`, workflow successful |
+| Rulebook activations | created disabled; not started (plugins not yet packaged, decision environment not built) |
+
+Two things the first run taught: the launch variables must have the event's
+shape (`candidate_targets` is a list of `{array, used_pct}` records, not
+names), and a job that references an image by a `localhost/` name needs
+that image in the platform's own image store (see above).
+
 ## What it cannot seed
 
 - **The automation orchestrator.** It has no configuration-as-code API and
