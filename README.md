@@ -12,13 +12,14 @@ Prometheus/Alertmanager path exists for sites that already run one.
 Status: a prototype, not a supported product. The REST-pull rulebooks (the
 first eight rows of the table below) are verified against two Purity//FA
 6.10.6 arrays; the syslog listener is tested with replayed input; the
-Prometheus rules follow the exporter's metric specification and are not
-evaluated against a live Prometheus; the Alertmanager webhook path is
-verified against an array (a posted hardware alert lights the identify
-LED); the Ansible Automation Platform seed and controller-tier approval
-workflow are verified against a 2.7 installation and the orchestrator
-handoff against a live orchestrator; the decision environment is not
-built. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
+Prometheus rules evaluate on a live Prometheus scraping both arrays'
+native exporters and the capacity rule drives the Alertmanager path end
+to end (a posted hardware alert also lights the identify LED); the
+Ansible Automation Platform seed, the controller-tier approval workflow
+and the day-2 and DR-drill orchestrator workflows are verified against a
+2.7 installation and a live orchestrator; the decision environment image
+is built and runs the Alertmanager rulebook. Not verified: the rulebook
+activations on the platform. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
 exercised on hardware, [docs/DESIGN.md](docs/DESIGN.md) the design and
 scope, and [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and
 rulebook behaviour the rules are written around.
@@ -56,21 +57,30 @@ Tested against Purity//FA 6.10.6 (REST 2.46).
 
 ```
 python3 -m venv venv && . venv/bin/activate
-make deps                                   # pip install -r requirements.txt; ansible-galaxy collection install -r requirements.yml
+make deps                                   # pip install -r requirements.txt; ansible-galaxy collection install -r requirements.yml; make collection
 cp env.example ~/.flasharray-eda.env        # URLs and tokens for both arrays, APPROVAL_TOKEN, GIT_WEBHOOK_SECRET; chmod 600
 cp vars/example.yml vars/local-lab.yml      # edit: arrays, absolute paths (alert_log, request_dir, baseline_dir), baselines, thresholds, switches
 cp inventory/example.yml inventory/local-lab.yml
 ./run.sh extensions/eda/rulebooks/alerts.yml -v
 ```
 
+The repository is the collection `sdodsley.flasharray_eda` (`galaxy.yml` at
+the root): the rulebooks name their event sources by FQCN,
+`sdodsley.flasharray_eda.purefa_events` and
+`sdodsley.flasharray_eda.purefa_syslog`, and ansible-rulebook resolves them
+from an installed collection. `make collection` (which `make deps` runs
+last) builds the tarball into `build/` and installs it under
+`./collections`; [docs/PACKAGING.md](docs/PACKAGING.md) has the details.
+
 `run.sh` sources `env.sh`, which loads `~/.flasharray-eda.env` (override
 with `FAEDA_ENV`), activates `./venv` (`FAEDA_VENV`) or else expects
-`ansible-rulebook` on the PATH and says so, puts `~/.ansible/collections`
-(plus `./collections` when that directory exists) on
-`ANSIBLE_COLLECTIONS_PATH`, and defaults `FAEDA_VARS` to
-`vars/local-lab.yml` and `FAEDA_INVENTORY` to `inventory/local-lab.yml`.
-It then starts the rulebook with
-`--source-dir extensions/eda/plugins/event_source` and hands
+`ansible-rulebook` on the PATH and says so, puts `./collections` (when that
+directory exists) and `~/.ansible/collections` on
+`ANSIBLE_COLLECTIONS_PATH`, which is where the FQCN sources resolve from,
+and defaults `FAEDA_VARS` to `vars/local-lab.yml` and `FAEDA_INVENTORY` to
+`inventory/local-lab.yml`. It then starts the rulebook (still passing
+`--source-dir extensions/eda/plugins/event_source`, which ansible-rulebook
+consults for bare names only and which is harmless for a FQCN) and hands
 `APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` to ansible-rulebook with
 `--env-vars` when they are set in the environment; that is how the webhook
 rulesets read them (`{{ APPROVAL_TOKEN }}` in a rulebook is an environment
@@ -121,9 +131,10 @@ carries `time`, `kind`, `severity` and `array`.
 ## Layout
 
 ```
+galaxy.yml, meta/runtime.yml           the repository root is the collection sdodsley.flasharray_eda (docs/PACKAGING.md)
 extensions/eda/plugins/event_source/   purefa_events.py (REST pull, six signals), purefa_syslog.py (push)
-extensions/eda/rulebooks/              one rulebook per domain (table above)
-playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now,
+extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN
+playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now, dr_promote, dr_demote,
                                        preferred_array, dr_drill, capacity_request/reclaim, qos_cap, protect_now,
                                        expand_volume, orchestrator_post,
                                        alert_runbook (+ runbooks/<code>.yml, included relative to the playbook)
@@ -134,24 +145,27 @@ aap/                                   seed.yml, vars, inventory and credential 
                                        execution and decision environment definitions (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
 prometheus/flasharray.rules.yml        alert rules for the native exporter (belongs on the Prometheus server)
-decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2 (not built; see below)
+decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2; both build and
+                                       install the collection (see below)
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)
 env.example, env.sh, run.sh            env file template, shared environment setup, launcher
 tests/                                 unit/ (no array needed), mock_orchestrator.py, lab induction playbooks, fixtures,
                                        replay rulebooks, e2e_*.sh (everything they write goes under tests/out/)
 docs/                                  DESIGN.md (design and scope), VERIFICATION.md (what is exercised on hardware),
                                        HARDWARE_NOTES.md (array and rulebook behaviour), ORCHESTRATOR.md (the handoff
-                                       contract), PACKAGING.md (checklist for moving the content into the collection)
-Makefile                               `make check` runs what CI runs; `make de` builds the image
+                                       contract), PACKAGING.md (the collection, its build and the decision environment)
+Makefile                               `make check` runs what CI runs; `make collection` builds and installs the
+                                       collection; `make de` builds the image
 requirements.txt, requirements.yml     Python packages and the two collections (everpure.flasharray >= 1.46.0)
 ```
 
 ## The source plugins
 
 `purefa_events` polls one or more arrays with py-pure-client and emits plain
-fact events; policy lives in the rulebooks. One instance can run several
-signals, each on its own interval; every REST call is bounded by
-`request_timeout` (default 30 s):
+fact events; policy lives in the rulebooks. `arrays` is a list, or a JSON
+string that decodes to one so a platform credential can inject it as a
+single variable. One instance can run several signals, each on its own
+interval; every REST call is bounded by `request_timeout` (default 30 s):
 
 | Signal | Endpoints | Events |
 | --- | --- | --- |
@@ -177,9 +191,10 @@ The zero-code path needs neither plugin: Prometheus scrapes the array's
 native OpenMetrics exporter, `prometheus/flasharray.rules.yml` raises alerts
 carrying a `domain` label, Alertmanager posts them to
 `ansible.eda.alertmanager`, and `alertmanager.yml` runs the same playbooks.
-Not verified: the rules follow the exporter's metric specification and have
-not been evaluated against a live Prometheus; check the metric and label
-names against the exporter version in use before relying on them.
+The rules follow the names and labels the native exporter serves on
+Purity//FA 6.10.6 (listed at the top of the rules file) and evaluate on a
+live Prometheus; `prometheus/prometheus.example.yml` and
+`alertmanager.example.yml` are the scrape and routing configurations.
 
 ## Listeners
 
@@ -216,29 +231,35 @@ differently (see also [SECURITY.md](SECURITY.md)):
 
 `decision-environment/` holds a Containerfile and an ansible-builder
 definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
-the same tree: the plugins, rulebooks and playbooks under
-`/opt/flasharray-eda`, the two collections and py-pure-client. Not verified:
-neither has been built or run, and CI does not build them. The image is
-self-contained for `ansible-rulebook --source-dir` runs: the Containerfile
-header has the `podman run` line, which mounts `vars/`, `inventory/` and the
-baseline checkout and passes the credentials as environment variables.
+the same tree: the collection `sdodsley.flasharray_eda`, built from the
+checkout at image build time and installed with `everpure.flasharray` and
+`ansible.eda`, py-pure-client, and the rulebooks and playbooks as plain
+files under `/opt/flasharray-eda` for runs that name them by path
+([docs/PACKAGING.md](docs/PACKAGING.md)). CI does not build the image. The
+image is self-contained for standalone `ansible-rulebook` runs, with no
+`--source-dir`: the Containerfile header has the `podman run` line, which
+mounts `vars/`, `inventory/` and the baseline checkout and passes the
+credentials as environment variables. `ANSIBLE_COLLECTIONS_PATH` in the
+image names `/usr/share/ansible/collections` and the base image's
+`/app/.ansible/collections`, where `ansible.eda` lives.
 
-Running the rulebooks as EDA Controller activations needs changes this tree
-does not include. Activations pass no `--source-dir` and resolve custom
-event sources only from collections installed in the decision environment,
-so the two plugins must be packaged as a collection and the source names in
-the rulebooks switched to FQCNs ([docs/PACKAGING.md](docs/PACKAGING.md)).
-In Ansible Automation Platform `run_playbook` becomes `run_job_template`,
-and the capacity rule uses `run_workflow_template` against a workflow whose
-first node is a manual approval (the webhook approval ruleset is the
-stand-in for that). `aap/seed.yml` creates the organization, credential
-types, credentials, inventory, project, job templates, the controller-tier
-approval workflow and disabled rulebook activations
-([aap/README.md](aap/README.md)). The seed, the job templates and the
-controller-tier approval workflow (request, human approval, reclaim) are
-verified against an Ansible Automation Platform 2.7 installation. Not
-verified: the decision environment build and the rulebooks running as
-activations.
+EDA Controller activations pass no `--source-dir` and resolve custom event
+sources only from the collections installed in the decision environment;
+the rulebooks name theirs by FQCN, so an activation on this image resolves
+`purefa_events` and `purefa_syslog` from the collection it carries.
+On the platform the rulebooks run as the generated variants under
+`extensions/eda/rulebooks/platform/` (`tools/platform_rulebooks.py`): the
+same rules, with `run_playbook` replaced by `run_job_template` against the
+seeded job templates and the webhook rulesets left out, because approvals
+and git pushes arrive through the controller workflow and event streams
+there. `aap/seed.yml` creates the organization, credential types (one
+per array and the `FlashArray fleet` type whose single credential carries
+every array), credentials, inventory, project, job templates, the
+controller-tier approval workflow and one rulebook activation per platform
+rulebook ([aap/README.md](aap/README.md)). The seed, the job templates and
+the controller-tier approval workflow (request, human approval, reclaim)
+are verified against an Ansible Automation Platform 2.7 installation. Not
+verified: the activations running on the platform.
 
 ### Orchestrator handoff
 

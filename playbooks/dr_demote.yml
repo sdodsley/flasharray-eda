@@ -1,0 +1,192 @@
+---
+# DR failover test, second half: demote the TARGET pod of an ActiveDR pod
+# replica link on target_array once the test is over, so it is read-only
+# again and tracks its source. Run by hand, by an Ansible Automation Platform
+# job template or by the "FlashArray - DR failover test" orchestrator
+# workflow with target_array, pod, alert_log and optionally quiesce (default
+# true):
+#   ansible-playbook -i inventory/local-<site>.yml playbooks/dr_demote.yml \
+#       -e target_array=array-b -e pod=pod1 -e alert_log=$PWD/alerts.log
+# Demoting a promoted target pod discards every write made while it was
+# promoted: the array keeps them in an undo-demote pod
+# (<pod>.undo-demote.<n>) that is pending eradication, and purefa_pod refuses
+# the next demotion of the same pod while that undo-demote pod exists, so a
+# second failover test of one pod inside the eradication delay needs the
+# first test's undo-demote pod eradicated by hand in between. The record
+# says that the writes are discarded. quiesce false skips the quiesce step
+# (purefa_pod skip_quiesce), which loses whatever the pod has not yet
+# replicated. The same guards as dr_promote.yml apply (a plain pod name; an
+# existing, unstretched replica link target that is not quiescing); a target
+# that is already demoted is left alone (changed: false). The pod is read
+# again afterwards, waiting a bounded time for the demotion to settle, and
+# the states before and after go into the record and the job artifacts.
+- name: Demote a replica link target pod
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve the array's URL and token
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse a pod name that is not a plain name
+      ansible.builtin.assert:
+        that:
+          - pod is match('^[A-Za-z0-9][A-Za-z0-9_-]*$')
+        fail_msg: "pod {{ pod | string | truncate(80) }} must be a plain pod name"
+
+    # One read, used before and after the change: the pod's promotion state
+    # and link counts, and the replica links whose local pod it is.
+    - name: Keep the pod read in one place
+      ansible.builtin.set_fact:
+        read_pod_script: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          name = os.environ["POD"]
+          r = c.get_pods(names=[name])
+          if r.status_code != 200:
+              print(json.dumps({"error": r.errors[0].message if getattr(r, "errors", None) else "HTTP %s" % r.status_code}))
+              raise SystemExit(0)
+          # to_dict(): SDK models raise AttributeError for fields the array did not return
+          p = list(r.items)[0].to_dict()
+          links = [l.to_dict() for l in c.get_pod_replica_links().items]
+          links = [l for l in links if (l.get("local_pod") or {}).get("name") == name]
+          print(json.dumps({"promotion_status": p.get("promotion_status"), "requested_promotion_state": p.get("requested_promotion_state"),
+                            "link_source_count": p.get("link_source_count"), "link_target_count": p.get("link_target_count"),
+                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")),
+                            "links": [{"direction": l.get("direction"), "status": l.get("status"),
+                                       "remote_pod": (l.get("remote_pod") or {}).get("name"),
+                                       "remote": ((l.get("remotes") or [{}])[0]).get("name")} for l in links]}))
+
+    - name: Read the pod and its replica links
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ pod }}"
+      register: read_before
+      changed_when: false
+      no_log: true
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        before: "{{ read_before.stdout | from_json }}"
+
+    - name: Show the pod before the change
+      ansible.builtin.debug:
+        var: before
+
+    - name: Refuse a pod that is not the target of a replica link, or one still quiescing
+      ansible.builtin.assert:
+        that:
+          - before.error is not defined
+          - not (before.destroyed | default(false) | bool)
+          - before.array_count | default(1) | int == 1
+          - before.link_target_count | default(0) | int > 0
+          - before.link_source_count | default(0) | int == 0
+          - before.promotion_status != 'quiescing'
+        fail_msg: >-
+          {{ before.error | default(pod ~ ' is '
+             ~ ('destroyed' if before.destroyed | default(false) else
+                ('stretched' if before.array_count | default(1) | int != 1 else
+                 ('quiescing' if before.promotion_status == 'quiescing' else
+                  'not the target of a pod replica link (source of ' ~ before.link_source_count | default(0)
+                  ~ ', target of ' ~ before.link_target_count | default(0) ~ ')')))) }}
+
+    - name: Demote the pod
+      everpure.flasharray.purefa_pod:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ pod }}"
+        promote: false
+        quiesce: "{{ quiesce | default(true) | bool }}"
+      register: demoted
+
+    # The demotion quiesces first, so the pod can read as quiescing for a
+    # while; one still settling after the last try is recorded as it is, and
+    # a read that fails outright fails the parse below.
+    - name: Read the pod again, waiting for the demotion to settle
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ pod }}"
+      register: read_after
+      changed_when: false
+      no_log: true
+      retries: 30
+      delay: 10
+      until: (read_after.stdout | from_json).promotion_status | default('') == (read_after.stdout | from_json).requested_promotion_state | default('')
+      ignore_errors: true
+
+    - name: Parse the state after the change
+      ansible.builtin.set_fact:
+        after: "{{ read_after.stdout | from_json }}"
+
+    - name: Pick the inbound link before and after
+      ansible.builtin.set_fact:
+        link_before: "{{ (before.links | selectattr('direction', 'equalto', 'inbound') | list + [{}]) | first }}"
+        link_after: "{{ (after.links | selectattr('direction', 'equalto', 'inbound') | list + [{}]) | first }}"
+
+    # test_writes_discarded is true when this run demoted the pod: whatever
+    # was written while it was promoted is gone from the pod and kept only in
+    # the undo-demote pod the array leaves pending eradication.
+    - name: Record the demotion
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'dr_demote', 'severity': 'info',
+              'array': inventory_hostname, 'pod': pod,
+              'remote_array': link_before.remote | default(''), 'remote_pod': link_before.remote_pod | default(''),
+              'promotion_status_before': before.promotion_status, 'promotion_status_after': after.promotion_status,
+              'requested_promotion_state': after.requested_promotion_state,
+              'link_status_before': link_before.status | default(''), 'link_status_after': link_after.status | default(''),
+              'quiesce': quiesce | default(true) | bool,
+              'changed': demoted.changed | default(false),
+              'test_writes_discarded': demoted.changed | default(false),
+              'note': 'writes made while the pod was promoted are discarded; the array keeps them in an undo-demote pod pending eradication'} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the demotion
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}/{{ pod }}: {{ before.promotion_status }} -> {{ after.promotion_status }}
+          (requested {{ after.requested_promotion_state }}, quiesce {{ quiesce | default(true) | bool }});
+          link from {{ link_before.remote | default('?') }}
+          {{ link_before.status | default('?') }} -> {{ link_after.status | default('?') }}
+          {{ '(changed: writes made during the test are discarded)' if demoted.changed | default(false) else '(unchanged)' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'pod': pod,
+              'remote_array': link_before.remote | default(''), 'remote_pod': link_before.remote_pod | default(''),
+              'promotion_status_before': before.promotion_status, 'promotion_status_after': after.promotion_status,
+              'link_status_before': link_before.status | default(''), 'link_status_after': link_after.status | default(''),
+              'quiesce': quiesce | default(true) | bool,
+              'changed': demoted.changed | default(false),
+              'test_writes_discarded': demoted.changed | default(false)} }}
+      run_once: true
+      delegate_to: localhost

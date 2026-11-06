@@ -1,0 +1,73 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The repository root is the Ansible collection sdodsley.flasharray_eda: the
+# two event source plugins (extensions/eda/plugins/event_source), the
+# rulebooks (extensions/eda/rulebooks) and the playbooks (playbooks/) are
+# already laid out as collection content. `make collection` builds the
+# tarball into build/ and installs it under ./collections, which env.sh puts
+# first on ANSIBLE_COLLECTIONS_PATH; the decision environment builds and
+# installs the same tarball at image build time. Everything else in the
+# tree (tests, docs, the platform seed, the orchestrator definitions, the
+# Prometheus rules, local tooling) is development material and stays out of
+# the artifact through build_ignore.
+namespace: sdodsley
+name: flasharray_eda
+version: 0.1.0
+readme: README.md
+authors:
+  - sdodsley
+description: >-
+  Event-Driven Ansible for standalone Everpure FlashArrays: event source
+  plugins, rulebooks and playbooks
+license:
+  - Apache-2.0
+tags:
+  - eda
+  - storage
+  - flasharray
+  - everpure
+  - purestorage
+dependencies:
+  ansible.eda: ">=2.13.0"
+  everpure.flasharray: ">=1.46.0"
+repository: https://github.com/sdodsley/flasharray-eda
+documentation: https://github.com/sdodsley/flasharray-eda/blob/main/README.md
+homepage: https://github.com/sdodsley/flasharray-eda
+issues: https://github.com/sdodsley/flasharray-eda/issues
+# Kept in the artifact: extensions/, playbooks/, meta/, README.md, LICENSE.
+build_ignore:
+  - .git
+  - .github
+  - .gitignore
+  - .pytest_cache
+  - .yamllint
+  - CHANGELOG.md
+  - CONTRIBUTING.md
+  - Makefile
+  - SECURITY.md
+  - aap
+  - baseline
+  - build
+  - collections
+  - context
+  - decision-environment
+  - docs
+  - env.example
+  - env.sh
+  - inventory
+  - orchestrator
+  - prometheus
+  - requirements.txt
+  - requirements.yml
+  - run.sh
+  - scripts
+  - tests
+  - tools
+  - vars
+  - venv
+  - __pycache__
+  - "*/__pycache__"
+  - "*.pyc"
+  - "*.tar.gz"

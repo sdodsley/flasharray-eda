@@ -1,7 +1,12 @@
 # Decision environment for the FlashArray rulebooks: ansible-rulebook plus
-# the collections and the SDK the source plugins and playbooks need. A
-# self-contained image for `ansible-rulebook --source-dir` runs. CI does not
-# build it.
+# the collection this repository builds into (sdodsley.flasharray_eda, with
+# the two event source plugins, the rulebooks and the playbooks), its
+# dependencies ansible.eda and everpure.flasharray, and py-pure-client. The
+# same image serves standalone `ansible-rulebook` runs and EDA controller
+# activations: the rulebooks name their sources by FQCN
+# (sdodsley.flasharray_eda.purefa_events / purefa_syslog) and the image
+# resolves them from the installed collection, so no --source-dir is needed
+# and an activation resolves them the same way. CI does not build it.
 #
 # Build, from the repository root (the ansible-builder definition next to
 # this file produces the same tree):
@@ -17,7 +22,6 @@
 #     -v /opt/flasharray-eda-baseline:/opt/flasharray-eda-baseline:Z \
 #     flasharray-eda-de ansible-rulebook \
 #       --rulebook extensions/eda/rulebooks/alerts.yml \
-#       --source-dir extensions/eda/plugins/event_source \
 #       --inventory inventory/local-lab.yml --vars vars/local-lab.yml
 # For capacity.yml add `-e APPROVAL_TOKEN -p 5001:5001` and
 # `--env-vars APPROVAL_TOKEN`; for change_control.yml `-e GIT_WEBHOOK_SECRET
@@ -27,10 +31,14 @@
 # /var/log/flasharray-eda and /var/lib/flasharray-eda/requests, created below
 # for the runtime user; mount them to keep records across runs.
 #
-# EDA Controller activations pass no --source-dir and resolve custom event
-# sources only from collections installed in the image, so running these
-# rulebooks as activations needs the two plugins packaged as a collection
-# with FQCN source names (docs/PACKAGING.md).
+# Collections path. The base image ships ansible.eda under
+# /app/.ansible/collections, and `ansible-galaxy collection install` leaves
+# a dependency that is already installed there alone, so ansible.eda is not
+# copied into /usr/share/ansible/collections. ANSIBLE_COLLECTIONS_PATH
+# therefore names both directories; with /usr/share/ansible/collections alone
+# ansible-rulebook cannot find ansible.eda.alertmanager and the other stock
+# sources. The variable is set before the install so that the build and the
+# runtime see the same collections.
 #
 # quay.io publishes v-prefixed release tags; v1.3.2 is the ansible-rulebook
 # release the project is tested with. `latest` on that repository is not
@@ -39,20 +47,33 @@
 FROM quay.io/ansible/ansible-rulebook:v1.3.2
 
 USER root
+ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/.ansible/collections
+ENV ANSIBLE_LOCALHOST_WARNING=False
+
 COPY decision-environment/requirements.txt /tmp/requirements.txt
-COPY requirements.yml /tmp/requirements.yml
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
- && ansible-galaxy collection install -r /tmp/requirements.yml -p /usr/share/ansible/collections \
- && rm -f /tmp/requirements.txt /tmp/requirements.yml \
+ && rm -f /tmp/requirements.txt \
  && mkdir -p /var/log/flasharray-eda /var/lib/flasharray-eda/requests \
  && chown -R 1001:0 /var/log/flasharray-eda /var/lib/flasharray-eda \
  && chmod -R g+rwX /var/log/flasharray-eda /var/lib/flasharray-eda
 
-# The project itself: rulebooks, the source plugins and the playbooks. The
+# The collection, built from this checkout (galaxy.yml at the repository
+# root; only the collection content is copied in) and installed with its
+# dependencies, ansible.eda and everpure.flasharray (galaxy.yml). This is
+# what makes the FQCN sources resolve without --source-dir.
+COPY galaxy.yml LICENSE README.md /tmp/flasharray-eda/
+COPY meta /tmp/flasharray-eda/meta
+COPY extensions /tmp/flasharray-eda/extensions
+COPY playbooks /tmp/flasharray-eda/playbooks
+RUN ansible-galaxy collection build --output-path /tmp/build /tmp/flasharray-eda \
+ && ansible-galaxy collection install -p /usr/share/ansible/collections /tmp/build/sdodsley-flasharray_eda-*.tar.gz \
+ && rm -rf /tmp/flasharray-eda /tmp/build
+
+# The same rulebooks and playbooks as plain files, so that a standalone run
+# can name them by path (--rulebook extensions/eda/rulebooks/<name>.yml,
+# run_playbook: playbooks/<name>.yml) from the working directory. The
 # Prometheus rules file belongs on the Prometheus server, not in this image.
 COPY extensions /opt/flasharray-eda/extensions
 COPY playbooks /opt/flasharray-eda/playbooks
-ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
-ENV ANSIBLE_LOCALHOST_WARNING=False
 WORKDIR /opt/flasharray-eda
 USER 1001

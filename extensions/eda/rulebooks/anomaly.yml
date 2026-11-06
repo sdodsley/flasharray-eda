@@ -15,7 +15,7 @@
   hosts: all
 
   sources:
-    - purefa_events:
+    - sdodsley.flasharray_eda.purefa_events:
         arrays: "{{ purefa_arrays }}"
         signals: [telemetry, audits]
         telemetry_interval: "{{ telemetry_interval }}"

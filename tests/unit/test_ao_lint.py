@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for tools/ao_lint.py and the orchestrator definitions: the shipped
 definitions pass with the allowed template list, the template list matches
-the definitions, no per-environment id has been committed, every rule has
-a fixture under tests/fixtures/orchestrator/ that trips it, and the CLI
-exits and prints as documented."""
+the definitions and the platform rulebooks, no per-environment id has been
+committed, every rule has a fixture under tests/fixtures/orchestrator/ that
+trips it, and the CLI exits and prints as documented."""
 
 import importlib.util
 import json
@@ -15,13 +15,17 @@ import subprocess
 import sys
 
 import pytest
+import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 LINTER = ROOT / "tools" / "ao_lint.py"
 DEFINITIONS = sorted((ROOT / "orchestrator").glob("*.json"))
+DAY2_DEFINITIONS = [p for p in DEFINITIONS if p.name.startswith("day2_")]
 TEMPLATES = ROOT / "orchestrator" / "job_templates.txt"
+PLATFORM_RULEBOOKS = ROOT / "extensions" / "eda" / "rulebooks" / "platform"
 FIXTURES = sorted((ROOT / "tests" / "fixtures" / "orchestrator").glob("bad_*.json"))
 PLACEHOLDER = "REPLACE_AT_SYNC"
+TRIGGER_FIELD = re.compile(r"\$\{trigger\.([A-Za-z_][A-Za-z0-9_]*)")
 # a problem line is file:node:rule:message; the file part may hold no colon
 # because the CLI is given relative POSIX paths
 PROBLEM_LINE = re.compile(
@@ -59,11 +63,29 @@ def _job_template_names(doc):
     }
 
 
-def test_there_are_three_shipped_definitions():
+def _platform_job_template_names():
+    """Every run_job_template name in the generated platform rulebooks."""
+    names = set()
+    for path in sorted(PLATFORM_RULEBOOKS.glob("*.yml")):
+        for ruleset in yaml.safe_load(path.read_text()) or []:
+            for rule in ruleset.get("rules", []):
+                actions = rule.get("actions") or [rule.get("action", {})]
+                for action in actions:
+                    job = action.get("run_job_template")
+                    if job:
+                        names.add(job["name"])
+    return names
+
+
+def test_there_are_seven_shipped_definitions():
     assert [p.name for p in DEFINITIONS] == [
         "capacity_reclaim_approval.json",
         "day2_expand_volume.json",
+        "day2_identify_led.json",
+        "day2_protect_now.json",
+        "day2_qos_cap.json",
         "dr_drill_schedule.json",
+        "dr_failover_test.json",
     ]
 
 
@@ -83,12 +105,67 @@ def test_shipped_definition_is_ascii_and_pretty(path):
 
 
 def test_job_templates_txt_matches_the_definitions(allowed):
+    """The definitions and the platform rulebooks name only listed templates,
+    and every listed template is named by one of them. The reverse check
+    needs the generated platform rulebooks; without that directory only the
+    definitions' side is checked."""
     used = set()
     for path in DEFINITIONS:
         used |= _job_template_names(json.loads(path.read_text()))
-    assert (
-        used == allowed
-    ), f"used but not listed: {used - allowed}; listed but unused: {allowed - used}"
+    assert used <= allowed, f"used but not listed: {used - allowed}"
+    if PLATFORM_RULEBOOKS.is_dir():
+        used |= _platform_job_template_names()
+        assert used == allowed, (
+            f"used but not listed: {used - allowed}; "
+            f"listed but unused: {allowed - used}"
+        )
+
+
+def _first_job_node(doc):
+    """The first node on the path from the trigger that runs a template
+    other than notify: the node that does the work the form asked for."""
+    nodes = {node["id"]: node for node in doc["nodes"]}
+    (trigger_id,) = [t["id"] for t in doc["triggers"]]
+    queue = [trigger_id]
+    seen = set()
+    while queue:
+        current = queue.pop(0)
+        node = nodes.get(current)
+        if (
+            node is not None
+            and node["type"] == "aap_job_template"
+            and node["parameters"]["job_template_name"] != "FlashArray - notify"
+        ):
+            return node
+        for edge in doc["edges"]:
+            if edge["from"] == current and edge["to"] not in seen:
+                seen.add(edge["to"])
+                queue.append(edge["to"])
+    raise AssertionError("no job node other than notify")
+
+
+@pytest.mark.parametrize("path", DAY2_DEFINITIONS, ids=lambda p: p.name)
+def test_day2_form_declares_exactly_what_its_job_node_reads(path):
+    """Each day-2 form (manual trigger) declares, and requires, exactly the
+    inputs its job node passes to the playbook or uses to pick the array's
+    credential: an input nobody reads is noise on the form, and a reference
+    the form does not declare is a run-time failure the linter also flags."""
+    doc = json.loads(path.read_text())
+    schema = doc["triggers"][0]["parameters"]["input_schema"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    node = _first_job_node(doc)
+    params = node["parameters"]
+    read = set(TRIGGER_FIELD.findall(json.dumps(params["extra_vars"])))
+    read |= set(TRIGGER_FIELD.findall(json.dumps(params.get("credential_names", []))))
+    assert read == set(schema["properties"]), node["id"]
+    assert params["credential_names"] == ["FlashArray - ${trigger.array}"]
+    assert params["extra_vars"]["target_array"] == "${trigger.array}"
+    assert "alert_log" not in params["extra_vars"]
+    # a boolean or integer input is passed whole, so it keeps its type
+    for name, prop in schema["properties"].items():
+        if prop["type"] in ("boolean", "integer"):
+            assert "${trigger." + name + "}" in params["extra_vars"].values(), name
 
 
 @pytest.mark.parametrize("path", DEFINITIONS, ids=lambda p: p.name)
@@ -505,7 +582,7 @@ def test_cli_passes_the_shipped_definitions():
         "orchestrator/*.json", "--allowed-templates", "orchestrator/job_templates.txt"
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.strip() == "ao_lint: 3 definition(s) ok"
+    assert result.stdout.strip() == f"ao_lint: {len(DEFINITIONS)} definition(s) ok"
 
 
 def test_cli_reports_one_line_per_problem_and_fails():

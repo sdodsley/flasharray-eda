@@ -84,6 +84,12 @@
       ansible.builtin.set_fact:
         request: "{{ lookup('file', request_file) | from_json }}"
 
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ request.array }}"
+
     # The FlashArray API credential on Ansible Automation Platform injects
     # credential_array; fa_url and api_token point at that array whatever
     # host the request names, so a mismatch is refused before anything is

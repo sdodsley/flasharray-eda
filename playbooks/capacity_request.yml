@@ -18,6 +18,13 @@
           - at_risk_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
         fail_msg: "array name {{ at_risk_array | string | truncate(80) }} is not a valid array name"
 
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      when: at_risk_array in hostvars
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ at_risk_array }}"
+
     # On Ansible Automation Platform the FlashArray API credential injects
     # credential_array, the array it belongs to; fa_url and api_token then
     # point at that array whatever host name is used, so a request for any

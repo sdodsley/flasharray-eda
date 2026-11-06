@@ -1,0 +1,20 @@
+---
+# Alertmanager configuration that hands every FlashArray alert to the
+# ansible.eda.alertmanager source of extensions/eda/rulebooks/alertmanager.yml
+# (listening on alertmanager_host:alertmanager_port, default 5002, path
+# /alerts). Resolved notifications are sent too; the rulebook logs them.
+# The listener has no authentication of its own: keep it on an interface only
+# Alertmanager can reach, or put a reverse proxy with TLS and basic auth in
+# front of it and set http_config here.
+route:
+  receiver: eda
+  group_by: [alertname, array_name]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: eda
+    webhook_configs:
+      - url: http://127.0.0.1:5002/alerts
+        send_resolved: true

@@ -1,0 +1,7 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ansible-core 2.15 is the oldest release the playbooks and the event source
+# plugins are written for; the tested version is 2.17 (README, Quick start).
+requires_ansible: ">=2.15.0"

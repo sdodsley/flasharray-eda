@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- `prometheus/flasharray.rules.yml` follows the names and labels of the
+  array's native OpenMetrics exporter on Purity//FA 6.10.6 and evaluates on
+  a live Prometheus; `prometheus/prometheus.example.yml` and
+  `alertmanager.example.yml` are the scrape and routing configurations.
+- The repository is the collection `sdodsley.flasharray_eda` (`galaxy.yml`,
+  `make collection`); the rulebooks name their sources by FQCN and the
+  decision environment installs the collection, so activations resolve them.
+- `FlashArray fleet` credential type and `playbooks/tasks/resolve_array.yml`:
+  one credential carries every array; `purefa_events` accepts `arrays` as a
+  JSON string.
+- Platform rulebooks under `extensions/eda/rulebooks/platform/`, generated
+  by `tools/platform_rulebooks.py`, drive the seeded job templates with
+  `run_job_template`; `aap/seed.yml` creates one activation per platform
+  rulebook and eight more job templates.
+- Orchestrator definitions for QoS cap, protect now and identify LED (day 2)
+  and an ActiveDR failover test (`playbooks/dr_promote.yml`,
+  `playbooks/dr_demote.yml`).
+
 ## 0.1.0 (2026-11-06)
 
 First release of flasharray-eda: Event-Driven Ansible for standalone

@@ -19,6 +19,15 @@
       ansible.builtin.set_fact:
         runbook: "{{ alert_runbooks[alert_code | string] | default(alert_runbooks['default']) }}"
 
+    # Only the per-code tasks can touch the array (they delegate to it and
+    # read hostvars[target_array]); a notify or ticket route needs nothing.
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      when: runbook.route == 'tasks' and target_array in hostvars
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ target_array }}"
+
     - name: Build the record
       ansible.builtin.set_fact:
         alert_record:

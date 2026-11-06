@@ -129,7 +129,9 @@ def test_documentation_block_covers_every_argument(syslog):
     read = set(re.findall(r'args\.get\(\s*"([a-z_]+)"', source))
     assert read <= options, f"undocumented arguments: {sorted(read - options)}"
     assert "allowed_sources" in options
-    assert yaml.safe_load(syslog.EXAMPLES)[0]["sources"][0]["purefa_syslog"]
+    assert yaml.safe_load(syslog.EXAMPLES)[0]["sources"][0][
+        "sdodsley.flasharray_eda.purefa_syslog"
+    ]
 
 
 # --- source allow-list -------------------------------------------------------
@@ -260,6 +262,21 @@ class _Q:
 def test_main_rejects_the_purefa_events_array_list(syslog):
     with pytest.raises(ValueError, match="mapping"):
         asyncio.run(syslog.main(_Q(), {"arrays": [{"name": "array-a", "fa_url": "x"}]}))
+
+
+def test_arrays_argument_accepts_a_json_or_yaml_string(syslog):
+    want = {"fa-short": "array-a"}
+    assert syslog._decode_arrays('{"fa-short": "array-a"}', "purefa_syslog") == want
+    assert syslog._decode_arrays("fa-short: array-a\n", "purefa_syslog") == want
+    assert syslog._decode_arrays(want, "purefa_syslog") is want
+    assert syslog._decode_arrays("", "purefa_syslog") is None
+    # decoded before the type check: a string holding the purefa_events list
+    # is refused as a list, a string that is neither JSON nor YAML as such
+    with pytest.raises(ValueError, match="mapping"):
+        asyncio.run(syslog.main(_Q(), {"arrays": '[{"name": "array-a"}]'}))
+    with pytest.raises(ValueError, match="JSON") as exc:
+        asyncio.run(syslog.main(_Q(), {"arrays": "{not json: s3cret"}))
+    assert "s3cret" not in str(exc.value)
 
 
 def test_main_rejects_a_bad_allowed_source_before_listening(syslog):

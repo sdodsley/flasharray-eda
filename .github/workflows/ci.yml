@@ -28,6 +28,12 @@ jobs:
       - name: Lint the orchestrator definitions
         run: make lint-ao
 
+      # the repository as the collection sdodsley.flasharray_eda, built into
+      # build/ and installed under ./collections; after the lint so that the
+      # installed collections are not linted
+      - name: Build and install the collection
+        run: make collection
+
       - name: Unit tests (plugins, rulebooks, vars)
         run: make test
 

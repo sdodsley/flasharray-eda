@@ -13,9 +13,9 @@ launched as an AAP job template.
 The capacity definition is verified on the upstream orchestrator code at
 the tag Red Hat ships as the 2026.8 release (API 1.3.1): it validates,
 imports, publishes and runs from the EDA trigger through the approval to
-the reclaim ("Checked against a live instance" below). All three
-definitions follow the node schemas of that release and `tools/ao_lint.py`
-checks them offline. The product add-on is generally available for
+the reclaim ("Checked against a live instance" below). Every definition
+follows the node schemas of that release and `tools/ao_lint.py` checks them
+offline. The product add-on is generally available for
 OpenShift-based Ansible Automation Platform 2.7 only; no timeline is
 published for the containerized topology, and its API (1.3.1) is described
 as a technology preview that may change (docs/ORCHESTRATOR.md).
@@ -26,11 +26,21 @@ as a technology preview that may change (docs/ORCHESTRATOR.md).
 | --- | --- | --- |
 | `capacity_reclaim_approval.json` | `eda_trigger` on webhook path `fa_capacity` | A `purefa_capacity` event forwarded by the capacity rulebook runs **FlashArray - capacity request** (the request file and alert-log record of `playbooks/capacity_request.yml`). If the request lists reclaim candidates, **FlashArray - notify** announces it, an approval node waits up to 24 hours, and an approval runs **FlashArray - capacity reclaim** on exactly the candidates the request listed; a rejection or timeout runs a separate notify node. No candidates: a notify node says so. Nothing is freed without the approval. |
 | `day2_expand_volume.json` | `manual_trigger` with an input form (array, volume, new size) | Notify, approval (24 hours), then **FlashArray - expand volume** with the three inputs and the requested array's credential, then notify with the AAP job URL. A rejection notifies and changes nothing. |
-| `dr_drill_schedule.json` | `scheduled_trigger`, cron `0 2 * * *`, overlap policy `skip` | Runs **FlashArray - DR drill** (`playbooks/dr_drill.yml`); when its `failed_count` artifact is above zero a critical notify fires, otherwise an info summary. |
+| `day2_qos_cap.json` | `manual_trigger` with an input form (array, volume, IOPS limit) | Notify, approval (24 hours), then **FlashArray - QoS cap** in `cap` mode with the requested array's credential, then a warning notify with the applied and previous limits and the AAP job URL. The cap carries the `eda/qos_cap` tag, so the performance rulebook lifts it once the volume's latency is normal again. A rejection notifies and changes nothing. |
+| `day2_protect_now.json` | `manual_trigger` with an input form (array, seconds to add to the eradication delay) | Approval (24 hours), then **FlashArray - protect now** with the requested array's credential: an immediate snapshot of every local protection group and a longer enabled eradication delay (0 seconds snapshots only), then a warning notify with the snapshot suffix, the groups snapshotted or failed and the delay. A rejection notifies and changes nothing. |
+| `day2_identify_led.json` | `manual_trigger` with an input form (array, component, LED on or off) | No approval: **FlashArray - identify LED** with the requested array's credential sets the component's identify LED, then an info notify reports the state, whether it changed and any error (a component without an identify LED), with the AAP job URL. |
+| `dr_failover_test.json` | `manual_trigger` with an input form (target_array, pod) | A DR failover test on an ActiveDR replica link: notify, approval "promote" (24 hours), **FlashArray - DR promote** promotes the replica-link target pod on `target_array`, a notify with the promotion artifacts, then approval "revert" (its prompt says the writes made during the test are discarded), **FlashArray - DR demote** demotes the pod again and a notify reports the revert. Each rejection has its own notify; a rejected revert leaves the pod promoted and says so. |
 
 Approval nodes always have two distinct successors: `approved` and
 `rejected` never share a node (the linter enforces it), because a shared
 successor would run on either decision.
+
+The day-2 definitions have one rule in common, which
+`tests/unit/test_ao_lint.py` checks: the form declares and requires exactly
+the inputs the job node reads, every input is passed whole (`${trigger.x}`
+on its own keeps a boolean or integer's type), the node carries
+`credential_names` for the requested array, and nothing site-specific
+(`alert_log`) is in the node.
 
 ## The event envelope
 
@@ -60,11 +70,13 @@ array-name pattern the playbooks assert on.
 
 ## Job templates and what they must carry
 
-`job_templates.txt` lists every template name the definitions use; `make
-lint-ao` refuses a definition that names anything else. The nodes pass
-only what comes from the event, the form or an earlier node; everything
-site-specific is set on the job template itself (extra vars or a survey),
-not in these files:
+`job_templates.txt` lists every template name the definitions and the
+platform rulebooks (`extensions/eda/rulebooks/platform/`, generated by
+`tools/platform_rulebooks.py`) launch; `make lint-ao` refuses a definition
+that names anything else, and the unit tests check that every listed name
+is used by one or the other. The nodes pass only what comes from the event,
+the form or an earlier node; everything site-specific is set on the job
+template itself (extra vars or a survey), not in these files:
 
 | Template | Playbook | Passed by the node | Set on the template |
 | --- | --- | --- | --- |
@@ -73,6 +85,14 @@ not in these files:
 | FlashArray - notify | `playbooks/notify.yml` | `severity`, `subject`, `detail`, `target_array` | `alert_log` |
 | FlashArray - expand volume | `playbooks/expand_volume.yml` | `target_array`, `volume`, `new_size` | `alert_log` (optionally `reason`, `requested_by`) |
 | FlashArray - DR drill | `playbooks/dr_drill.yml` | nothing | `dr_drills`, `alert_log` |
+| FlashArray - QoS cap | `playbooks/qos_cap.yml` | `target_array`, `volume`, `mode` (`cap`), `cap_iops`, `reason` | `alert_log` |
+| FlashArray - protect now | `playbooks/protect_now.yml` | `target_array`, `extend_eradication_by_s`, `audit_user` and `audit_command` (constants naming the workflow, so the record shows what asked) | `alert_log` |
+| FlashArray - identify LED | `playbooks/identify_led.yml` | `target_array`, `component`, `led_state`, `severity` (`info`) | `alert_log` |
+| FlashArray - DR promote | `playbooks/dr_promote.yml` | `target_array`, `pod` | `alert_log` |
+| FlashArray - DR demote | `playbooks/dr_demote.yml` | `target_array`, `pod`, `quiesce` | `alert_log` |
+
+The protect-now playbook acts on every local protection group of the
+array, so its form has no protection-group input.
 
 `request_dir` should be a path that outlives a job and is shared by the
 request and reclaim templates (a host directory exposed to isolated jobs
@@ -93,16 +113,20 @@ people: a direct launch of that template with execute rights is the right
 to eradicate any object already pending eradication.
 
 The templates need the inventory of this project (one host per array) and
-the array credentials `aap/seed.yml` creates (`FlashArray - <array>`, one
-per array, each injecting `fa_url`, `api_token` and `credential_array`). A
-job holds one of them, so the two capacity nodes set `credential_names` to
-`FlashArray - ${trigger.event.array}`, the event's own array, and
-the expand-volume node to `FlashArray - ${trigger.array}`, the array the
-form asked for (the node resolves the names in the organization at
-launch); the playbooks refuse to run when `credential_array` is not
-the array they were asked to act on. The DR-drill node uses the credential
-its template carries (`aap/seed.yml` attaches the first drill's target
-array's); pick another array's credential on the node the same way.
+array credentials. `aap/seed.yml` attaches the **FlashArray fleet**
+credential to every template (one JSON list of arrays, from which
+`playbooks/tasks/resolve_array.yml` picks the target array's `fa_url` and
+`api_token` at run time), and also creates one **FlashArray API**
+credential per array (`FlashArray - <array>`, injecting `fa_url`,
+`api_token` and `credential_array`). The two capacity nodes set
+`credential_names` to `FlashArray - ${trigger.event.array}`, the event's
+own array, and the day-2 job nodes to `FlashArray - ${trigger.array}`, the
+array the form asked for (the node resolves the names in the organization
+at launch): a per-array credential on the launch takes precedence over the
+fleet, and the playbooks refuse to run when `credential_array` is not the
+array they were asked to act on. The DR-drill and DR failover test nodes
+use what their templates carry; pick a specific array's credential on a
+node the same way.
 
 The condition nodes route on job artifacts, which the playbooks publish
 with `set_stats` so the orchestrator sees them as
@@ -118,6 +142,16 @@ with `set_stats` so the orchestrator sees them as
   record per drill).
 - **FlashArray - expand volume** publishes `array`, `volume`, `old_size`
   and `new_size` (bytes) and `changed`.
+- **FlashArray - QoS cap** publishes `array`, `volume`, `mode`,
+  `applied_iops`, `previous_iops` and `changed`.
+- **FlashArray - protect now** publishes `array`, `snapshot_suffix`,
+  `groups_snapshotted`, `groups_failed` and `eradication_delay_days`.
+- **FlashArray - identify LED** publishes `array`, `component`, `led_state`
+  (`on` or `off`), `led_changed` and `led_error`.
+- **FlashArray - DR promote** and **FlashArray - DR demote** publish
+  `array`, `pod`, the pod's promotion status before and after, the replica
+  link's status and `changed`; the failover test's notify nodes report
+  them.
 
 `${<node_id>.job_url}` is the orchestrator's own output for an AAP node
 (the job's URL in automation controller) and is what the notify nodes

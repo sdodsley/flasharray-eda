@@ -1,12 +1,27 @@
-# Every AAP job template the definitions in this directory launch, one name
+# Every AAP job template this project launches from outside a rulebook: the
+# definitions in this directory and the platform rulebooks
+# (extensions/eda/rulebooks/platform/, run_job_template actions), one name
 # per line. `make lint-ao` passes this file to tools/ao_lint.py as
 # --allowed-templates, so a definition that names a template not listed here
-# fails the build, and tests/unit/test_ao_lint.py checks the list matches
-# the definitions both ways. The templates live in the organization named
-# in each node (FlashArray, the organization aap/seed.yml creates); README.md
-# describes the variables each one takes.
+# fails the build, and tests/unit/test_ao_lint.py checks that the definitions
+# and the platform rulebooks name only listed templates and that every
+# listed template is named by one of them. The templates live in the
+# organization named in each node (FlashArray, the organization aap/seed.yml
+# creates); README.md describes the variables each one takes.
+FlashArray - notify
 FlashArray - capacity request
 FlashArray - capacity reclaim
-FlashArray - notify
 FlashArray - expand volume
 FlashArray - DR drill
+FlashArray - identify LED
+FlashArray - reconcile
+FlashArray - protect now
+FlashArray - QoS cap
+FlashArray - remediate DNS
+FlashArray - remediate NTP
+FlashArray - replicate now
+FlashArray - preferred array
+FlashArray - alert runbook
+FlashArray - orchestrator post
+FlashArray - DR promote
+FlashArray - DR demote

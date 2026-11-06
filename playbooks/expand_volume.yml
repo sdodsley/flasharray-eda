@@ -17,6 +17,12 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
     - name: Refuse a host pattern that is not exactly this array, or another array's credential
       ansible.builtin.assert:
         that:

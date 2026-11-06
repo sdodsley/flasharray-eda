@@ -1,0 +1,74 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Resolve the credentials of one array. Included first by every array-facing
+# playbook with resolve_array_name, the name of the array the playbook acts
+# on (target_array, at_risk_array, the request's array, the drill's
+# target_array), and leaves fa_url, api_token and credential_array set on
+# that array's inventory host: the play's own host for a play on
+# hosts: "{{ target_array }}", and hostvars[<array>] for the plays that run
+# on localhost and read the array's variables from there (which is also why
+# a drill loop over several target arrays resolves each one on its own).
+#
+# Three ways the credentials arrive, tried in this order:
+#   1. fa_url and api_token already defined and non-empty on the play's host
+#      or on the array's host: the standalone inventory (host variables read
+#      from the environment) or the per-array "FlashArray API" credential of
+#      Ansible Automation Platform, which injects them as extra vars together
+#      with credential_array. Nothing is changed.
+#   2. purefa_fleet_json defined: the "FlashArray fleet" credential, one JSON
+#      list of {name, fa_url, api_token} objects injected as one extra var.
+#      The entry whose name is the array is taken and credential_array is set
+#      to that name, so the guard every playbook carries keeps working.
+#   3. Neither: the include fails with a message naming both ways.
+#
+# The trade-off of the fleet credential: one credential grants every array in
+# its list to the job template that holds it, and a launch narrows that only
+# by naming the array it acts on; the per-array credential type remains the
+# finer-grained option (one launch, one array, enforced by credential_array)
+# and takes precedence when both are attached. Every task that handles the
+# token runs with no_log, and no message echoes the credential text.
+- name: Note whether credentials for {{ resolve_array_name }} are already in hand
+  ansible.builtin.set_fact:
+    resolve_array_in_hand: >-
+      {{ ((fa_url | default('', true) | string | length) > 0 and (api_token | default('', true) | string | length) > 0)
+         or (resolve_array_name in hostvars
+             and (hostvars[resolve_array_name].fa_url | default('', true) | string | length) > 0
+             and (hostvars[resolve_array_name].api_token | default('', true) | string | length) > 0) }}
+  no_log: true
+
+- name: Pick {{ resolve_array_name }} out of the fleet credential
+  when: not resolve_array_in_hand | bool and purefa_fleet_json is defined
+  ansible.builtin.set_fact:
+    resolve_array_entries: >-
+      {{ (purefa_fleet_json if purefa_fleet_json is not string else purefa_fleet_json | from_json)
+         | selectattr('name', 'defined') | selectattr('name', 'equalto', resolve_array_name) | list }}
+  no_log: true
+
+- name: Refuse to go on without credentials for {{ resolve_array_name }}
+  when: not resolve_array_in_hand | bool
+  ansible.builtin.assert:
+    that:
+      - purefa_fleet_json is defined
+      - resolve_array_name in hostvars
+      - resolve_array_entries | length == 1
+      - resolve_array_entries[0].fa_url | default('', true) | string | length > 0
+      - resolve_array_entries[0].api_token | default('', true) | string | length > 0
+    fail_msg: >-
+      no credentials for {{ resolve_array_name }}: either set fa_url and api_token for it
+      (inventory host variables, or the per-array FlashArray API credential on the launch)
+      or attach the FlashArray fleet credential (purefa_fleet_json) with exactly one entry
+      named {{ resolve_array_name }} carrying fa_url and api_token; the array must also be
+      an inventory host{{ ' (the fleet list has ' ~ (resolve_array_entries | default([]) | length)
+      ~ ' entries of that name)' if purefa_fleet_json is defined else '' }}
+
+- name: Take the credentials for {{ resolve_array_name }} from the fleet credential
+  when: not resolve_array_in_hand | bool
+  ansible.builtin.set_fact:
+    fa_url: "{{ resolve_array_entries[0].fa_url }}"
+    api_token: "{{ resolve_array_entries[0].api_token }}"
+    credential_array: "{{ resolve_array_name }}"
+  delegate_to: "{{ resolve_array_name }}"
+  delegate_facts: true
+  no_log: true

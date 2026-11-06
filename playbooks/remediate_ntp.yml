@@ -8,6 +8,12 @@
   vars:
     baseline_ntp_servers: "{{ baseline_ntp_servers_csv.split(',') }}"
   tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
     # On Ansible Automation Platform the FlashArray API credential injects
     # credential_array and fa_url/api_token point at that array whatever
     # host this play runs on, so another array's credential is refused.

@@ -21,6 +21,12 @@
     is_ntp: "{{ audit_command == 'purearray' and audit_subcommand | default('') == 'setattr' and '--ntpserver' in (audit_arguments | default('')) }}"
     is_dns: "{{ audit_command == 'puredns' }}"
   tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
     # On Ansible Automation Platform the FlashArray API credential injects
     # credential_array and fa_url/api_token point at that array whatever
     # host this play runs on, so another array's credential is refused.

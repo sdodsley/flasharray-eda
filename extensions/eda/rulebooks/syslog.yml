@@ -14,7 +14,7 @@
   hosts: all
 
   sources:
-    - purefa_syslog:
+    - sdodsley.flasharray_eda.purefa_syslog:
         host: "{{ syslog_host }}"
         port: "{{ syslog_port }}"
         allowed_sources: "{{ syslog_allowed_sources }}"

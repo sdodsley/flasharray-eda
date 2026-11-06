@@ -1,0 +1,103 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - protect now (day 2)",
+  "description": "An operator asks for an array to be protected now: an immediate snapshot of every local protection group and, when asked, a longer eradication delay. A human approves it, the protect-now playbook runs through the FlashArray collection and the outcome is logged with the AAP job link. A rejection is logged and changes nothing.",
+  "triggers": [
+    {
+      "id": "protect_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "extend_eradication_by_s"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "extend_eradication_by_s": {
+              "type": "integer",
+              "title": "Extend the eradication delay by (seconds)",
+              "description": "Seconds added to the array's enabled eradication delay, rounded up to whole days and capped at the module's 30 days; 0 snapshots only and leaves the delay alone. The delay is never shortened.",
+              "default": 86400,
+              "minimum": 0,
+              "maximum": 2592000
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "approve_protect",
+      "type": "approval",
+      "name": "Approve protect now",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Snapshot every local protection group on ${trigger.array} now and lengthen its enabled eradication delay by ${trigger.extend_eradication_by_s} seconds (rounded up to whole days, at most 30, never shortened). The snapshots count against the array's capacity until they expire or are destroyed."
+      }
+    },
+    {
+      "id": "protect_now",
+      "type": "aap_job_template",
+      "name": "Protect the array now",
+      "parameters": {
+        "job_template_name": "FlashArray - protect now",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashArray - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "extend_eradication_by_s": "${trigger.extend_eradication_by_s}",
+          "audit_user": "orchestrator",
+          "audit_command": "FlashArray - protect now (day 2)"
+        }
+      }
+    },
+    {
+      "id": "notify_protected",
+      "type": "aap_job_template",
+      "name": "Notify: array protected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Protect now on ${trigger.array}: snapshots ${protect_now.artifacts.snapshot_suffix}",
+          "detail": "Snapshotted: ${protect_now.artifacts.groups_snapshotted}; failed: ${protect_now.artifacts.groups_failed}; enabled eradication delay: ${protect_now.artifacts.eradication_delay_days} days. AAP job: ${protect_now.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: protect now rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Protect now on ${trigger.array} rejected or expired; nothing changed",
+          "detail": "The approval was rejected or timed out after 24 hours. Raise a new request if the protection is still wanted.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "protect_request", "to": "approve_protect"},
+    {"from": "approve_protect", "to": "protect_now", "from_port": "approved"},
+    {"from": "protect_now", "to": "notify_protected"},
+    {"from": "approve_protect", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

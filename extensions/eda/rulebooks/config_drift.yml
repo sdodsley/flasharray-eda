@@ -15,7 +15,7 @@
   hosts: all
 
   sources:
-    - purefa_events:
+    - sdodsley.flasharray_eda.purefa_events:
         arrays: "{{ config_arrays }}"
         signals: [config]
         config_interval: "{{ config_interval }}"

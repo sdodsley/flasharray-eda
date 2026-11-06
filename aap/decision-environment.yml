@@ -4,16 +4,27 @@
 # decision-environment/ in this tree builds the same content on the upstream
 # ansible-rulebook image for standalone use; this definition builds it on the
 # supported base so an activation runs on a supported image. Build on a host
-# that is logged in to registry.redhat.io:
+# that is logged in to registry.redhat.io, from the repository root:
 #
 #   pip install ansible-builder
 #   ansible-builder build -f aap/decision-environment.yml \
 #       -t flasharray-eda-de:latest --container-runtime podman
 #
-# The custom event sources are resolved from collections inside the image, so
-# an activation that names purefa_events or purefa_syslog cannot start unless
-# the plugins ship in a collection (docs/PACKAGING.md); the seed therefore
-# creates the activations disabled.
+# An activation resolves custom event sources from the collections inside
+# the image only. The rulebooks name theirs by FQCN
+# (sdodsley.flasharray_eda.purefa_events / purefa_syslog) and this image
+# carries that collection, built from this checkout at image build time:
+# additional_build_files copies the collection content (galaxy.yml, meta/,
+# extensions/, playbooks/, README.md, LICENSE) into the build context as
+# _build/flasharray_eda, and a galaxy requirement of type `dir` pointing at
+# that directory makes ansible-galaxy build and install it, with its
+# dependencies ansible.eda and everpure.flasharray (galaxy.yml), in the
+# galaxy stage (ansible-builder copies _build to /build and runs the install
+# from there; a `dir` requirement honours build_ignore). This is the form
+# ansible-builder v3 supports for content that is not published on a Galaxy
+# server. The supported base already ships ansible.eda under
+# /usr/share/ansible/collections, the path the install targets, so no
+# collections path override is needed here.
 version: 3
 
 images:
@@ -31,8 +42,22 @@ dependencies:
     - py-pure-client>=1.94.1
   galaxy:
     collections:
-      - name: everpure.flasharray
-        version: ">=1.46.0"
+      - name: /build/flasharray_eda
+        type: dir
+
+additional_build_files:
+  - src: ../galaxy.yml
+    dest: flasharray_eda
+  - src: ../LICENSE
+    dest: flasharray_eda
+  - src: ../README.md
+    dest: flasharray_eda
+  - src: ../meta
+    dest: flasharray_eda
+  - src: ../extensions
+    dest: flasharray_eda
+  - src: ../playbooks
+    dest: flasharray_eda
 
 options:
   package_manager_path: /usr/bin/microdnf

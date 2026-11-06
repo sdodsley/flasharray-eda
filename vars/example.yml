@@ -195,3 +195,10 @@ syslog_hostnames: {}             # array name or syslog hostname -> inventory ar
 # proxy that authenticates.
 alertmanager_host: 0.0.0.0
 alertmanager_port: 5002
+
+# --- Ansible Automation Platform ------------------------------------------
+# The organization the job templates live in (aap_organization in
+# aap/vars/example.yml). Used by the platform rulebooks only
+# (extensions/eda/rulebooks/platform/, whose run_job_template actions name
+# it); the standalone rulebooks do not read it.
+aap_organization: FlashArray

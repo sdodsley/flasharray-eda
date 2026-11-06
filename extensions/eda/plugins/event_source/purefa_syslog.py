@@ -21,7 +21,10 @@ arrays            optional mapping array name or syslog hostname -> inventory
                   host name, for arrays whose own name or logged hostname
                   differs from the inventory (default {}). It must be a
                   mapping; the purefa_events array list is rejected at
-                  start-up.
+                  start-up. A JSON string (or a YAML string) that decodes to
+                  the mapping is accepted too, so a platform credential can
+                  inject it as one variable; it is decoded before validation
+                  and never echoed into an error or a log.
 automation_users  list or comma-separated string of user names counted as
                   automation (default: empty)
 allowed_sources   list or comma-separated string of IPv4/IPv6 addresses or
@@ -105,6 +108,9 @@ options:
       - Mapping of an array's own name or syslog hostname to the inventory
         host name, for arrays whose names differ from the inventory. Must be
         a mapping; the purefa_events array list is rejected at start-up.
+      - A JSON string is accepted so a platform credential can inject the
+        mapping as one extra var (a YAML string decodes the same way); the
+        string is decoded before validation and is never written to a log.
     type: dict
     default: {}
   automation_users:
@@ -126,7 +132,7 @@ EXAMPLES = r"""
 - name: FlashArray syslog
   hosts: all
   sources:
-    - purefa_syslog:
+    - sdodsley.flasharray_eda.purefa_syslog:
         host: "{{ syslog_host }}"
         port: "{{ syslog_port }}"
         protocols: [tcp]
@@ -145,8 +151,14 @@ EXAMPLES = r"""
 
 import asyncio
 import ipaddress
+import json
 import logging
 import re
+
+try:
+    import yaml
+except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
+    yaml = None
 
 logger = logging.getLogger(__name__)
 
@@ -341,11 +353,42 @@ async def _tcp_client(reader, writer, emit, networks):
             pass
 
 
+def _decode_arrays(value, plugin):
+    """The arrays argument as the structure the plugin documents.
+
+    A platform credential injects the list (or mapping) as one string
+    variable, so a JSON string, or a YAML string, is decoded here before the
+    argument is validated. The text is never echoed into an error message or
+    a log record: it carries API tokens.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        decoded = None
+    if not isinstance(decoded, (list, dict)) and yaml is not None:
+        try:
+            decoded = yaml.safe_load(text)
+        except yaml.YAMLError:
+            decoded = None
+    if isinstance(decoded, (list, dict)):
+        return decoded
+    raise ValueError(
+        f"{plugin}: arrays is a string that does not decode as JSON (or YAML) "
+        "into the documented structure; the text is not shown because it may "
+        "hold API tokens"
+    )
+
+
 async def main(queue: asyncio.Queue, args: dict) -> None:
     host = args.get("host") or "0.0.0.0"
     port = int(args.get("port", 5140))
     protocols = _as_list(args.get("protocols")) or ["udp", "tcp"]
-    arrays = args.get("arrays") or {}
+    arrays = _decode_arrays(args.get("arrays"), "purefa_syslog") or {}
     if not isinstance(arrays, dict):
         raise ValueError(
             "purefa_syslog: arrays must be a mapping of array name or syslog "
@@ -397,7 +440,6 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
 
 
 if __name__ == "__main__":
-    import json
     import sys
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)

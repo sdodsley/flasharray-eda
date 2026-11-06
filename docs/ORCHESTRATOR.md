@@ -187,7 +187,7 @@ gets a token and then a 403.
 ## On the platform
 
 As an Event-Driven Ansible controller activation the rule's `run_playbook`
-becomes `run_job_template` against `FlashArray - post orchestrator event`.
+becomes `run_job_template` against `FlashArray - orchestrator post`.
 `aap/seed.yml` creates that template and the `Orchestrator service
 account` credential type, which injects `AO_CLIENT_ID` and
 `AO_CLIENT_SECRET` as environment variables and `orchestrator_url` as an
@@ -353,7 +353,7 @@ the platform uses. Three deployment notes:
   and the problem-details shape of error answers. The mock implements
   them as the upstream documentation describes and the unit test covers
   them against the mock.
-- Not verified: `FlashArray - post orchestrator event` launched from an
+- Not verified: `FlashArray - orchestrator post` launched from an
   Event-Driven Ansible controller activation (see "On the platform").
 - A failed handoff leaves no local request: the alert-log warning is the
   only trace, and the rule does not fall back to the request file. A site

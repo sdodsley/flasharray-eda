@@ -1,0 +1,127 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - QoS cap (day 2)",
+  "description": "An operator asks for an IOPS cap on a volume. The request is logged, a human approves it, the cap is applied through the FlashArray collection with the eda/qos_cap tag the performance rulebook lifts again once latency is normal, and the outcome is logged with the AAP job link. A rejection is logged too and changes nothing.",
+  "triggers": [
+    {
+      "id": "qos_cap_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "volume", "iops_limit"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "volume": {
+              "type": "string",
+              "title": "Volume",
+              "description": "Volume name, with its pod (pod::volume) or volume group (vgroup/volume) prefix when it has one",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*(::[A-Za-z0-9][A-Za-z0-9_-]*|/[A-Za-z0-9][A-Za-z0-9_-]*)?$",
+              "maxLength": 128
+            },
+            "iops_limit": {
+              "type": "integer",
+              "title": "IOPS limit",
+              "description": "The cap to apply, in IOPS, as purefa_volume takes it: a whole number from 100 up to but excluding 100000000, the value the array stores as no limit",
+              "minimum": 100,
+              "exclusiveMaximum": 100000000
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_requested",
+      "type": "aap_job_template",
+      "name": "Notify: QoS cap requested",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Cap ${trigger.volume} on ${trigger.array} at ${trigger.iops_limit} IOPS: awaiting approval",
+          "detail": "Requested through the orchestrator. Approve or reject within 24 hours.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_cap",
+      "type": "approval",
+      "name": "Approve the QoS cap",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Cap volume ${trigger.volume} on ${trigger.array} at ${trigger.iops_limit} IOPS. The previous limit is kept in an eda/qos_prev_iops tag on the volume; the performance rulebook lifts the cap once the volume's latency has been normal for its configured number of polls, and a lift can also be launched from FlashArray - QoS cap with mode lift."
+      }
+    },
+    {
+      "id": "qos_cap",
+      "type": "aap_job_template",
+      "name": "Apply the QoS cap",
+      "parameters": {
+        "job_template_name": "FlashArray - QoS cap",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashArray - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "volume": "${trigger.volume}",
+          "mode": "cap",
+          "cap_iops": "${trigger.iops_limit}",
+          "reason": "requested through the orchestrator (FlashArray - QoS cap (day 2))"
+        }
+      }
+    },
+    {
+      "id": "notify_capped",
+      "type": "aap_job_template",
+      "name": "Notify: QoS cap applied",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Capped ${trigger.volume} on ${trigger.array} at ${qos_cap.artifacts.applied_iops} IOPS",
+          "detail": "Previous IOPS limit: ${qos_cap.artifacts.previous_iops} (changed: ${qos_cap.artifacts.changed}). The volume carries the eda/qos_cap tag until the cap is lifted. AAP job: ${qos_cap.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: QoS cap rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "QoS cap of ${trigger.volume} on ${trigger.array} at ${trigger.iops_limit} IOPS rejected or expired; nothing changed",
+          "detail": "The approval was rejected or timed out after 24 hours. Raise a new request if the cap is still wanted.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "qos_cap_request", "to": "notify_requested"},
+    {"from": "notify_requested", "to": "approve_cap"},
+    {"from": "approve_cap", "to": "qos_cap", "from_port": "approved"},
+    {"from": "qos_cap", "to": "notify_capped"},
+    {"from": "approve_cap", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

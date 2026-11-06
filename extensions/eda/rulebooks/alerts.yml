@@ -10,7 +10,7 @@
   hosts: all
 
   sources:
-    - purefa_events:
+    - sdodsley.flasharray_eda.purefa_events:
         arrays: "{{ purefa_arrays }}"
         signals: [alerts]
         alerts_interval: "{{ alerts_interval }}"

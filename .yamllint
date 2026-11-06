@@ -14,5 +14,9 @@ rules:
     check-keys: false
 ignore: |
   tests/out/
+  collections/
+  build/
+  venv/
+  context/
   vars/local*.yml
   inventory/local*.yml

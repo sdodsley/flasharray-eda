@@ -54,9 +54,10 @@ Forward both into tickets.
 | Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 and 5424 headers, `purity.audit`, `purity.alert` and `purity.test` recognised, audit `Key: 'value'` pairs parsed into fields (user, action, result, interface, session, location); `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
 | Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
-The Prometheus rules cover open alerts, hardware status, capacity and
-days-to-full, data reduction drop, write latency against last week, replica
-link lag, array connection state and scrape failure; each carries a `domain`
+The Prometheus rules cover hardware and drive status, capacity and
+days-to-full, data reduction drop, read and write latency against last
+week, replica link lag and state, stretched-pod mediator state and scrape
+failure; each carries a `domain`
 label. `alertmanager.yml` maps them to the same playbooks: hardware alerts
 drive the identify-LED playbook, capacity alerts raise the approval request,
 the rest notify, resolved alerts are logged. No code from this project runs
@@ -153,6 +154,12 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   volume out of the latest fully transferred snapshot on the target, verify
   its size against the snapshot, destroy and eradicate the copy. Mounting the
   copy from a test host is design intent.
+- ActiveDR failover test (`dr_promote.yml`, `dr_demote.yml`, driven by
+  `orchestrator/dr_failover_test.json`): behind an approval, promote the
+  replica link's target pod on the DR array, run the application test
+  outside the workflow, then behind a second approval demote it again;
+  writes made during the test are discarded and the source pod is never
+  touched.
 
 ### 4.5 Capacity turns into trend and approval
 
@@ -250,14 +257,14 @@ Every remediation passes the same gates; the table in
 
 `decision-environment/` holds a Containerfile and an `ansible-builder` v3
 definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
-the same tree. The base image ships ansible-rulebook, ansible-core and
-aiohttp, so the only Python addition is py-pure-client, and the collections
-come from the root `requirements.yml`. The image serves
-`ansible-rulebook --source-dir` runs. EDA Controller activations resolve
-custom event sources only from installed collections, so they need the
-plugins packaged into `everpure.flasharray` ([PACKAGING.md](PACKAGING.md));
-on the platform `run_playbook` becomes `run_job_template` and the capacity
-rule `run_workflow_template` (`aap/README.md`).
+the same tree: the collection `sdodsley.flasharray_eda` built from the
+checkout and installed with its dependencies, py-pure-client, and the
+rulebooks and playbooks as plain files. The base image ships
+ansible-rulebook, ansible-core and aiohttp. EDA Controller activations
+resolve custom event sources from the collections in the image, so the
+rulebooks name theirs by FQCN; on the platform they run as the generated
+variants under `extensions/eda/rulebooks/platform/`, where `run_playbook`
+becomes `run_job_template` (`aap/README.md`, [PACKAGING.md](PACKAGING.md)).
 
 ## 8. References
 

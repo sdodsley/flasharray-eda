@@ -52,15 +52,24 @@
   vars:
     baseline_file: "{{ baseline_dir }}/{{ inventory_hostname }}.yml"
   tasks:
-    # On Ansible Automation Platform one FlashArray API credential is attached
-    # and injects credential_array; its fa_url and api_token override every
+    # On Ansible Automation Platform a per-array FlashArray API credential
+    # injects credential_array; its fa_url and api_token override every
     # host's, so only that array's own baseline may be applied by this job.
     # The other hosts end here (not fail: an assert would fail every
     # multi-array launch), which also drops them from ansible_play_hosts so
-    # the set_stats below reports only the arrays that ran.
+    # the set_stats below reports only the arrays that ran. With the fleet
+    # credential instead, credential_array is undefined until each host
+    # resolves its own entry, so one launch applies every array in the limit
+    # that the fleet lists.
     - name: Skip the arrays whose credential is not attached
       when: credential_array is defined and credential_array != inventory_hostname
       ansible.builtin.meta: end_host
+
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
 
     - name: Check for a baseline file
       ansible.builtin.stat:

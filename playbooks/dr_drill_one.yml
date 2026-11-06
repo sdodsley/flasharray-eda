@@ -14,6 +14,12 @@
 
 - name: Find, copy and verify, then record whatever happened
   block:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ drill.target_array }}"
+
     # On Ansible Automation Platform the FlashArray API credential injects
     # credential_array and hostvars[<any array>].fa_url points at that array,
     # so a drill whose target is another array is failed (and recorded as

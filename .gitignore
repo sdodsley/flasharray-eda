@@ -16,6 +16,7 @@ tests/out/
 venv/
 collections/
 context/
+build/
 __pycache__/
 *.pyc
 .pytest_cache/

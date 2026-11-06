@@ -1,0 +1,179 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - DR failover test",
+  "description": "An operator asks for a DR failover test of one ActiveDR pod. The request is logged, a human approves the promotion, the replica link's target pod is promoted on the target array (its volumes become writable there, the source keeps serving production) and the outcome is logged with the states before and after and the AAP job link. The application test then runs outside the workflow; a second approval reverts it, demoting the pod again, which discards every write made during the test, and the outcome is logged. A rejection of either approval is logged; a rejected or expired revert leaves the pod promoted and says so at critical severity, because the replica is then no longer tracking its source until someone demotes it.",
+  "triggers": [
+    {
+      "id": "failover_test_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["target_array", "pod"],
+          "additionalProperties": false,
+          "properties": {
+            "target_array": {
+              "type": "string",
+              "title": "Target array",
+              "description": "Inventory name of the array that holds the replica link's target pod (the DR side)",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "pod": {
+              "type": "string",
+              "title": "Pod",
+              "description": "Name of the target pod on that array, as the replica link names it; the playbooks refuse a source pod, an unlinked pod and a stretched pod",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+              "maxLength": 63
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_requested",
+      "type": "aap_job_template",
+      "name": "Notify: DR failover test requested",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR failover test of pod ${trigger.pod} on ${trigger.target_array}: awaiting approval to promote",
+          "detail": "Requested through the orchestrator. Approve or reject within 24 hours. Promoting the target pod makes its volumes writable on ${trigger.target_array}; the source pod keeps serving production.",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    },
+    {
+      "id": "approve_promote",
+      "type": "approval",
+      "name": "Approve the promotion",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Promote pod ${trigger.pod} on ${trigger.target_array} for a DR failover test. The pod must be the target of an ActiveDR replica link; its volumes become writable on ${trigger.target_array} while the source pod keeps serving production. Writes made to the promoted pod are discarded when the test is reverted."
+      }
+    },
+    {
+      "id": "dr_promote",
+      "type": "aap_job_template",
+      "name": "Promote the target pod",
+      "parameters": {
+        "job_template_name": "FlashArray - DR promote",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashArray - ${trigger.target_array}"],
+        "extra_vars": {
+          "target_array": "${trigger.target_array}",
+          "pod": "${trigger.pod}"
+        }
+      }
+    },
+    {
+      "id": "notify_promoted",
+      "type": "aap_job_template",
+      "name": "Notify: pod promoted, run the test",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Pod ${trigger.pod} on ${trigger.target_array} promoted for the DR failover test",
+          "detail": "Promotion ${dr_promote.artifacts.promotion_status_before} -> ${dr_promote.artifacts.promotion_status_after}; replica link from ${dr_promote.artifacts.remote_array} (${dr_promote.artifacts.remote_pod}) ${dr_promote.artifacts.link_status_before} -> ${dr_promote.artifacts.link_status_after}; changed: ${dr_promote.artifacts.changed}. Run the application test against the pod's volumes on ${trigger.target_array} now, then approve the revert, which demotes the pod and discards the test's writes. The revert approval expires after 24 hours and leaves the pod promoted. AAP job: ${dr_promote.job_url}",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    },
+    {
+      "id": "approve_revert",
+      "type": "approval",
+      "name": "Approve the revert",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Demote pod ${trigger.pod} on ${trigger.target_array} to end the DR failover test. Every write made to the pod while it was promoted is discarded (the array keeps them in an undo-demote pod pending eradication) and the pod goes back to tracking its source. Approve once the application test is finished; a rejection or a timeout leaves the pod promoted."
+      }
+    },
+    {
+      "id": "dr_demote",
+      "type": "aap_job_template",
+      "name": "Demote the target pod",
+      "parameters": {
+        "job_template_name": "FlashArray - DR demote",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashArray - ${trigger.target_array}"],
+        "extra_vars": {
+          "target_array": "${trigger.target_array}",
+          "pod": "${trigger.pod}",
+          "quiesce": true
+        }
+      }
+    },
+    {
+      "id": "notify_reverted",
+      "type": "aap_job_template",
+      "name": "Notify: DR failover test reverted",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR failover test of pod ${trigger.pod} on ${trigger.target_array} reverted",
+          "detail": "Demotion ${dr_demote.artifacts.promotion_status_before} -> ${dr_demote.artifacts.promotion_status_after}; replica link ${dr_demote.artifacts.link_status_before} -> ${dr_demote.artifacts.link_status_after}; changed: ${dr_demote.artifacts.changed}; writes made during the test discarded: ${dr_demote.artifacts.test_writes_discarded}. The undo-demote pod the array leaves pending eradication must be eradicated before the next test of this pod. AAP jobs: ${dr_promote.job_url} (promote), ${dr_demote.job_url} (demote)",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    },
+    {
+      "id": "notify_promote_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: promotion rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR failover test of pod ${trigger.pod} on ${trigger.target_array} rejected or expired; nothing changed",
+          "detail": "The promotion approval was rejected or timed out after 24 hours. The pod is untouched. Raise a new request if the test is still wanted.",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    },
+    {
+      "id": "notify_revert_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: revert rejected, pod still promoted",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "critical",
+          "subject": "Pod ${trigger.pod} on ${trigger.target_array} is still promoted: the DR failover test was not reverted",
+          "detail": "The revert approval was rejected or timed out after 24 hours. The pod stays promoted and writable on ${trigger.target_array} and no longer tracks its source. Demote it with the FlashArray - DR demote job template (target_array ${trigger.target_array}, pod ${trigger.pod}) once the test is over; demoting discards the writes made during the test. Promote job: ${dr_promote.job_url}",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "failover_test_request", "to": "notify_requested"},
+    {"from": "notify_requested", "to": "approve_promote"},
+    {"from": "approve_promote", "to": "dr_promote", "from_port": "approved"},
+    {"from": "approve_promote", "to": "notify_promote_rejected", "from_port": "rejected"},
+    {"from": "dr_promote", "to": "notify_promoted"},
+    {"from": "notify_promoted", "to": "approve_revert"},
+    {"from": "approve_revert", "to": "dr_demote", "from_port": "approved"},
+    {"from": "approve_revert", "to": "notify_revert_rejected", "from_port": "rejected"},
+    {"from": "dr_demote", "to": "notify_reverted"}
+  ]
+}

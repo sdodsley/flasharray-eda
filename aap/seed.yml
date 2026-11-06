@@ -8,18 +8,20 @@
 #   export AAP_HOST=https://<gateway> AAP_TOKEN=<token>          # plus the ARRAY_*_URL / ARRAY_*_TOKEN pairs
 #   ansible-playbook -i aap/inventory/example.yml aap/seed.yml -e @vars/local-aap.yml
 #
-# Created, in order: the organization; the "FlashArray API" and "Orchestrator
-# service account" credential types; one credential per array (and one for
-# the orchestrator service account when its variables are set); the
-# "FlashArrays" inventory with one host per array plus localhost; the project;
-# the execution environment reference; one job template per playbook; the
-# controller-tier capacity workflow (request -> approval -> reclaim, notify on
-# failure); and, on the Event-Driven Ansible controller, a decision
-# environment, a project, a credential type, one credential per array and one
-# activation per rulebook. Nothing here reaches an array or the orchestrator;
-# aap/README.md lists what the seed cannot create. Secrets are read from the
-# environment variables named in the vars file and written nowhere by this
-# play.
+# Created, in order: the organization; the "FlashArray API", "FlashArray
+# fleet" and "Orchestrator service account" credential types; one credential
+# per array, one fleet credential carrying every array, and one for the
+# orchestrator service account when its variables are set; the "FlashArrays"
+# inventory with one host per array plus localhost; the project; the
+# execution environment reference; one job template per playbook, each with
+# the fleet credential attached; the controller-tier capacity workflow
+# (request -> approval -> reclaim, notify on failure); and, on the
+# Event-Driven Ansible controller, a decision environment, a project, the
+# same three credential types and credentials, and one activation per
+# platform rulebook (extensions/eda/rulebooks/platform/). Nothing here
+# reaches an array or the orchestrator; aap/README.md lists what the seed
+# cannot create. Secrets are read from the environment variables named in
+# the vars file and written nowhere by this play.
 - name: Seed Ansible Automation Platform for flasharray-eda
   hosts: localhost
   gather_facts: false
@@ -48,15 +50,23 @@
       aap_request_timeout: "{{ aap_request_timeout }}"
   vars:
     array_credential_prefix: "FlashArray - "
+    fleet_credential_name: "FlashArray fleet - {{ aap_organization }}"
     orchestrator_credential_name: "Orchestrator service account - flasharray-eda"
+    # the orchestrator credential, its EDA twin and the template that posts
+    # to the orchestrator exist only when the service account's client id is
+    # set in the environment
+    orchestrator_seeded: "{{ lookup('env', aap_orchestrator_client_id_env) | length > 0 }}"
     workflow_name: "FlashArray - capacity reclaim (controller tier)"
-    # Fixed names: orchestrator workflow definitions and rulebook actions
-    # refer to them, so a rename here is a rename everywhere. The credential
-    # list defaults to the default array's credential; notify needs none,
-    # the DR drill takes the credential of its first drill's target array
-    # (the array the drill copies on) and the orchestrator poster takes the
-    # service account. Every FlashArray API credential injects
-    # credential_array, and the playbooks refuse to act on any other array.
+    # Fixed names: orchestrator workflow definitions and the platform
+    # rulebooks' run_job_template actions refer to them, so a rename here is
+    # a rename everywhere. Every template carries the fleet credential, which
+    # injects every array's address and token as purefa_fleet_json;
+    # playbooks/tasks/resolve_array.yml picks the entry of the array a launch
+    # names and sets credential_array to it, so one template serves every
+    # array. A launch may still pass one array's "FlashArray API" credential
+    # instead (credential_names on an orchestrator node); the playbooks then
+    # refuse to act on any other array. The orchestrator poster also takes
+    # the service account.
     job_templates:
       - name: "FlashArray - capacity request"
         playbook: playbooks/capacity_request.yml
@@ -67,7 +77,6 @@
       - name: "FlashArray - notify"
         playbook: playbooks/notify.yml
         description: "Append a notify record to the alert log; artifact record_kind"
-        credentials: []
       - name: "FlashArray - expand volume"
         playbook: playbooks/expand_volume.yml
         description: "Grow one volume after checking its name and current size; artifacts volume, old_size, new_size"
@@ -76,7 +85,6 @@
         description: "Copy, verify and destroy a volume from the latest replicated snapshot; artifacts drills, failed_count"
         extra_vars:
           dr_drills: "{{ aap_dr_drills }}"
-        credentials: ["{{ array_credential_prefix }}{{ aap_dr_drills[0].target_array }}"]
       - name: "FlashArray - identify LED"
         playbook: playbooks/identify_led.yml
         description: "Light or clear a component's identify LED; artifacts component, led_state"
@@ -85,9 +93,9 @@
         description: "Reapply NTP or DNS from the git baseline after an audited change; artifacts ntp_changed, dns_changed"
       - name: "FlashArray - apply baseline"
         playbook: playbooks/apply_baseline.yml
-        description: "Apply the git baseline of the attached credential's array (one launch per array; localhost refreshes the checkout); artifacts ntp_changed, dns_changed, git_head"
-        # one launch applies one array's baseline: the attached credential's;
-        # localhost stays in so the first play still refreshes the checkout
+        description: "Apply the git baseline of the array in the limit (localhost refreshes the checkout); artifacts ntp_changed, dns_changed, git_head"
+        # one launch applies one array's baseline; localhost stays in so the
+        # first play still refreshes the checkout
         limit: "localhost,{{ aap_default_array }}"
       - name: "FlashArray - protect now"
         playbook: playbooks/protect_now.yml
@@ -95,11 +103,32 @@
       - name: "FlashArray - QoS cap"
         playbook: playbooks/qos_cap.yml
         description: "Apply or lift a temporary IOPS cap; artifacts volume, mode, applied_iops, previous_iops"
-      - name: "FlashArray - post orchestrator event"
+      - name: "FlashArray - remediate DNS"
+        playbook: playbooks/remediate_dns.yml
+        description: "Reapply the baseline DNS domain and nameservers to one array after a drift poll"
+      - name: "FlashArray - remediate NTP"
+        playbook: playbooks/remediate_ntp.yml
+        description: "Reapply the baseline NTP servers to one array after a drift poll"
+      - name: "FlashArray - replicate now"
+        playbook: playbooks/replicate_now.yml
+        description: "Take an immediate replicated snapshot of an overdue or stuck protection group"
+      - name: "FlashArray - preferred array"
+        playbook: playbooks/preferred_array.yml
+        description: "Point the hosts of a degraded stretched pod at the online array, or clear the preference on recovery"
+      - name: "FlashArray - alert runbook"
+        playbook: playbooks/alert_runbook.yml
+        description: "Route an opened alert through the alert-code runbook map: notify, ticket, or ticket plus per-code tasks"
+      - name: "FlashArray - orchestrator post"
         playbook: playbooks/orchestrator_post.yml
         description: "Post one event envelope to the automation orchestrator's EDA webhook trigger"
-        credentials: ["{{ orchestrator_credential_name }}"]
+        credentials: ["{{ fleet_credential_name }}", "{{ orchestrator_credential_name }}"]
         requires: orchestrator
+      - name: "FlashArray - DR promote"
+        playbook: playbooks/dr_promote.yml
+        description: "Promote the target pod of an ActiveDR replica link for a failover test; artifacts array, pod, promotion status before and after, link status, changed"
+      - name: "FlashArray - DR demote"
+        playbook: playbooks/dr_demote.yml
+        description: "Demote a promoted target pod again, discarding the writes made during the test; artifacts array, pod, promotion status before and after, link status, changed"
   tasks:
     - name: Refuse to run without the platform address and token
       ansible.builtin.assert:
@@ -120,6 +149,20 @@
       loop_control:
         label: "{{ item.name }}"
 
+    # The fleet credential's one input is a JSON list of every array's name,
+    # address and token; the list is built here from the environment and is
+    # held in a no_log fact.
+    - name: Collect every array's address and token for the fleet credential
+      ansible.builtin.set_fact:
+        fleet_arrays: >-
+          {{ fleet_arrays | default([]) + [{'name': item.name,
+             'fa_url': lookup('env', item.fa_url_env),
+             'api_token': lookup('env', item.api_token_env)}] }}
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
     # --- platform gateway ----------------------------------------------------
     - name: Organization
       ansible.platform.organization:
@@ -137,6 +180,15 @@
         injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_api_injectors.json') | from_json }}"
         state: present
 
+    - name: Credential type for the fleet (every array's address and token as one JSON list)
+      ansible.controller.credential_type:
+        name: FlashArray fleet
+        description: "A JSON list of {name, fa_url, api_token}, one per array, injected as the extra_var purefa_fleet_json; playbooks/tasks/resolve_array.yml picks the entry of the array a launch names"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_fleet_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_fleet_injectors.json') | from_json }}"
+        state: present
+
     - name: Credential type for the orchestrator service account
       ansible.controller.credential_type:
         name: Orchestrator service account
@@ -146,6 +198,8 @@
         injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_injectors.json') | from_json }}"
         state: present
 
+    # Kept beside the fleet credential for launches that pin one array
+    # (credential_names on an orchestrator node, or a person in the prompt).
     - name: One FlashArray API credential per array
       ansible.controller.credential:
         name: "{{ array_credential_prefix }}{{ item.name }}"
@@ -163,8 +217,20 @@
         label: "{{ item.name }}"
       no_log: true
 
+    - name: Fleet credential (every array in one credential)
+      ansible.controller.credential:
+        name: "{{ fleet_credential_name }}"
+        description: "name, fa_url and api_token of every array in aap_arrays, as one JSON list"
+        organization: "{{ aap_organization }}"
+        credential_type: FlashArray fleet
+        inputs:
+          arrays: "{{ fleet_arrays | to_json }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
     - name: Orchestrator service account credential (when its variables are set)
-      when: lookup('env', aap_orchestrator_client_id_env) | length > 0
+      when: orchestrator_seeded | bool
       ansible.controller.credential:
         name: "{{ orchestrator_credential_name }}"
         description: "Service account bound to this project's EDA trigger in the orchestrator"
@@ -183,7 +249,7 @@
     - name: Inventory
       ansible.controller.inventory:
         name: "{{ aap_inventory_name }}"
-        description: "One host per array, named as in purefa_arrays; fa_url and api_token come from the FlashArray API credentials, not from host variables"
+        description: "One host per array, named as in purefa_arrays; fa_url and api_token come from the FlashArray fleet or FlashArray API credentials, not from host variables"
         organization: "{{ aap_organization }}"
         variables:
           ansible_connection: local
@@ -194,14 +260,14 @@
       ansible.controller.host:
         name: localhost
         inventory: "{{ aap_inventory_name }}"
-        description: "notify, capacity request / reclaim and the DR drill run here"
+        description: "notify, capacity request / reclaim, alert runbook, the orchestrator post and the DR drill run here"
         state: present
 
     - name: One host per array
       ansible.controller.host:
         name: "{{ item.name }}"
         inventory: "{{ aap_inventory_name }}"
-        description: "FlashArray {{ item.name }}; address and token come from the credential {{ array_credential_prefix }}{{ item.name }}"
+        description: "FlashArray {{ item.name }}; address and token come from the credential {{ fleet_credential_name }} or {{ array_credential_prefix }}{{ item.name }}"
         state: present
       loop: "{{ aap_arrays }}"
       loop_control:
@@ -230,16 +296,16 @@
         state: present
 
     # Every template prompts for extra vars (target_array and the rest come
-    # from the launch), for credentials (so a launch can pick another
-    # array's credential; the default array's is attached) and for a limit
-    # (apply baseline is limited to the attached credential's array and a
-    # launch for another array changes both together). A credential for
-    # an array other than the one the launch names makes the playbook fail
-    # at its first task (credential_array) instead of acting on that array.
+    # from the launch), for credentials (the fleet credential is attached; a
+    # launch may swap it for one array's FlashArray API credential) and for
+    # a limit (apply baseline is limited to one array per launch). A
+    # single-array credential for an array other than the one the launch
+    # names makes the playbook fail at its credential_array check instead of
+    # acting on that array.
     - name: One job template per playbook
       when: >-
         item.requires | default('') != 'orchestrator'
-        or (aap_seed_orchestrator_template | bool and lookup('env', aap_orchestrator_client_id_env) | length > 0)
+        or (aap_seed_orchestrator_template | bool and orchestrator_seeded | bool)
       ansible.controller.job_template:
         name: "{{ item.name }}"
         description: "{{ item.description }}"
@@ -248,7 +314,7 @@
         playbook: "{{ item.playbook }}"
         inventory: "{{ aap_inventory_name }}"
         execution_environment: "{{ aap_ee_name }}"
-        credentials: "{{ item.credentials | default([array_credential_prefix ~ aap_default_array]) }}"
+        credentials: "{{ item.credentials | default([fleet_credential_name]) }}"
         extra_vars: "{{ aap_job_extra_vars | combine(item.extra_vars | default({})) }}"
         limit: "{{ item.limit | default(omit) }}"
         ask_variables_on_launch: true
@@ -335,7 +401,7 @@
     - name: Decision environment reference
       ansible.eda.decision_environment:
         name: "{{ aap_eda_de_name }}"
-        description: "Image from decision-environment/: ansible-rulebook, the plugins, the two collections and py-pure-client"
+        description: "Image from decision-environment/: ansible-rulebook, the sdodsley.flasharray_eda and everpure.flasharray collections and py-pure-client"
         image_url: "{{ aap_eda_de_image }}"
         pull_policy: "{{ aap_eda_de_pull_policy }}"
         organization_name: "{{ aap_organization }}"
@@ -350,8 +416,9 @@
         organization_name: "{{ aap_organization }}"
         state: present
 
-    # Same inputs as the controller type; EDA credentials inject variables,
-    # which the rulebooks and run_job_template actions can use.
+    # Same inputs as the controller types; EDA credentials inject variables
+    # into the activation, which the rulebooks and their run_job_template
+    # actions read.
     - name: EDA credential type for one array
       ansible.eda.credential_type:
         name: FlashArray API
@@ -360,6 +427,24 @@
         injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_api_injectors.json') | from_json }}"
         state: present
 
+    - name: EDA credential type for the fleet (the list the source plugin polls)
+      ansible.eda.credential_type:
+        name: FlashArray fleet
+        description: "A JSON list of {name, fa_url, api_token}, one per array, as the variable purefa_arrays the platform rulebooks hand to the purefa_events source"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_fleet_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_fleet_eda_injectors.json') | from_json }}"
+        state: present
+
+    - name: EDA credential type for the orchestrator service account
+      ansible.eda.credential_type:
+        name: Orchestrator service account
+        description: "Client credentials of an automation orchestrator service account: AO_CLIENT_ID and AO_CLIENT_SECRET in the environment, orchestrator_url as a variable"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_injectors.json') | from_json }}"
+        state: present
+
+    # Not attached to the activations (the fleet credential carries every
+    # array); seeded for a rulebook that polls one array only.
     - name: One EDA credential per array
       ansible.eda.credential:
         name: "{{ array_credential_prefix }}{{ item.name }}"
@@ -376,6 +461,46 @@
         label: "{{ item.name }}"
       no_log: true
 
+    - name: EDA fleet credential (every array in one credential)
+      ansible.eda.credential:
+        name: "{{ fleet_credential_name }}"
+        description: "name, fa_url and api_token of every array in aap_arrays, as one JSON list"
+        credential_type_name: FlashArray fleet
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          arrays: "{{ fleet_arrays | to_json }}"
+        state: present
+      no_log: true
+
+    - name: EDA orchestrator service account credential (when its variables are set)
+      when: orchestrator_seeded | bool
+      ansible.eda.credential:
+        name: "{{ orchestrator_credential_name }}"
+        description: "Service account bound to this project's EDA trigger in the orchestrator"
+        credential_type_name: Orchestrator service account
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          orchestrator_url: "{{ lookup('env', aap_orchestrator_url_env) }}"
+          client_id: "{{ lookup('env', aap_orchestrator_client_id_env) }}"
+          client_secret: "{{ lookup('env', aap_orchestrator_client_secret_env) }}"
+        state: present
+      no_log: true
+
+    # An activation's extra vars are the rulebook vars file minus the keys
+    # its credentials inject: purefa_arrays comes from the fleet credential
+    # and orchestrator_url from the orchestrator credential when that is
+    # attached (the controller refuses a key that both the extra vars and a
+    # credential define). aap_organization is added for the run_job_template
+    # actions. The vars file holds no secrets, so the fact is logged.
+    - name: Credentials and extra vars every activation carries
+      ansible.builtin.set_fact:
+        activation_credentials: "{{ [fleet_credential_name] + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}"
+        activation_extra_vars: >-
+          {{ lookup('file', aap_eda_vars_file) | from_yaml | dict2items
+             | rejectattr('key', 'in', ['purefa_arrays'] + (['orchestrator_url'] if orchestrator_seeded | bool else []))
+             | items2dict | combine({'aap_organization': aap_organization})
+             | to_nice_yaml(indent=2, width=1000) }}
+
     # ansible.eda.rulebook_activation cannot update an activation and, in
     # 2.13, creates it enabled whatever `enabled` says; so existing ones are
     # skipped and the enabled flag is enforced through the API afterwards.
@@ -389,27 +514,26 @@
       register: existing_activations
       no_log: true
 
-    - name: One rulebook activation per rulebook (disabled until the plugins are packaged)
+    # The EDA controller names a rulebook by its path relative to the
+    # project's extensions/eda/rulebooks directory, hence platform/<file>.
+    - name: One rulebook activation per platform rulebook
       ansible.eda.rulebook_activation:
         name: "FlashArray rulebook - {{ item | splitext | first }}"
-        description: "extensions/eda/rulebooks/{{ item }} with {{ aap_eda_vars_file | basename }} as extra vars"
+        description: "extensions/eda/rulebooks/platform/{{ item }} with {{ aap_eda_vars_file | basename }} (minus the credential-injected keys) as extra vars"
         project_name: "{{ aap_eda_project_name }}"
-        rulebook_name: "{{ item }}"
+        rulebook_name: "platform/{{ item }}"
         decision_environment_name: "{{ aap_eda_de_name }}"
         organization_name: "{{ aap_organization }}"
-        extra_vars: "{{ lookup('file', aap_eda_vars_file) }}"
-        # No array credentials are attached: the controller rejects two
-        # credentials of one injecting type on an activation ("Key: fa_url
-        # already exists in extra_vars"), and the plugins read their tokens
-        # from the environment anyway (aap/README.md).
+        extra_vars: "{{ activation_extra_vars }}"
+        eda_credentials: "{{ activation_credentials }}"
         enabled: "{{ aap_eda_activations_enabled | bool }}"
         restart_policy: "{{ aap_eda_restart_policy }}"
         log_level: "{{ aap_eda_log_level }}"
         state: present
       when: ('FlashArray rulebook - ' ~ (item | splitext | first)) not in (existing_activations.json.results | map(attribute='name') | list)
-      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/*.yml') | map('basename') | sort }}"
+      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | sort }}"
 
-    - name: Activations as they stand now
+    - name: Activations as they stand
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashArray%20rulebook%20-"
         headers:

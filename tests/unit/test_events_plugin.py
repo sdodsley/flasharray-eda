@@ -7,12 +7,15 @@ construction, all driven by a fake SDK client."""
 
 import asyncio
 import contextlib
+import json
+import logging
 import pathlib
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 NOW_MS = int(time.time() * 1000)
@@ -241,7 +244,9 @@ def test_documentation_block_covers_every_argument(events):
     assert read <= options, f"undocumented arguments: {sorted(read - options)}"
     assert doc["options"]["request_timeout"]["default"] == 30
     assert doc["options"]["growth_volumes"]["default"] == 500
-    assert yaml.safe_load(events.EXAMPLES)[0]["sources"][0]["purefa_events"]
+    assert yaml.safe_load(events.EXAMPLES)[0]["sources"][0][
+        "sdodsley.flasharray_eda.purefa_events"
+    ]
 
 
 # --- SDK client construction -----------------------------------------------
@@ -267,12 +272,58 @@ def test_client_is_built_with_timeouts_and_user_agent(events, monkeypatch):
 
 
 def test_array_requires_url_and_token(events):
-    import pytest
-
     with pytest.raises(ValueError):
         events.Array({"name": "a", "api_token": "t"}, False)
     with pytest.raises(ValueError):
         events.Array({"name": "a", "fa_url": "x"}, False)
+
+
+# --- the arrays argument as a string ---------------------------------------
+class _NoQueue:
+    async def put(self, event):
+        raise AssertionError("nothing should be queued")
+
+
+def test_arrays_argument_accepts_json_and_yaml_strings(events):
+    spec = [{"name": "a", "fa_url": "192.0.2.1", "api_token": "t"}]
+    assert events._decode_arrays(json.dumps(spec), "purefa_events") == spec
+    text = "- name: a\n  fa_url: 192.0.2.1\n  api_token: t\n"
+    assert events._decode_arrays(text, "purefa_events") == spec
+    assert events._decode_arrays(spec, "purefa_events") is spec
+    assert events._decode_arrays("  ", "purefa_events") is None
+    assert events._decode_arrays(None, "purefa_events") is None
+
+
+def test_main_decodes_the_string_before_validating_and_never_logs_the_token(
+    events, caplog
+):
+    token = "s3cret-token-value"
+    caplog.set_level(logging.DEBUG)
+    # the entries are validated as if they had arrived as a list
+    arrays = json.dumps([{"name": "a", "fa_url": "192.0.2.1"}])
+    with pytest.raises(ValueError, match="api_token or api_token_env"):
+        asyncio.run(events.main(_NoQueue(), {"arrays": arrays}))
+    # a complete entry passes that check; the signal check then fails, which
+    # shows the string was decoded, and neither the error nor a log record
+    # carries the token
+    arrays = json.dumps([{"name": "a", "fa_url": "192.0.2.1", "api_token": token}])
+    with pytest.raises(ValueError, match="unknown signals") as exc:
+        asyncio.run(events.main(_NoQueue(), {"arrays": arrays, "signals": "bogus"}))
+    assert token not in str(exc.value) and token not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['[{"name": "a", "api_token": "s3cret"', "just words s3cret", "42"],
+)
+def test_main_rejects_a_malformed_arrays_string_without_echoing_it(
+    events, caplog, text
+):
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(ValueError, match="JSON") as exc:
+        asyncio.run(events.main(_NoQueue(), {"arrays": text}))
+    assert "arrays" in str(exc.value)
+    assert "s3cret" not in str(exc.value) and "s3cret" not in caplog.text
 
 
 # --- alert diff ------------------------------------------------------------

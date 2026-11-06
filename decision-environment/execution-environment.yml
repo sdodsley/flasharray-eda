@@ -3,23 +3,55 @@
 # Containerfile; both produce the same tree. Paths are relative to this file.
 #   ansible-builder build -f decision-environment/execution-environment.yml -t flasharray-eda-de
 # (writes its build context to ./context, which is gitignored)
+#
+# The collection sdodsley.flasharray_eda is built from this checkout inside
+# the image build: additional_build_files copies the collection content
+# (galaxy.yml, meta/, extensions/, playbooks/, README.md, LICENSE) into the
+# build context as _build/flasharray_eda, and a galaxy requirement of type
+# `dir` pointing at that directory makes ansible-galaxy build and install it,
+# with its dependencies ansible.eda and everpure.flasharray (galaxy.yml), in
+# the galaxy stage (ansible-builder copies _build to /build and runs the
+# install from there). A `dir` requirement honours build_ignore, so the
+# artifact is the same as `make collection` produces. This is the form
+# ansible-builder v3 supports for content that is not published on a
+# Galaxy server; the alternative, a pre-built tarball placed in the context,
+# would need `make collection` to run before every image build.
 version: 3
 images:
   base_image:
     name: quay.io/ansible/ansible-rulebook:v1.3.2
 dependencies:
   python: requirements.txt
-  galaxy: ../requirements.yml
+  galaxy:
+    collections:
+      - name: /build/flasharray_eda
+        type: dir
 additional_build_files:
+  - src: ../galaxy.yml
+    dest: flasharray_eda
+  - src: ../LICENSE
+    dest: flasharray_eda
+  - src: ../README.md
+    dest: flasharray_eda
+  - src: ../meta
+    dest: flasharray_eda
   - src: ../extensions
-    dest: extensions
+    dest: flasharray_eda
   - src: ../playbooks
-    dest: playbooks
+    dest: flasharray_eda
 additional_build_steps:
+  # the base image keeps ansible.eda under /app/.ansible/collections and the
+  # galaxy stage leaves an already-installed dependency alone, so the runtime
+  # path names both directories (same as the Containerfile)
+  prepend_galaxy:
+    - ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/.ansible/collections
   append_final:
-    - COPY _build/extensions /opt/flasharray-eda/extensions
-    - COPY _build/playbooks /opt/flasharray-eda/playbooks
+    # the rulebooks and playbooks as plain files for standalone runs that
+    # name them by path; the collection content under _build/flasharray_eda
+    - COPY _build/flasharray_eda/extensions /opt/flasharray-eda/extensions
+    - COPY _build/flasharray_eda/playbooks /opt/flasharray-eda/playbooks
     - RUN mkdir -p /var/log/flasharray-eda /var/lib/flasharray-eda/requests && chown -R 1001:0 /var/log/flasharray-eda /var/lib/flasharray-eda && chmod -R g+rwX /var/log/flasharray-eda /var/lib/flasharray-eda
+    - ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/.ansible/collections
     - ENV ANSIBLE_LOCALHOST_WARNING=False
     - WORKDIR /opt/flasharray-eda
 options:

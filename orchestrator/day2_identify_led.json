@@ -1,0 +1,80 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - identify LED (day 2)",
+  "description": "An operator asks for the identify LED on a hardware component to be lit or cleared, for example before a field engineer swaps a drive. No approval: the LED is set through the FlashArray collection and the outcome is logged with the AAP job link. A component without an identify LED is reported, not retried.",
+  "triggers": [
+    {
+      "id": "led_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "component", "led_state"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "component": {
+              "type": "string",
+              "title": "Component",
+              "description": "Hardware component name as the array lists it under /hardware, for example CH0.BAY3, CT1 or SH1.NVB0",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 64
+            },
+            "led_state": {
+              "type": "boolean",
+              "title": "Identify LED on",
+              "description": "true lights the identify LED, false clears it",
+              "default": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "identify_led",
+      "type": "aap_job_template",
+      "name": "Set the identify LED",
+      "parameters": {
+        "job_template_name": "FlashArray - identify LED",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashArray - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "component": "${trigger.component}",
+          "led_state": "${trigger.led_state}",
+          "severity": "info"
+        }
+      }
+    },
+    {
+      "id": "notify_led",
+      "type": "aap_job_template",
+      "name": "Notify: identify LED set",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Identify LED ${identify_led.artifacts.led_state} on ${trigger.array} ${trigger.component}",
+          "detail": "Changed: ${identify_led.artifacts.led_changed}; error: ${identify_led.artifacts.led_error}. AAP job: ${identify_led.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "led_request", "to": "identify_led"},
+    {"from": "identify_led", "to": "notify_led"}
+  ]
+}

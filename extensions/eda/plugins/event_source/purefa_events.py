@@ -17,6 +17,10 @@ arrays            list of arrays (required). Each entry:
                     fa_url_env    name of an environment variable holding it
                     api_token     API token, or
                     api_token_env name of an environment variable holding it
+                  A JSON string (or a YAML string) that decodes to that list
+                  is accepted too, so a platform credential can inject the
+                  list as one variable; it is decoded before validation and
+                  never echoed into an error or a log.
 audit_batch       audits: records fetched per page (default 200). Up to 10
                   pages are read when more than that arrived between polls;
                   beyond that the oldest are skipped and a purefa_poll_error
@@ -176,6 +180,9 @@ options:
       - Arrays to poll. Each entry has C(name) (the event's array field and
         inventory host name), C(fa_url) or C(fa_url_env), and C(api_token) or
         C(api_token_env); the C(_env) forms name environment variables.
+      - A JSON string is accepted so a platform credential can inject the
+        list as one extra var (a YAML string decodes the same way); the
+        string is decoded before validation and is never written to a log.
     type: list
     elements: dict
     required: true
@@ -296,7 +303,7 @@ EXAMPLES = r"""
 - name: FlashArray alerts and health
   hosts: all
   sources:
-    - purefa_events:
+    - sdodsley.flasharray_eda.purefa_events:
         arrays: "{{ purefa_arrays }}"
         signals: [alerts, health]
         alerts_interval: 60
@@ -313,6 +320,7 @@ EXAMPLES = r"""
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -320,6 +328,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import urllib3
 from pypureclient import flasharray
+
+try:
+    import yaml
+except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
+    yaml = None
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +356,37 @@ def _as_list(value):
     if isinstance(value, str):
         return [v.strip() for v in value.split(",") if v.strip()]
     return list(value)
+
+
+def _decode_arrays(value, plugin):
+    """The arrays argument as the structure the plugin documents.
+
+    A platform credential injects the list (or mapping) as one string
+    variable, so a JSON string, or a YAML string, is decoded here before the
+    argument is validated. The text is never echoed into an error message or
+    a log record: it carries API tokens.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        decoded = None
+    if not isinstance(decoded, (list, dict)) and yaml is not None:
+        try:
+            decoded = yaml.safe_load(text)
+        except yaml.YAMLError:
+            decoded = None
+    if isinstance(decoded, (list, dict)):
+        return decoded
+    raise ValueError(
+        f"{plugin}: arrays is a string that does not decode as JSON (or YAML) "
+        "into the documented structure; the text is not shown because it may "
+        "hold API tokens"
+    )
 
 
 def _truthy(value, default=False):
@@ -1365,7 +1409,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
     verify = _truthy(args.get("verify_ssl"), False)
     if not verify:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    specs = args.get("arrays") or []
+    specs = _decode_arrays(args.get("arrays"), "purefa_events") or []
     if isinstance(specs, dict):
         specs = [dict(name=k, **v) for k, v in specs.items()]
     request_timeout = float(args.get("request_timeout", 30) or 30)
@@ -1393,7 +1437,6 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
 
 if __name__ == "__main__":
     # Manual test: python purefa_events.py <name> <fa_url> <TOKEN_ENV_VAR> [signals] [interval]
-    import json
     import sys
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)

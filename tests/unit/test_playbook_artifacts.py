@@ -6,8 +6,10 @@ one ansible.builtin.set_stats task (aggregate off, per host off, run once on
 localhost) that publishes the documented keys; expand_volume.yml keeps the
 project's guard rails; every array-facing playbook refuses to run with
 another array's credential (credential_array, injected by the FlashArray
-API credential type); and aap/seed.yml carries the fixed job template names
-and loads its credential types from JSON that parses."""
+API credential type); every array-facing playbook resolves the array's
+credentials through playbooks/tasks/resolve_array.yml before it touches the
+token; and aap/seed.yml carries the fixed job template names and loads its
+credential types from JSON that parses."""
 
 import json
 import pathlib
@@ -49,8 +51,10 @@ TASK_FILES = {"dr_drill_one.yml"}
 # inventory_hostname and is added at test time
 CREDENTIAL_ARRAY_CHECKS = {
     "capacity_request.yml": "at_risk_array",
+    "dr_demote.yml": "inventory_hostname",
     "capacity_reclaim.yml": "request.array",
     "dr_drill_one.yml": "drill.target_array",
+    "dr_promote.yml": "inventory_hostname",
 }
 CREDENTIAL_GUARD = "credential_array is not defined or credential_array == {}"
 
@@ -65,7 +69,38 @@ JOB_TEMPLATE_NAMES = {
     "FlashArray - apply baseline",
     "FlashArray - protect now",
     "FlashArray - QoS cap",
-    "FlashArray - post orchestrator event",
+    "FlashArray - remediate DNS",
+    "FlashArray - remediate NTP",
+    "FlashArray - replicate now",
+    "FlashArray - preferred array",
+    "FlashArray - alert runbook",
+    "FlashArray - orchestrator post",
+    "FlashArray - DR promote",
+    "FlashArray - DR demote",
+}
+
+RESOLVE_ARRAY = "{{ playbook_dir }}/tasks/resolve_array.yml"
+# playbook -> the expression it resolves; alert_runbook resolves only for a
+# per-code runbook (its other routes touch no array) and capacity_request
+# only when the array is an inventory host (the Alertmanager path may name
+# one that is not, and the request must still be written)
+RESOLVES = {
+    "alert_runbook.yml": "target_array",
+    "apply_baseline.yml": "inventory_hostname",
+    "capacity_reclaim.yml": "request.array",
+    "capacity_request.yml": "at_risk_array",
+    "dr_demote.yml": "inventory_hostname",
+    "dr_drill_one.yml": "drill.target_array",
+    "dr_promote.yml": "inventory_hostname",
+    "expand_volume.yml": "inventory_hostname",
+    "identify_led.yml": "inventory_hostname",
+    "preferred_array.yml": "inventory_hostname",
+    "protect_now.yml": "inventory_hostname",
+    "qos_cap.yml": "inventory_hostname",
+    "reconcile.yml": "inventory_hostname",
+    "remediate_dns.yml": "inventory_hostname",
+    "remediate_ntp.yml": "inventory_hostname",
+    "replicate_now.yml": "inventory_hostname",
 }
 
 SET_STATS = "ansible.builtin.set_stats"
@@ -235,7 +270,8 @@ def test_seed_variables_are_documented_and_hold_no_lab_specifics(repo_root):
         for t in _seed(repo_root)[0]["tasks"]
         if any(k.endswith(".credential") for k in t)
     ]
-    assert len(credential_tasks) == 3
+    # per array, fleet and orchestrator, for the controller and for EDA
+    assert len(credential_tasks) == 6
     for task in credential_tasks:
         assert task.get("no_log") is True, f"{task['name']}: credential without no_log"
 
@@ -318,12 +354,15 @@ def test_playbooks_refuse_another_arrays_credential(repo_root):
         doc = _load(repo_root / "playbooks" / name)
         conditions = _assert_conditions(doc, name in TASK_FILES)
         assert CREDENTIAL_GUARD.format(array) in conditions, f"{name}: no guard"
-    # the drill's guard is the first task of its block, so a mismatch is
-    # recorded as a failed drill and the cleanup never touches the other array
+    # the drill resolves its target's credentials and then checks the guard
+    # as the first two tasks of its block, so a missing entry or a mismatch
+    # is recorded as a failed drill and the cleanup never touches another
+    # array
     drill = _load(repo_root / "playbooks" / "dr_drill_one.yml")
     block = next(t for t in drill if "block" in t)
-    first = block["block"][0]["ansible.builtin.assert"]["that"]
-    assert CREDENTIAL_GUARD.format("drill.target_array") in first
+    assert "ansible.builtin.include_tasks" in block["block"][0]
+    second = block["block"][1]["ansible.builtin.assert"]["that"]
+    assert CREDENTIAL_GUARD.format("drill.target_array") in second
     cleanup = next(
         t for t in block["always"] if "everpure.flasharray.purefa_volume" in t
     )
@@ -365,14 +404,108 @@ def test_seed_limits_apply_baseline_to_the_attached_credentials_array(repo_root)
     assert template["ask_limit_on_launch"] is True
 
 
-def test_seed_attaches_the_drill_targets_credential(repo_root):
-    play = _seed(repo_root)[0]
-    drill = next(
-        t for t in play["vars"]["job_templates"] if t["name"] == "FlashArray - DR drill"
+def _ordered_tasks(doc, task_file):
+    """Every task in run order, blocks flattened (rescue and always last)."""
+    out = []
+
+    def walk(tasks):
+        for task in tasks:
+            if "block" in task:
+                walk(task["block"])
+                walk(task.get("rescue", []))
+                walk(task.get("always", []))
+            else:
+                out.append(task)
+
+    if task_file:
+        walk(doc)
+    else:
+        for play in doc:
+            for key in ("pre_tasks", "tasks", "post_tasks"):
+                walk(play.get(key, []))
+    return out
+
+
+def _include_file(task):
+    """The file an include_tasks task names, written as a string or a dict."""
+    args = task.get("ansible.builtin.include_tasks")
+    return args.get("file") if isinstance(args, dict) else args
+
+
+def test_array_facing_playbooks_resolve_the_array_before_touching_the_token(
+    repo_root,
+):
+    """Every playbook that uses api_token first includes resolve_array.yml
+    with resolve_array_name set to the array it acts on, and the include
+    comes before any task that references the token; playbooks that never
+    touch an array (notify, orchestrator_post) include nothing."""
+    playbooks = repo_root / "playbooks"
+    for path in sorted(playbooks.glob("*.yml")):
+        doc = _load(path)
+        tasks = _ordered_tasks(doc, path.name in TASK_FILES)
+        includes = [t for t in tasks if _include_file(t) == RESOLVE_ARRAY]
+        if path.name not in RESOLVES:
+            assert not includes, f"{path.name}: includes resolve_array.yml"
+            assert "api_token" not in path.read_text(), f"{path.name}: unresolved"
+            continue
+        assert len(includes) == 1, f"{path.name}: expected one resolve include"
+        include = includes[0]
+        expected = "{{ " + RESOLVES[path.name] + " }}"
+        assert include["vars"]["resolve_array_name"] == expected, path.name
+        # alert_runbook.yml itself never names the token: its per-code task
+        # files do, delegated to the array, so only the include is checked
+        first_token = next(
+            (
+                i
+                for i, t in enumerate(tasks)
+                if "api_token" in yaml.safe_dump(t, default_flow_style=False)
+            ),
+            None,
+        )
+        if first_token is not None:
+            assert tasks.index(include) < first_token, f"{path.name}: token late"
+    tasks = _load(playbooks / "tasks" / "resolve_array.yml")
+    # every task that handles the token is no_log, and the fleet entry is
+    # applied to the array's own host so hostvars[<array>] sees it
+    for task in tasks:
+        if "set_fact" in str(task):
+            assert task.get("no_log") is True, task["name"]
+    last = tasks[-1]
+    assert set(last["ansible.builtin.set_fact"]) == {
+        "fa_url",
+        "api_token",
+        "credential_array",
+    }
+    assert last["delegate_to"] == "{{ resolve_array_name }}"
+    assert last["delegate_facts"] is True
+    refusal = next(t for t in tasks if "ansible.builtin.assert" in t)
+    assert "purefa_fleet_json is defined" in refusal["ansible.builtin.assert"]["that"]
+    assert "FlashArray fleet" in refusal["ansible.builtin.assert"]["fail_msg"]
+    assert "FlashArray API" in refusal["ansible.builtin.assert"]["fail_msg"]
+
+
+def test_fleet_credential_type_files_parse_and_match(repo_root):
+    """The FlashArray fleet type has one secret multiline input, arrays, that
+    the controller injects as purefa_fleet_json (resolve_array.yml reads it)
+    and the EDA controller as purefa_arrays (the source plugins decode the
+    JSON string)."""
+    files = repo_root / "aap" / "files"
+    inputs = json.loads(
+        (files / "credential_type_flasharray_fleet_inputs.json").read_text()
     )
-    assert drill["credentials"] == [
-        "{{ array_credential_prefix }}{{ aap_dr_drills[0].target_array }}"
-    ]
+    assert [f["id"] for f in inputs["fields"]] == ["arrays"]
+    field = inputs["fields"][0]
+    assert field["secret"] is True and field["multiline"] is True
+    assert field["label"] == "Arrays (JSON)"
+    assert inputs["required"] == ["arrays"]
+    controller = json.loads(
+        (files / "credential_type_flasharray_fleet_injectors.json").read_text()
+    )
+    assert controller == {"extra_vars": {"purefa_fleet_json": "{{ arrays }}"}}
+    eda = json.loads(
+        (files / "credential_type_flasharray_fleet_eda_injectors.json").read_text()
+    )
+    assert eda == {"extra_vars": {"purefa_arrays": "{{ arrays }}"}}
 
 
 def test_every_rulebook_gets_an_activation_name(repo_root):

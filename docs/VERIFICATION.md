@@ -89,6 +89,33 @@ snapshots.
 | syslog listener | runs `syslog.yml` and sends lines over UDP and then TCP with `tests/syslog_send.py` | both transports deliver; a human's `purevol destroy` and the alert produce notifications, the test line is logged |
 | Alertmanager | runs `alertmanager.yml` and sends one webhook payload with a replica-link alert, a hardware alert and a resolved capacity alert (README 'Testing' shows a representative body) | the hardware alert lights the identify LED on a controller of the real array (cleared by the test); the others notify and log |
 
+## Exercised through Prometheus and Alertmanager
+
+Prometheus 3.5 and Alertmanager 0.28 run as containers beside the arrays,
+with [prometheus.example.yml](../prometheus/prometheus.example.yml) and
+[alertmanager.example.yml](../prometheus/alertmanager.example.yml) filled in
+for two arrays: one scrape job per array against the array's native
+OpenMetrics exporter (`/metrics?namespace=purefa`, the API token as a bearer
+credential, `array_name` set as a target label). Both targets scrape in
+under a second (about 3,800 series per array on Purity//FA 6.10.6) and all
+eleven rules of [flasharray.rules.yml](../prometheus/flasharray.rules.yml)
+load and evaluate. The exporter facts the rules are written around:
+`purefa_array_space_utilization` is the used percentage, status is a label
+with value 1 on `purefa_hw_component_status` and `purefa_drive_capacity_bytes`,
+replica links carry `local_pod`, `remote`, `remote_pod` and `status`,
+latency has a `dimension` label (`usec_per_write_op` and the like), there is
+no family for the array's open alerts or its array connections, and only
+`purefa_info` carries `array_name`.
+
+The chain is exercised with a lab-only rule file that lowers the capacity
+threshold to one percent (the shipped rules stay at 85): FlashArrayCapacityHigh
+fires for the array at 2.6 percent used, Alertmanager delivers it to
+`alertmanager.yml` running from the decision-environment image on port 5002,
+and `capacity_request.yml` runs against the array (one `capacity_request`
+record with `status: awaiting_approval`, the request file written, the
+four snapshots pending eradication listed as candidates). Removing the
+override resolves the alert.
+
 ## Exercised on a platform
 
 The objects `aap/seed.yml` builds are seeded on Ansible Automation Platform
@@ -102,7 +129,15 @@ are in [aap/README.md](../aap/README.md). The rulebook activations are
 created disabled and not started.
 
 The EDA-to-orchestrator handoff is exercised end to end against a live
-orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md).
+orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md). On the same
+orchestrator, `orchestrator/day2_expand_volume.json` runs from its manual
+trigger against a scratch volume (notify, approval, the expand job grows
+the volume from one to two gibibytes and publishes `old_size`, `new_size`
+and `changed`, notify) and `orchestrator/dr_drill_schedule.json`,
+published with its schedule and started by hand from its scheduled
+trigger, runs the DR drill job (one drill against the replicated
+protection group, `failed_count` 0), takes the condition's `false` port
+and notifies the summary.
 
 ## Replayed only
 
@@ -120,19 +155,23 @@ event takes the same path as a live one.
   and `syslog.yml` are exercised with replayed lines
   (`tests/syslog_send.py`); the parser follows the layout published by
   Pure's SIEM partners, and the first real line may need a regex adjustment.
-- The Prometheus rules against a live Prometheus. They are written from the
-  exporter's metric specification; check metric and label names against the
-  exporter version in use.
-- The decision environment image. Neither definition is built or run, and
-  CI runs the static checks only. Both pin
-  `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
-  `latest` on that repository is not guaranteed to be the newest release.
-  The image serves `ansible-rulebook --source-dir` runs only; EDA Controller
-  activations need the plugins in a collection ([PACKAGING.md](PACKAGING.md)).
+- The Prometheus rules other than FlashArrayCapacityHigh firing for real:
+  all eleven load and evaluate against live series, and the capacity rule
+  is driven through Alertmanager to the rulebook; the hardware, drive,
+  latency, replication and scrape rules wait for a real fault.
+- The decision environment image from the ansible-builder definition. The
+  Containerfile image is built and runs `alertmanager.yml` (above); CI runs
+  the static checks only. Both pin `quay.io/ansible/ansible-rulebook:v1.3.2`,
+  the tested ansible-rulebook; `latest` on that repository is not
+  guaranteed to be the newest release.
 - A rulebook activation launching the platform workflow. The workflow is
   launched by hand and pauses at its approval node (above); whether an
   approval node pauses a workflow launched from a rulebook as a manual
   launch does is unconfirmed, because the activations are not started.
+- The ActiveDR failover test (`playbooks/dr_promote.yml`,
+  `playbooks/dr_demote.yml`, `orchestrator/dr_failover_test.json`): both
+  playbooks pass the syntax check and the static tests; no pod is promoted
+  or demoted by them on an array.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

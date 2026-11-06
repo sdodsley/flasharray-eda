@@ -2,6 +2,8 @@
 # image already ships ansible-rulebook, ansible-core and aiohttp (which the
 # ansible.eda webhook and alertmanager sources need), so only the SDK the
 # plugins and playbooks import is listed. The root requirements.txt is the
-# venv list for a checkout and is not installed here. The collection list is
-# shared with the checkout: ../requirements.yml.
+# venv list for a checkout and is not installed here. The collections come
+# with the collection built from this checkout: ansible.eda and
+# everpure.flasharray are its dependencies (galaxy.yml at the repository
+# root).
 py-pure-client>=1.94.1
