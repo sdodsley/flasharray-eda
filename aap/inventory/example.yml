@@ -1,0 +1,9 @@
+---
+# Inventory for aap/seed.yml. The seed talks to the platform's API from the
+# machine it runs on, so localhost is all it needs; the arrays are not hosts
+# here, they become hosts of the "FlashArrays" inventory inside the platform.
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"

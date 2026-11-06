@@ -1,0 +1,47 @@
+{
+  "schema_version": "2.0.0",
+  "name": "fixture",
+  "description": "A deliberately broken definition for tests/unit/test_ao_lint.py",
+  "triggers": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "parameters": {}
+    }
+  ],
+  "nodes": [
+    {
+      "id": "gate",
+      "type": "approval",
+      "name": "Gate",
+      "parameters": {
+        "approver_group_ids": [
+          "REPLACE_AT_SYNC"
+        ],
+        "timeout": 3600
+      }
+    },
+    {
+      "id": "after",
+      "type": "converge",
+      "name": "After",
+      "parameters": {}
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "gate"
+    },
+    {
+      "from": "gate",
+      "to": "after",
+      "from_port": "approved"
+    },
+    {
+      "from": "gate",
+      "to": "after",
+      "from_port": "rejected"
+    }
+  ]
+}

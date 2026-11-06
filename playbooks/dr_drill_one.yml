@@ -14,6 +14,16 @@
 
 - name: Find, copy and verify, then record whatever happened
   block:
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array and hostvars[<any array>].fa_url points at that array,
+    # so a drill whose target is another array is failed (and recorded as
+    # critical below) instead of being run on the wrong one.
+    - name: Refuse to drill with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == drill.target_array
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ drill.target_array }}"
+
     - name: Find the latest completed replicated snapshot of {{ drill.source_array ~ ':' ~ drill.pgroup ~ ' on ' ~ drill.target_array }}
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
@@ -112,7 +122,7 @@
         name: "{{ drill_copy }}"
         state: absent
         eradicate: true
-      when: drill.target_array in hostvars  # a bad dr_drills entry is still recorded below
+      when: drill.target_array in hostvars and credential_array | default(drill.target_array) == drill.target_array  # a bad entry or credential is still recorded below
       register: cleanup
       failed_when: false  # the copy may never have been made; a copy that could not be destroyed is recorded
 
@@ -136,3 +146,23 @@
           DR drill {{ drill.target_array }} <- {{ drill.source_array }}:{{ drill.pgroup }}:
           {{ 'FAILED ' ~ drill_error if drill_error
              else 'OK ' ~ drill_snap.snapshot ~ ' volume ' ~ drill_snap.volume ~ ' copied and verified' }}
+
+    # drills_done accumulates across the drills dr_drill.yml includes; the
+    # artifacts below describe this drill alone and dr_drill.yml replaces them
+    # with the whole run at the end (aggregate is off, so the last writer
+    # wins).
+    - name: Keep this drill for the run's artifacts
+      ansible.builtin.set_fact:
+        drills_done: >-
+          {{ drills_done | default([]) + [{'target_array': drill.target_array, 'source_array': drill.source_array,
+                                           'pgroup': drill.pgroup, 'result': 'failed' if drill_error else 'ok',
+                                           'error': drill_error | trim}] }}
+
+    - name: Publish this drill as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'drills': drills_done[-1:], 'failed_count': (1 if drill_error else 0)} }}
+      run_once: true
+      delegate_to: localhost

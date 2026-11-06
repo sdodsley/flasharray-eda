@@ -14,6 +14,14 @@
 # against a workflow whose first node is a manual approval and the webhook
 # ruleset is not needed.
 #
+# With orchestrator_enabled true (vars) the risk rule instead hands the event
+# to the automation orchestrator (playbooks/orchestrator_post.yml posts it to
+# the EDA trigger named by orchestrator_paths.capacity) and the approval
+# happens in a workflow there; no request file is written and the approvals
+# webhook below is idle. With it false nothing changes. docs/ORCHESTRATOR.md
+# has the contract; the switch is a literal in a condition because rulebook
+# conditions take no filters or defaults.
+#
 # The approvals webhook needs a bearer token: APPROVAL_TOKEN comes from the
 # environment (run.sh passes it with --env-vars; it never sits in a vars file)
 # and an approver sends -H "Authorization: Bearer $APPROVAL_TOKEN". Keep the
@@ -39,7 +47,8 @@
     - name: Array over capacity risk threshold - raise an approval request
       condition: >-
         event.purefa_capacity.used_pct is defined and
-        event.purefa_capacity.used_pct >= vars.capacity_risk_pct
+        event.purefa_capacity.used_pct >= vars.capacity_risk_pct and
+        vars.orchestrator_enabled == false
       throttle:
         once_within: 24 hours
         group_by_attributes:
@@ -58,6 +67,28 @@
             pending_eradication_snapshots: "{{ event.purefa_capacity.pending_eradication_snapshots }}"
             candidate_targets: "{{ event.purefa_capacity.others }}"
             request_dir: "{{ request_dir }}"
+            alert_log: "{{ alert_log }}"
+
+    # Same trigger and throttle as the rule above; the whole event travels so
+    # the workflow sees every field the request file would have held.
+    - name: Array over capacity risk threshold - hand the event to the orchestrator
+      condition: >-
+        event.purefa_capacity.used_pct is defined and
+        event.purefa_capacity.used_pct >= vars.capacity_risk_pct and
+        vars.orchestrator_enabled == true
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/orchestrator_post.yml
+          extra_vars:
+            orchestrator_url: "{{ orchestrator_url }}"
+            orchestrator_webhook_path: "{{ orchestrator_paths.capacity }}"
+            orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
+            event: "{{ event }}"
+            array: "{{ event.purefa_capacity.array }}"
             alert_log: "{{ alert_log }}"
 
     - name: Array will be full within the warning horizon - notify

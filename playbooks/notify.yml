@@ -31,3 +31,13 @@
     - name: Show the alert
       ansible.builtin.debug:
         msg: "[{{ alert_record.severity | upper }}] {{ alert_record.subject }} :: {{ alert_record.detail }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the record kind as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'record_kind': alert_record.kind, 'severity': alert_record.severity, 'array': alert_record.array} }}
+      run_once: true
+      delegate_to: localhost

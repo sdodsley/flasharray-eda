@@ -1,0 +1,48 @@
+{
+  "schema_version": "2.0.0",
+  "name": "fixture",
+  "description": "A deliberately broken definition for tests/unit/test_ao_lint.py",
+  "triggers": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "parameters": {}
+    }
+  ],
+  "nodes": [
+    {
+      "id": "join",
+      "type": "converge",
+      "name": "Join",
+      "parameters": {}
+    },
+    {
+      "id": "a",
+      "type": "aap_job_template",
+      "name": "Notify",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "Default",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "fixture"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "join"
+    },
+    {
+      "from": "join",
+      "to": "a"
+    },
+    {
+      "from": "a",
+      "to": "join"
+    }
+  ]
+}

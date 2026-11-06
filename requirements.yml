@@ -1,6 +1,10 @@
 ---
 # Collections the rulebooks and playbooks use.
 #   ansible-galaxy collection install -r requirements.yml
+# The Ansible Automation Platform seed (aap/seed.yml) also needs
+# ansible.platform and ansible.controller, which Red Hat publishes on
+# Automation Hub only; they are listed in aap/requirements.yml so this file
+# stays installable from galaxy.ansible.com (make deps, CI).
 collections:
   - name: ansible.eda
     version: ">=2.13.0"

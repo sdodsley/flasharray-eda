@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+- Orchestrator handoff ([docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md)): a
+  per-site switch `orchestrator_enabled` (default false) routes the
+  capacity-at-risk rule to the new `playbooks/orchestrator_post.yml`,
+  which obtains a client-credentials token from Red Hat's automation
+  orchestrator and posts the event to the workflow's EDA trigger as a
+  `flasharray-eda/1` envelope. A 202 is recorded with its execution id;
+  401, 403, 413, a connection failure or a body over 1000000 bytes is
+  recorded as a warning and never fails the rule. Credentials are the
+  `AO_CLIENT_ID` / `AO_CLIENT_SECRET` environment variables
+  (`env.example`; `run.sh` forwards them with `--env-vars`). New vars
+  `orchestrator_url`, `orchestrator_paths`, `orchestrator_validate_certs`;
+  existing `vars/local-*.yml` files need `orchestrator_enabled: false`
+  added. With the switch off, behaviour is unchanged.
+- `tests/mock_orchestrator.py` (standard library) mocks the token and EDA
+  webhook endpoints; `tests/unit/test_orchestrator_bridge.py` runs the
+  playbook against it (skipped without `ansible-playbook`);
+  `tests/replay_capacity.yml` replays one capacity event through the real
+  rules for an end-to-end run with ansible-rulebook.
+- `orchestrator/`: three workflow definitions for the automation
+  orchestrator (capacity reclaim with approval, day-2 expand volume,
+  nightly DR drill) with `REPLACE_AT_SYNC` placeholders for per-environment
+  ids and `job_templates.txt`
+  ([orchestrator/README.md](orchestrator/README.md)); `tools/ao_lint.py`
+  lints them offline and `make lint-ao` runs it in `make check` and CI.
+- Every action playbook ends with an `ansible.builtin.set_stats` task
+  publishing job artifacts for workflow and orchestrator nodes
+  (`request_id` / `candidate_count` / `candidates`, `failed_count` /
+  `drills`, `old_size` / `new_size`, ...; keys in orchestrator/README.md);
+  alert-log records are unchanged. New `playbooks/expand_volume.yml` (day-2
+  volume growth with size and name guards). `capacity_request.yml`
+  publishes `candidates` as the request file's `{volumes, snapshots}` dict
+  in full, and `capacity_reclaim.yml` rebuilds the request from the `array`
+  (or `at_risk_array`) and `candidates` extra vars when the request file is
+  not there (a later job in a fresh execution environment), so an approved
+  request no longer fails on a missing file.
+- `aap/seed.yml` seeds AAP 2.7 (organization, credential types, credentials
+  from the environment, inventory, project, execution environment, eleven
+  job templates, the controller-tier capacity workflow, EDA objects with
+  activations disabled); `aap/README.md`. The `FlashArray API` credential
+  type carries the array's inventory name (`array_name`) and injects it as
+  `credential_array`; every array-facing playbook refuses to run when that
+  is not the array it was asked to act on, the orchestrator's capacity
+  nodes pick the event's array's credential, and the DR drill template
+  takes the credential of its first drill's target array.
+- New unit tests: `tests/unit/test_ao_lint.py` (every linter rule has a
+  fixture; the expand-volume form and playbook agree on sizes) and
+  `tests/unit/test_playbook_artifacts.py` (artifacts, credential guard,
+  seed).
+
 ## 0.1.0 (2026-11-04)
 
 First tagged state of the prototype.

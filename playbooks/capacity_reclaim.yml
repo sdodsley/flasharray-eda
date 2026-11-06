@@ -14,6 +14,17 @@
 # request_id arrives in a webhook body, so it is checked against the shape
 # capacity_request.yml generates (<array>-<digits>) before it is used in a
 # path.
+# On Ansible Automation Platform this runs as a later job than the request,
+# usually in a fresh execution environment whose request_dir is empty
+# (aap/README.md, "Paths inside the execution environment"). The launching
+# workflow or orchestrator node then passes the request job's artifacts,
+# array (or at_risk_array) and candidates, together with
+# rebuild_from_artifacts: true, and the request is rebuilt from them before
+# it is loaded; an approval still eradicates only what the request listed.
+# Without that flag a missing request file is refused, so a direct launch
+# of the job template cannot name its own candidates. A request file that
+# is there wins over the extra vars, and the alert-log record and the
+# artifacts say when a request was rebuilt (rebuilt_from).
 - name: Reclaim capacity on an approved request
   hosts: localhost
   gather_facts: false
@@ -26,9 +37,62 @@
           - request_id is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
         fail_msg: "request id {{ request_id | string | truncate(80) }} is not a valid request id"
 
+    - name: See whether the request file is there
+      ansible.builtin.set_fact:
+        request_from_artifacts: "{{ request_file is not file }}"
+
+    # Only the controller-tier workflow and the orchestrator's reclaim node
+    # set rebuild_from_artifacts; without it a missing request file is a
+    # refusal, so a direct launch of the job template cannot supply its own
+    # candidate list.
+    - name: Refuse a missing request file unless the launcher may rebuild it from artifacts
+      when: request_from_artifacts | bool
+      ansible.builtin.assert:
+        that:
+          - rebuild_from_artifacts | default(false) | bool
+        fail_msg: "{{ request_file }} does not exist and rebuild_from_artifacts is not true: only a workflow or orchestrator node that passes the request job's artifacts may rebuild a request; nothing eradicated"
+
+    - name: Rebuild the request from the job artifacts when the request file is absent
+      when: request_from_artifacts | bool and rebuild_from_artifacts | default(false) | bool
+      block:
+        - name: Refuse a rebuild without the array and the candidates
+          ansible.builtin.assert:
+            that:
+              - (array | default(at_risk_array | default(''))) is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+              - candidates is defined and candidates is mapping
+            fail_msg: "{{ request_file }} does not exist and the extra vars array (or at_risk_array) and candidates, the request job's artifacts, are not both set (rebuild_from_artifacts is true)"
+
+        - name: Make sure the request directory exists
+          ansible.builtin.file:
+            path: "{{ request_dir }}"
+            state: directory
+            mode: "0700"
+
+        - name: Write the rebuilt request
+          ansible.builtin.copy:
+            dest: "{{ request_file }}"
+            mode: "0600"
+            content: >-
+              {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'capacity_request',
+                  'severity': 'warning', 'status': 'awaiting_approval', 'request_id': request_id,
+                  'array': array | default(at_risk_array),
+                  'candidates': {'volumes': candidates.volumes | default([]),
+                                 'snapshots': candidates.snapshots | default([])},
+                  'proposed_actions': ['eradicate_pending'], 'rebuilt_from': 'job artifacts'} | to_nice_json }}
+
     - name: Load the request
       ansible.builtin.set_fact:
         request: "{{ lookup('file', request_file) | from_json }}"
+
+    # The FlashArray API credential on Ansible Automation Platform injects
+    # credential_array; fa_url and api_token point at that array whatever
+    # host the request names, so a mismatch is refused before anything is
+    # eradicated.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == request.array
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ request.array }}; nothing eradicated"
 
     - name: Refuse anything that is not awaiting approval or not a proposed action
       ansible.builtin.assert:
@@ -92,7 +156,8 @@
         line: >-
           {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'capacity_reclaim', 'severity': 'info',
               'array': request.array, 'request_id': request_id, 'approver': approver | default(''),
-              'action': reclaim_action, 'result': reclaim_result} | to_json }}
+              'action': reclaim_action, 'result': reclaim_result,
+              'rebuilt_from': request.rebuilt_from | default('')} | to_json }}
 
     - name: Show the outcome
       ansible.builtin.debug:
@@ -101,3 +166,22 @@
           eradicated {{ reclaim_result.eradicated | default([]) | length }},
           refused {{ reclaim_result.refused | default([]) | length }},
           skipped {{ reclaim_result.skipped | default([]) | length }}: {{ reclaim_result }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one:
+    # result is done (nothing refused), partial (some refused) or refused
+    # (nothing eradicated); the lists carry {volume|snapshot: name} entries as
+    # the alert-log record does; rebuilt_from is 'job artifacts' when the
+    # request was rebuilt from the launcher's extra vars, else empty.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'request_id': request_id, 'array': request.array,
+              'rebuilt_from': request.rebuilt_from | default(''),
+              'eradicated': reclaim_result.eradicated | default([]),
+              'refused': reclaim_result.refused | default([]),
+              'result': ('done' if (reclaim_result.refused | default([]) | length) == 0
+                         else ('partial' if (reclaim_result.eradicated | default([]) | length) > 0 else 'refused'))} }}
+      run_once: true
+      delegate_to: localhost

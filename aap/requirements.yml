@@ -1,0 +1,14 @@
+---
+# Collections aap/seed.yml needs on the machine that runs it. They are
+# published on Red Hat Automation Hub (console.redhat.com), not on
+# galaxy.ansible.com, so they are listed here and not in the top-level
+# requirements.yml that `make deps` and CI install from Galaxy. Configure the
+# Hub server in ansible.cfg (server_list with its token), then:
+#   ansible-galaxy collection install -r aap/requirements.yml
+collections:
+  - name: ansible.platform    # gateway objects: organization
+    version: ">=2.5.0"
+  - name: ansible.controller  # automation controller objects
+    version: ">=4.6.0"
+  - name: ansible.eda         # Event-Driven Ansible controller objects (also on Galaxy)
+    version: ">=2.13.0"

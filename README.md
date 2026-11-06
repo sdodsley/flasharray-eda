@@ -122,14 +122,20 @@ extensions/eda/plugins/event_source/   purefa_events.py (REST pull, six signals)
 extensions/eda/rulebooks/              one rulebook per domain (table above)
 playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now,
                                        preferred_array, dr_drill, capacity_request/reclaim, qos_cap, protect_now,
+                                       expand_volume, orchestrator_post,
                                        alert_runbook (+ runbooks/<code>.yml, included relative to the playbook)
+orchestrator/                          workflow definitions for the automation orchestrator and job_templates.txt
+                                       (orchestrator/README.md)
+tools/ao_lint.py                       offline linter for those definitions (`make lint-ao`)
+aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects
+                                       (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
 prometheus/flasharray.rules.yml        alert rules for the native exporter (belongs on the Prometheus server)
 decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2 (unbuilt)
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)
 env.example, env.sh, run.sh            env file template, shared environment setup, launcher
-tests/                                 unit/ (no array needed), lab induction playbooks, fixtures, replay rulebooks,
-                                       e2e_phase*.sh (everything they write goes under tests/out/)
+tests/                                 unit/ (no array needed), mock_orchestrator.py, lab induction playbooks, fixtures,
+                                       replay rulebooks, e2e_phase*.sh (everything they write goes under tests/out/)
 docs/                                  PLAN.md, the PHASE records, PACKAGING.md (moving into the collection)
 Makefile                               `make check` runs what CI runs; `make de` builds the image
 requirements.txt, requirements.yml     Python packages and the two collections (everpure.flasharray >= 1.46.0)
@@ -221,8 +227,26 @@ rulebooks switched to FQCNs ([docs/PACKAGING.md](docs/PACKAGING.md)). In
 Ansible Automation Platform `run_playbook` becomes `run_job_template`, and
 the capacity rule uses `run_workflow_template` against a workflow whose
 first node is a manual approval (the webhook approval ruleset is the
-stand-in for that). The AAP path, the decision environment build and the
-workflow approval were not exercised in this lab.
+stand-in for that). `aap/seed.yml` creates the organization, credential
+types, credentials, inventory, project, job templates, the controller-tier
+approval workflow and disabled rulebook activations
+([aap/README.md](aap/README.md)); it has not been run against a platform.
+The AAP path, the decision environment build and the workflow approval
+were not exercised in this lab.
+
+### Orchestrator handoff
+
+With `orchestrator_enabled: true` in the vars file, the capacity-at-risk
+rule hands its event to Red Hat's automation orchestrator instead of
+writing a local request: `playbooks/orchestrator_post.yml` obtains a
+client-credentials token (`AO_CLIENT_ID` / `AO_CLIENT_SECRET` from the
+environment, forwarded by `run.sh`) and posts a `flasharray-eda/1`
+envelope to the workflow's EDA trigger; the approval and the reclaim then
+run in the orchestrator. Every attempt is recorded in the alert log and a
+refusal never fails the rule. [docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md)
+has the contract, the vars and the mock (`tests/mock_orchestrator.py`)
+the unit test and `tests/replay_capacity.yml` run against. Nothing has been
+tried against a live orchestrator yet.
 
 ## Things the hardware taught us
 
@@ -243,13 +267,20 @@ workflow approval were not exercised in this lab.
 
 ## Testing
 
-`make check` needs no array: black, pyflakes and yamllint; the unit tests
+`make check` needs no array: black, pyflakes and yamllint; `make lint-ao`
+(the orchestrator definitions through `tools/ao_lint.py`); the unit tests
 (`python -m pytest tests/unit`: a fake SDK client drives the alert diff and
-the audit cursor, the syslog parser gets representative lines, and static
+the audit cursor, the syslog parser gets representative lines, static
 checks validate every rulebook against ansible-rulebook's own schema,
 require every lowercase variable a rulebook references to be documented in
-`vars/example.yml` and every playbook a rule runs to exist); and a playbook
-syntax check. GitHub Actions runs the same on every push.
+`vars/example.yml` and every playbook a rule runs to exist, plus the
+orchestrator bridge against its mock, the linter and its fixtures, and the
+job artifacts every playbook publishes); and a playbook syntax check.
+`tests/unit/test_orchestrator_bridge.py` runs `orchestrator_post.yml`
+against the mock (skipped without `ansible-playbook`), `test_ao_lint.py`
+covers every linter rule with a fixture, `test_playbook_artifacts.py`
+checks the `set_stats` artifacts, the credential guard and the seed. GitHub
+Actions runs the same on every push.
 
 `tests/replay_*.yml` are copies of the live rules driven by
 `ansible.eda.generic` from the fixtures under `tests/fixtures/`

@@ -1,0 +1,91 @@
+{
+  "schema_version": "2.0.0",
+  "name": "fixture",
+  "description": "A deliberately broken definition for tests/unit/test_ao_lint.py: a switch case's condition uses arithmetic, which the safe evaluator does not have",
+  "triggers": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "parameters": {}
+    }
+  ],
+  "nodes": [
+    {
+      "id": "run",
+      "type": "aap_job_template",
+      "name": "Notify",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "Default",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "fixture"
+        }
+      }
+    },
+    {
+      "id": "route",
+      "type": "switch",
+      "name": "Route",
+      "parameters": {
+        "cases": [
+          {
+            "port": "case_0",
+            "label": "Something to do",
+            "condition": "${run.artifacts.count} + 1 > 1"
+          }
+        ],
+        "default_port": "default"
+      }
+    },
+    {
+      "id": "yes",
+      "type": "aap_job_template",
+      "name": "Notify",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "Default",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "fixture"
+        }
+      }
+    },
+    {
+      "id": "no",
+      "type": "aap_job_template",
+      "name": "Notify",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "Default",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "fixture"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "run"
+    },
+    {
+      "from": "run",
+      "to": "route"
+    },
+    {
+      "from": "route",
+      "to": "yes",
+      "from_port": "case_0"
+    },
+    {
+      "from": "route",
+      "to": "no",
+      "from_port": "default"
+    }
+  ]
+}

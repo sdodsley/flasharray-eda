@@ -1,0 +1,32 @@
+---
+# Decision environment for the rulebook activations aap/seed.yml creates on
+# the Event-Driven Ansible controller of Ansible Automation Platform 2.7.
+# decision-environment/ in this tree builds the same content on the upstream
+# ansible-rulebook image for standalone use; this definition builds it on the
+# supported base so an activation runs on a supported image. Build on a host
+# that is logged in to registry.redhat.io:
+#
+#   pip install ansible-builder
+#   ansible-builder build -f aap/decision-environment.yml \
+#       -t flasharray-eda-de:latest --container-runtime podman
+#
+# The custom event sources are resolved from collections inside the image, so
+# until purefa_events and purefa_syslog are packaged as a collection
+# (docs/PACKAGING.md) an activation that names them still cannot start; the
+# seed therefore creates the activations disabled.
+version: 3
+
+images:
+  base_image:
+    name: registry.redhat.io/ansible-automation-platform-27/de-supported-rhel9:latest
+
+dependencies:
+  python:
+    - py-pure-client>=1.94.1
+  galaxy:
+    collections:
+      - name: everpure.flasharray
+        version: ">=1.46.0"
+
+options:
+  package_manager_path: /usr/bin/microdnf

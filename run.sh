@@ -16,6 +16,9 @@
 #                    webhook secrets for capacity.yml and change_control.yml;
 #                    each one that is set is passed with --env-vars, an unset
 #                    one is not (ansible-rulebook rejects a name it cannot find)
+#   AO_CLIENT_ID, AO_CLIENT_SECRET
+#                    automation orchestrator service account for the
+#                    orchestrator handoff (docs/ORCHESTRATOR.md); same rule
 set -eu
 cd "$(dirname "$0")"
 # shellcheck source=env.sh
@@ -32,9 +35,10 @@ ARGS=(
 )
 # ansible-rulebook exposes to the rulebook only the environment variables
 # named in --env-vars; the rulebooks read the secrets as {{ APPROVAL_TOKEN }}
-# and {{ GIT_WEBHOOK_SECRET }}.
+# and {{ GIT_WEBHOOK_SECRET }}. AO_CLIENT_ID and AO_CLIENT_SECRET are read by
+# playbooks/orchestrator_post.yml with lookup('env') and travel the same way.
 ENV_VARS=""
-for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET; do
+for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET AO_CLIENT_ID AO_CLIENT_SECRET; do
   if [ -n "${!name:-}" ]; then
     ENV_VARS="${ENV_VARS:+$ENV_VARS,}$name"
   fi

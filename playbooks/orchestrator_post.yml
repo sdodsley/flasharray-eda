@@ -1,0 +1,189 @@
+---
+# Hand one event to the automation orchestrator instead of acting on it here.
+# Two HTTP calls: a client-credentials token from
+# {orchestrator_url}/api/v1/auth/token, then the event to
+# {orchestrator_url}/api/v1/webhooks/eda/{orchestrator_webhook_path}. The
+# orchestrator wraps the body as trigger.payload, so the body is
+# {"event": {...}} and a workflow node reads ${trigger.payload.event.<field>}
+# (the envelope is documented in docs/ORCHESTRATOR.md).
+#
+# Inputs (extra_vars from the rulebook): orchestrator_url,
+# orchestrator_webhook_path, event (the whole rulebook event, that is
+# {purefa_<type>: {...}, meta: {...}}), array, alert_log; optional
+# orchestrator_validate_certs (default true) and orchestrator_timeout
+# (seconds, default 30).
+# Credentials: AO_CLIENT_ID and AO_CLIENT_SECRET from the environment
+# (env.example; run.sh passes them on with --env-vars). The token lives 15
+# minutes, is held in a no_log fact and is never written anywhere.
+#
+# Outcome: one alert-log record of kind orchestrator_post. Severity info on
+# 202 (with the execution_id); warning on anything else, with the status and
+# a one-line reason, including a body over 1000000 bytes, which is refused
+# here without a request. A non-202 never fails the rulebook action: the
+# record says the event was not handed over, and the rule's throttle decides
+# when it may fire again. Missing credentials or a malformed event do fail,
+# because they are configuration errors.
+- name: Hand an event to the automation orchestrator
+  hosts: localhost
+  gather_facts: false
+  vars:
+    orchestrator_validate_certs: true
+    orchestrator_timeout: 30
+    orchestrator_max_body_bytes: 1000000
+    orchestrator_base: "{{ orchestrator_url | regex_replace('/+$', '') }}"
+  tasks:
+    - name: Read the service account credentials from the environment
+      ansible.builtin.set_fact:
+        ao_client_id: "{{ lookup('env', 'AO_CLIENT_ID') }}"
+        ao_client_secret: "{{ lookup('env', 'AO_CLIENT_SECRET') }}"
+      no_log: true
+
+    - name: Refuse to run without AO_CLIENT_ID and AO_CLIENT_SECRET
+      ansible.builtin.assert:
+        that:
+          - ao_client_id | length > 0
+          - ao_client_secret | length > 0
+        quiet: true
+        fail_msg: >-
+          AO_CLIENT_ID and AO_CLIENT_SECRET must both be set in the environment
+          (see env.example; run.sh passes them to ansible-rulebook with
+          --env-vars). Nothing was sent.
+
+    - name: Refuse a malformed orchestrator URL or webhook path
+      ansible.builtin.assert:
+        that:
+          - orchestrator_url is match('^https?://[^/\s]+')
+          - orchestrator_webhook_path is match('^[A-Za-z0-9][A-Za-z0-9._/-]*$')
+        quiet: true
+        fail_msg: >-
+          orchestrator_url must be an http(s) URL and orchestrator_webhook_path a
+          plain path ({{ orchestrator_url | string | truncate(80) }},
+          {{ orchestrator_webhook_path | string | truncate(80) }})
+
+    - name: Identify the event type (the purefa_* key of the event)
+      ansible.builtin.set_fact:
+        purefa_keys: "{{ event | default({}) | dict2items | map(attribute='key') | select('match', '^purefa_') | list }}"
+
+    - name: Refuse anything that is not a purefa_* event
+      ansible.builtin.assert:
+        that:
+          - purefa_keys | length > 0
+        quiet: true
+        fail_msg: "event carries no purefa_* key (keys: {{ event | default({}) | dict2items | map(attribute='key') | list }})"
+
+    - name: Pin the event type and its fields
+      ansible.builtin.set_fact:
+        event_type: "{{ purefa_keys | first }}"
+        event_data: "{{ event[purefa_keys | first] }}"
+
+    # The capacity event carries no maintenance_active (only alert, audit,
+    # hardware and replication events do); it is reported as false then.
+    - name: Build the envelope
+      ansible.builtin.set_fact:
+        envelope:
+          event:
+            schema: flasharray-eda/1
+            event_type: "{{ event_type }}"
+            array: "{{ array | default(event_data.array | default(''), true) }}"
+            maintenance_active: "{{ event_data.maintenance_active | default(false) | bool }}"
+            observed_at: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+            data: "{{ event_data }}"
+
+    # to_json output is ASCII, so its length is the byte count; the uri
+    # module serialises the same dict with the same defaults.
+    - name: Measure the body
+      ansible.builtin.set_fact:
+        body_bytes: "{{ envelope | to_json | length }}"
+
+    - name: Decide whether the body may be sent
+      ansible.builtin.set_fact:
+        oversize: "{{ body_bytes | int > orchestrator_max_body_bytes | int }}"
+
+    - name: Obtain a service account token
+      when: not oversize
+      ansible.builtin.uri:
+        url: "{{ orchestrator_base }}/api/v1/auth/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: client_credentials
+          client_id: "{{ ao_client_id }}"
+          client_secret: "{{ ao_client_secret }}"
+        headers:
+          Accept: application/json
+        status_code: [200]
+        validate_certs: "{{ orchestrator_validate_certs | bool }}"
+        timeout: "{{ orchestrator_timeout | int }}"
+        return_content: true
+      register: token_response
+      failed_when: false
+      no_log: true
+
+    - name: Keep the token and the token outcome
+      ansible.builtin.set_fact:
+        ao_token: "{{ token_response.json.access_token | default('') }}"
+        token_status: "{{ token_response.status | default(0) }}"
+        token_reason: >-
+          {{ token_response.json.detail | default(token_response.msg | default('no response'))
+             | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) }}
+      no_log: true
+
+    - name: Post the event
+      when: not oversize and ao_token | length > 0
+      ansible.builtin.uri:
+        url: "{{ orchestrator_base }}/api/v1/webhooks/eda/{{ orchestrator_webhook_path }}"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ao_token }}"
+          Accept: application/json
+        body_format: json
+        body: "{{ envelope }}"
+        status_code: [202]
+        validate_certs: "{{ orchestrator_validate_certs | bool }}"
+        timeout: "{{ orchestrator_timeout | int }}"
+        return_content: true
+      register: post_response
+      failed_when: false
+      no_log: true
+
+    - name: Keep the post outcome (status and execution id only)
+      ansible.builtin.set_fact:
+        post_status: "{{ post_response.status | default(0) }}"
+        execution_id: "{{ post_response.json.execution_id | default('') }}"
+        post_reason: >-
+          {{ post_response.json.detail | default(post_response.msg | default('no response'))
+             | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) }}
+        stage: "{{ 'size_check' if oversize else ('token' if ao_token | length == 0 else 'post') }}"
+
+    - name: Build the record
+      ansible.builtin.set_fact:
+        orchestrator_record: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'kind': 'orchestrator_post',
+              'severity': 'info' if post_status | int == 202 else 'warning',
+              'array': envelope.event.array,
+              'event_type': event_type,
+              'webhook_path': orchestrator_webhook_path,
+              'stage': stage,
+              'status': none if stage == 'size_check' else (token_status | int if stage == 'token' else post_status | int),
+              'execution_id': execution_id,
+              'reason': ('body of ' ~ body_bytes ~ ' bytes exceeds the ' ~ orchestrator_max_body_bytes ~ ' byte limit; not sent') if stage == 'size_check'
+                        else (('token request failed: ' ~ token_reason) if stage == 'token'
+                              else ('' if post_status | int == 202 else post_reason)),
+              'body_bytes': body_bytes | int} }}
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ orchestrator_record | to_json }}"
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          orchestrator handoff of {{ event_type }} for {{ envelope.event.array }}
+          to {{ orchestrator_webhook_path }}: {{ orchestrator_record.stage }}
+          status={{ orchestrator_record.status }}
+          execution_id={{ orchestrator_record.execution_id | default('-', true) }}
+          {{ orchestrator_record.reason }}

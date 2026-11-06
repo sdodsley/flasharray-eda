@@ -10,6 +10,15 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   tasks:
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array and fa_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
     - name: List local protection groups and the current eradication delays
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
@@ -90,3 +99,20 @@
           eradication delay {{ 'lengthened to ' ~ new_enabled_days ~ ' days' if erad.changed | default(false) else 'unchanged' }};
           trigger: DRR -{{ drr_drop_pct | default('?') }}%, snapshots +{{ snapshot_growth_pct | default('?') }}%,
           {{ audit_user | default('?') }} ran {{ audit_command | default('?') }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    # eradication_delay_days is the enabled delay after this run: the new
+    # value when it was lengthened, otherwise the array's current one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'snapshot_suffix': snap_suffix,
+              'groups_failed': snaps.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list,
+              'groups_snapshotted': snaps.results | map(attribute='item') | list
+                                    | difference(snaps.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list),
+              'eradication_delay_days': ((new_enabled_days | int) if erad.changed | default(false)
+                                         else (((protect.enabled_delay_ms | int) / 86400000) | round(2)))} }}
+      run_once: true
+      delegate_to: localhost

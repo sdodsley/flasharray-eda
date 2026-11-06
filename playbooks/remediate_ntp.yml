@@ -8,6 +8,15 @@
   vars:
     baseline_ntp_servers: "{{ baseline_ntp_servers_csv.split(',') }}"
   tasks:
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array and fa_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
     - name: Set NTP servers to baseline
       everpure.flasharray.purefa_ntp:
         fa_url: "{{ fa_url }}"

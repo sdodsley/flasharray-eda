@@ -1,0 +1,72 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - nightly DR drill",
+  "description": "Every night at 02:00 run the DR drill job template (on each replication target, copy a volume out of the latest fully transferred snapshot of the replicated protection group, verify it, destroy it) and raise an incident when any drill failed; otherwise log a one-line summary. A run that overlaps the previous night's is skipped, not queued.",
+  "triggers": [
+    {
+      "id": "nightly",
+      "type": "scheduled_trigger",
+      "parameters": {
+        "cron": "0 2 * * *",
+        "overlap_policy": "skip"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "dr_drill",
+      "type": "aap_job_template",
+      "name": "Run the DR drills",
+      "parameters": {
+        "job_template_name": "FlashArray - DR drill",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {}
+      }
+    },
+    {
+      "id": "drills_failed",
+      "type": "condition",
+      "name": "Did any drill fail?",
+      "parameters": {
+        "condition": "${dr_drill.artifacts.failed_count} > 0"
+      }
+    },
+    {
+      "id": "notify_incident",
+      "type": "aap_job_template",
+      "name": "Notify: a DR plan has stopped working",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "critical",
+          "subject": "DR drill: ${dr_drill.artifacts.failed_count} drill(s) failed",
+          "detail": "A replicated protection group had no completed snapshot to copy from, or the copy could not be made or did not match. Each drill's dr_drill record in the alert log names the target array, the protection group and the error. AAP job: ${dr_drill.job_url}"
+        }
+      }
+    },
+    {
+      "id": "notify_summary",
+      "type": "aap_job_template",
+      "name": "Notify: all drills passed",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR drill: every configured drill copied and verified a volume from its latest replicated snapshot",
+          "detail": "AAP job: ${dr_drill.job_url}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "nightly", "to": "dr_drill"},
+    {"from": "dr_drill", "to": "drills_failed"},
+    {"from": "drills_failed", "to": "notify_incident", "from_port": "true"},
+    {"from": "drills_failed", "to": "notify_summary", "from_port": "false"}
+  ]
+}

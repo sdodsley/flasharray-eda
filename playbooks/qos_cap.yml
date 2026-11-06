@@ -15,6 +15,15 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   tasks:
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array and fa_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
     - name: Read the volume's current QoS and cap tags
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
@@ -110,3 +119,21 @@
         msg: >-
           {{ inventory_hostname }}/{{ volume }}: QoS {{ mode }}
           {{ '(' ~ cap_iops ~ ' IOPS)' if mode == 'cap' else '' }} :: {{ reason | default('') | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    # applied_iops is the limit the volume has after this run: the cap, or on
+    # a lift the limit restored from the tag (0 = no limit, as the lift task
+    # sets it); previous_iops is the limit read before the change.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'volume': volume, 'mode': mode,
+              'applied_iops': ((cap_iops | int) if mode == 'cap'
+                               else (0 if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
+                                     else before.tags.qos_prev_iops | int)),
+              'previous_iops': before.iops_limit,
+              'changed': (capped.changed | default(false)) or (lifted.changed | default(false))} }}
+      run_once: true
+      delegate_to: localhost

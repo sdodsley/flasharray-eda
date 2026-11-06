@@ -13,6 +13,15 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   tasks:
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array and fa_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
     - name: Find the hosts connected to the pod's volumes
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"

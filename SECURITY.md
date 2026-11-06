@@ -27,6 +27,21 @@ matters.
   exact request body with `GIT_WEBHOOK_SECRET` (same env file, same
   `--env-vars` route). Set the same secret on the GitHub webhook; an
   unsigned or wrongly signed push is dropped.
+- **The orchestrator handoff uses a service-account client secret.** With
+  `orchestrator_enabled: true`, `playbooks/orchestrator_post.yml` reads
+  `AO_CLIENT_ID` and `AO_CLIENT_SECRET` from the environment (same env
+  file), exchanges them for a 15 minute bearer token held in a `no_log`
+  fact for one playbook run, and never writes the token or the secret
+  anywhere; the alert-log record carries status and execution id only. TLS
+  verification for the orchestrator calls is on by default
+  (`orchestrator_validate_certs`), unlike the array calls below. Give the
+  service account access to the EDA triggers it needs and nothing else
+  ([docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md)). On the platform, launch
+  permission on the `FlashArray - capacity reclaim` job template is
+  permission to eradicate already-destroyed objects (the reclaim rebuilds
+  its request from the `candidates` it is given when no request file
+  exists, provided the launch also sets `rebuild_from_artifacts: true`);
+  grant it to the workflow's and the orchestrator's identity only.
 - **The Alertmanager listener cannot authenticate.** `ansible.eda.alertmanager`
   has no token option. Bind it with `alertmanager_host` to an interface only
   Alertmanager reaches, and put it behind the Event-Driven Ansible

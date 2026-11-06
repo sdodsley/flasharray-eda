@@ -1,0 +1,27 @@
+{
+  "schema_version": "2.0.0",
+  "name": "fixture",
+  "triggers": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "parameters": {}
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify",
+      "type": "aap_job_template",
+      "name": "Notify",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "Default",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "fixture"
+        }
+      }
+    }
+  ]
+}

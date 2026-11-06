@@ -52,6 +52,16 @@
   vars:
     baseline_file: "{{ baseline_dir }}/{{ inventory_hostname }}.yml"
   tasks:
+    # On Ansible Automation Platform one FlashArray API credential is attached
+    # and injects credential_array; its fa_url and api_token override every
+    # host's, so only that array's own baseline may be applied by this job.
+    # The other hosts end here (not fail: an assert would fail every
+    # multi-array launch), which also drops them from ansible_play_hosts so
+    # the set_stats below reports only the arrays that ran.
+    - name: Skip the arrays whose credential is not attached
+      when: credential_array is defined and credential_array != inventory_hostname
+      ansible.builtin.meta: end_host
+
     - name: Check for a baseline file
       ansible.builtin.stat:
         path: "{{ baseline_file }}"
@@ -102,3 +112,25 @@
                   'ntp_changed': ntp_result.changed | default(false),
                   'dns_changed': dns_result.changed | default(false)} | to_json }}
           delegate_to: localhost
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    # One set for the whole run: the task runs once, after every array has
+    # been through the block above, and reads the other arrays' results from
+    # hostvars (an array without a baseline file has no ntp_result or
+    # dns_result and counts as unchanged).
+    - name: Publish what changed as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'git_head': hostvars['localhost'].baseline_head.stdout | default(''),
+              'ntp_changed': (ansible_play_hosts | map('extract', hostvars) | selectattr('ntp_result.changed', 'defined')
+                              | selectattr('ntp_result.changed') | list | length) > 0,
+              'dns_changed': (ansible_play_hosts | map('extract', hostvars) | selectattr('dns_result.changed', 'defined')
+                              | selectattr('dns_result.changed') | list | length) > 0,
+              'arrays_changed': (ansible_play_hosts | map('extract', hostvars) | selectattr('ntp_result.changed', 'defined')
+                                 | selectattr('ntp_result.changed') | map(attribute='inventory_hostname') | list)
+                                | union(ansible_play_hosts | map('extract', hostvars) | selectattr('dns_result.changed', 'defined')
+                                        | selectattr('dns_result.changed') | map(attribute='inventory_hostname') | list)} }}
+      run_once: true
+      delegate_to: localhost

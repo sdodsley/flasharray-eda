@@ -1,0 +1,125 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - expand volume (day 2)",
+  "description": "An operator asks for a volume to be expanded. The request is logged, a human approves it, the volume is expanded through the FlashArray collection and the outcome is logged with the AAP job link. A rejection is logged too and changes nothing.",
+  "triggers": [
+    {
+      "id": "expand_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "volume", "new_size"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "volume": {
+              "type": "string",
+              "title": "Volume",
+              "description": "Volume name, with its pod (pod::volume) or volume group (vgroup/volume) prefix when it has one",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*(::[A-Za-z0-9][A-Za-z0-9_-]*|/[A-Za-z0-9][A-Za-z0-9_-]*)?$",
+              "maxLength": 128
+            },
+            "new_size": {
+              "type": "string",
+              "title": "New size",
+              "description": "New provisioned size as purefa_volume parses it: a whole number with at most one unit letter K, M, G, T or P (1024-based), or plain bytes, for example 500G or 2T; 1.5T and 2TB are refused by the playbook; a volume only grows",
+              "pattern": "^[0-9]+[KMGTP]?$",
+              "maxLength": 16
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_requested",
+      "type": "aap_job_template",
+      "name": "Notify: expansion requested",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Expand ${trigger.volume} on ${trigger.array} to ${trigger.new_size}: awaiting approval",
+          "detail": "Requested through the orchestrator. Approve or reject within 24 hours.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_expand",
+      "type": "approval",
+      "name": "Approve the expansion",
+      "parameters": {
+        "approver_group_ids": ["REPLACE_AT_SYNC"],
+        "timeout": 86400,
+        "prompt": "Expand volume ${trigger.volume} on ${trigger.array} to ${trigger.new_size}. A FlashArray volume grows in place and never shrinks through this workflow; the file system inside it still has to be grown by its owner afterwards."
+      }
+    },
+    {
+      "id": "expand_volume",
+      "type": "aap_job_template",
+      "name": "Expand the volume",
+      "parameters": {
+        "job_template_name": "FlashArray - expand volume",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credentials": ["FlashArray - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "volume": "${trigger.volume}",
+          "new_size": "${trigger.new_size}"
+        }
+      }
+    },
+    {
+      "id": "notify_expanded",
+      "type": "aap_job_template",
+      "name": "Notify: volume expanded",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Expanded ${trigger.volume} on ${trigger.array} to ${trigger.new_size}",
+          "detail": "${expand_volume.artifacts.old_size} -> ${expand_volume.artifacts.new_size} bytes (changed: ${expand_volume.artifacts.changed}). AAP job: ${expand_volume.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: expansion rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Expansion of ${trigger.volume} on ${trigger.array} to ${trigger.new_size} rejected or expired; nothing changed",
+          "detail": "The approval was rejected or timed out after 24 hours. Raise a new request if the expansion is still wanted.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "expand_request", "to": "notify_requested"},
+    {"from": "notify_requested", "to": "approve_expand"},
+    {"from": "approve_expand", "to": "expand_volume", "from_port": "approved"},
+    {"from": "expand_volume", "to": "notify_expanded"},
+    {"from": "approve_expand", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

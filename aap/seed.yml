@@ -1,0 +1,385 @@
+---
+# Seed an Ansible Automation Platform 2.7 installation with the objects this
+# project needs. Everything is addressed by name, so the play is idempotent:
+# re-run it after editing the variables and only the differences are applied.
+#
+#   ansible-galaxy collection install -r aap/requirements.yml   # from Automation Hub
+#   cp aap/vars/example.yml vars/local-aap.yml                  # gitignored; edit
+#   export AAP_HOST=https://<gateway> AAP_TOKEN=<token>          # plus the ARRAY_*_URL / ARRAY_*_TOKEN pairs
+#   ansible-playbook -i aap/inventory/example.yml aap/seed.yml -e @vars/local-aap.yml
+#
+# Created, in order: the organization; the "FlashArray API" and "Orchestrator
+# service account" credential types; one credential per array (and one for
+# the orchestrator service account when its variables are set); the
+# "FlashArrays" inventory with one host per array plus localhost; the project;
+# the execution environment reference; one job template per playbook; the
+# controller-tier capacity workflow (request -> approval -> reclaim, notify on
+# failure); and, on the Event-Driven Ansible controller, a decision
+# environment, a project, a credential type, one credential per array and one
+# activation per rulebook. Nothing here reaches an array or the orchestrator;
+# aap/README.md lists what the seed cannot create. Secrets are read from the
+# environment variables named in the vars file and written nowhere by this
+# play.
+- name: Seed Ansible Automation Platform for flasharray-eda
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/example.yml
+  module_defaults:
+    group/ansible.platform.gateway:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+    group/ansible.controller.controller:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+    group/ansible.eda.eda:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+  vars:
+    array_credential_prefix: "FlashArray - "
+    orchestrator_credential_name: "Orchestrator service account - flasharray-eda"
+    workflow_name: "FlashArray - capacity reclaim (controller tier)"
+    # Fixed names: orchestrator workflow definitions and rulebook actions
+    # refer to them, so a rename here is a rename everywhere. The credential
+    # list defaults to the default array's credential; notify needs none,
+    # the DR drill takes the credential of its first drill's target array
+    # (the array the drill copies on) and the orchestrator poster takes the
+    # service account. Every FlashArray API credential injects
+    # credential_array, and the playbooks refuse to act on any other array.
+    job_templates:
+      - name: "FlashArray - capacity request"
+        playbook: playbooks/capacity_request.yml
+        description: "Raise a capacity approval request; artifacts request_id, candidate_count, candidates, at_risk_array"
+      - name: "FlashArray - capacity reclaim"
+        playbook: playbooks/capacity_reclaim.yml
+        description: "Eradicate the pending-eradication candidates of an approved request; artifacts request_id, eradicated, refused, result"
+      - name: "FlashArray - notify"
+        playbook: playbooks/notify.yml
+        description: "Append a notify record to the alert log; artifact record_kind"
+        credentials: []
+      - name: "FlashArray - expand volume"
+        playbook: playbooks/expand_volume.yml
+        description: "Grow one volume after checking its name and current size; artifacts volume, old_size, new_size"
+      - name: "FlashArray - DR drill"
+        playbook: playbooks/dr_drill.yml
+        description: "Copy, verify and destroy a volume from the latest replicated snapshot; artifacts drills, failed_count"
+        extra_vars:
+          dr_drills: "{{ aap_dr_drills }}"
+        credentials: ["{{ array_credential_prefix }}{{ aap_dr_drills[0].target_array }}"]
+      - name: "FlashArray - identify LED"
+        playbook: playbooks/identify_led.yml
+        description: "Light or clear a component's identify LED; artifacts component, led_state"
+      - name: "FlashArray - reconcile"
+        playbook: playbooks/reconcile.yml
+        description: "Reapply NTP or DNS from the git baseline after an audited change; artifacts ntp_changed, dns_changed"
+      - name: "FlashArray - apply baseline"
+        playbook: playbooks/apply_baseline.yml
+        description: "Apply the git baseline of the attached credential's array (one launch per array; localhost refreshes the checkout); artifacts ntp_changed, dns_changed, git_head"
+        # one launch applies one array's baseline: the attached credential's;
+        # localhost stays in so the first play still refreshes the checkout
+        limit: "localhost,{{ aap_default_array }}"
+      - name: "FlashArray - protect now"
+        playbook: playbooks/protect_now.yml
+        description: "Snapshot every local protection group and lengthen the eradication delay; artifacts snapshot_suffix, groups_snapshotted, groups_failed, eradication_delay_days"
+      - name: "FlashArray - QoS cap"
+        playbook: playbooks/qos_cap.yml
+        description: "Apply or lift a temporary IOPS cap; artifacts volume, mode, applied_iops, previous_iops"
+      - name: "FlashArray - post orchestrator event"
+        playbook: playbooks/orchestrator_post.yml
+        description: "Post one event envelope to the automation orchestrator's EDA webhook trigger"
+        credentials: ["{{ orchestrator_credential_name }}"]
+        requires: orchestrator
+  tasks:
+    - name: Refuse to run without the platform address and token
+      ansible.builtin.assert:
+        that:
+          - aap_hostname | length > 0
+          - aap_token | length > 0
+        fail_msg: "set AAP_HOST and AAP_TOKEN (aap_hostname / aap_token) first"
+        quiet: true
+
+    - name: Refuse to run with an array's environment variables unset
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item.fa_url_env) | length > 0
+          - lookup('env', item.api_token_env) | length > 0
+        fail_msg: "{{ item.fa_url_env }} and {{ item.api_token_env }} must be set for {{ item.name }}"
+        quiet: true
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # --- platform gateway ----------------------------------------------------
+    - name: Organization
+      ansible.platform.organization:
+        name: "{{ aap_organization }}"
+        description: "Event-Driven Ansible for standalone FlashArrays (flasharray-eda)"
+        state: present
+
+    # --- automation controller -----------------------------------------------
+    - name: Credential type for one array (fa_url, api_token and credential_array as extra_vars)
+      ansible.controller.credential_type:
+        name: FlashArray API
+        description: "One array's management address, API token and inventory name, injected as the extra_vars fa_url, api_token and credential_array; the playbooks refuse to act on an array other than credential_array"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_api_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_api_injectors.json') | from_json }}"
+        state: present
+
+    - name: Credential type for the orchestrator service account
+      ansible.controller.credential_type:
+        name: Orchestrator service account
+        description: "Client credentials of an automation orchestrator service account: AO_CLIENT_ID and AO_CLIENT_SECRET in the environment, orchestrator_url as an extra var"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_injectors.json') | from_json }}"
+        state: present
+
+    - name: One FlashArray API credential per array
+      ansible.controller.credential:
+        name: "{{ array_credential_prefix }}{{ item.name }}"
+        description: "fa_url and api_token for {{ item.name }}"
+        organization: "{{ aap_organization }}"
+        credential_type: FlashArray API
+        inputs:
+          fa_url: "{{ lookup('env', item.fa_url_env) }}"
+          api_token: "{{ lookup('env', item.api_token_env) }}"
+          array_name: "{{ item.name }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Orchestrator service account credential (when its variables are set)
+      when: lookup('env', aap_orchestrator_client_id_env) | length > 0
+      ansible.controller.credential:
+        name: "{{ orchestrator_credential_name }}"
+        description: "Service account bound to this project's EDA trigger in the orchestrator"
+        organization: "{{ aap_organization }}"
+        credential_type: Orchestrator service account
+        inputs:
+          orchestrator_url: "{{ lookup('env', aap_orchestrator_url_env) }}"
+          client_id: "{{ lookup('env', aap_orchestrator_client_id_env) }}"
+          client_secret: "{{ lookup('env', aap_orchestrator_client_secret_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    # The inventory holds names only; addresses and tokens travel in the
+    # credentials. The variables are stored as written (not templated here).
+    - name: Inventory
+      ansible.controller.inventory:
+        name: "{{ aap_inventory_name }}"
+        description: "One host per array, named as in purefa_arrays; fa_url and api_token come from the FlashArray API credentials, not from host variables"
+        organization: "{{ aap_organization }}"
+        variables:
+          ansible_connection: local
+          ansible_python_interpreter: !unsafe "{{ ansible_playbook_python }}"
+        state: present
+
+    - name: Localhost in the inventory
+      ansible.controller.host:
+        name: localhost
+        inventory: "{{ aap_inventory_name }}"
+        description: "notify, capacity request / reclaim and the DR drill run here"
+        state: present
+
+    - name: One host per array
+      ansible.controller.host:
+        name: "{{ item.name }}"
+        inventory: "{{ aap_inventory_name }}"
+        description: "FlashArray {{ item.name }}; address and token come from the credential {{ array_credential_prefix }}{{ item.name }}"
+        state: present
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Execution environment reference
+      ansible.controller.execution_environment:
+        name: "{{ aap_ee_name }}"
+        description: "Image the FlashArray job templates run in; needs py-pure-client and the everpure.flasharray collection"
+        image: "{{ aap_ee_image }}"
+        organization: "{{ aap_organization }}"
+        pull: "{{ aap_ee_pull }}"
+        state: present
+
+    - name: Project
+      ansible.controller.project:
+        name: "{{ aap_project_name }}"
+        description: "{{ aap_project_url }} ({{ aap_project_branch }})"
+        organization: "{{ aap_organization }}"
+        scm_type: git
+        scm_url: "{{ aap_project_url }}"
+        scm_branch: "{{ aap_project_branch }}"
+        scm_update_on_launch: false
+        default_environment: "{{ aap_ee_name }}"
+        wait: true
+        state: present
+
+    # Every template prompts for extra vars (target_array and the rest come
+    # from the launch), for credentials (so a launch can pick another
+    # array's credential; the default array's is attached) and for a limit
+    # (apply baseline is limited to the attached credential's array and a
+    # launch for another array changes both together). A credential for
+    # an array other than the one the launch names makes the playbook fail
+    # at its first task (credential_array) instead of acting on that array.
+    - name: One job template per playbook
+      when: >-
+        item.requires | default('') != 'orchestrator'
+        or (aap_seed_orchestrator_template | bool and lookup('env', aap_orchestrator_client_id_env) | length > 0)
+      ansible.controller.job_template:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        organization: "{{ aap_organization }}"
+        project: "{{ aap_project_name }}"
+        playbook: "{{ item.playbook }}"
+        inventory: "{{ aap_inventory_name }}"
+        execution_environment: "{{ aap_ee_name }}"
+        credentials: "{{ item.credentials | default([array_credential_prefix ~ aap_default_array]) }}"
+        extra_vars: "{{ aap_job_extra_vars | combine(item.extra_vars | default({})) }}"
+        limit: "{{ item.limit | default(omit) }}"
+        ask_variables_on_launch: true
+        ask_credential_on_launch: true
+        ask_limit_on_launch: true
+        state: present
+      loop: "{{ job_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # The request node's artifacts (request_id, at_risk_array, ...) reach
+    # the reclaim node as extra vars, which is how the two playbooks hand
+    # over. A denied or timed-out approval takes the failure edge.
+    - name: Controller-tier capacity workflow
+      ansible.controller.workflow_job_template:
+        name: "{{ workflow_name }}"
+        description: "capacity request -> approval -> reclaim; notify when a node fails or the approval is denied"
+        organization: "{{ aap_organization }}"
+        inventory: "{{ aap_inventory_name }}"
+        ask_variables_on_launch: true
+        destroy_current_nodes: "{{ aap_rebuild_workflow_nodes | bool }}"
+        state: present
+        workflow_nodes:
+          - identifier: request
+            unified_job_template:
+              name: "FlashArray - capacity request"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            related:
+              success_nodes:
+                - identifier: approve
+              failure_nodes:
+                - identifier: notify_failure
+          - identifier: approve
+            unified_job_template:
+              name: "Approve eradication of the request's pending-eradication candidates"
+              description: "Approve to eradicate the volumes and snapshots the request listed (only those still pending); deny, or let it time out, to keep them"
+              type: workflow_approval
+              timeout: "{{ aap_approval_timeout_s | int }}"
+            related:
+              success_nodes:
+                - identifier: reclaim
+              failure_nodes:
+                - identifier: notify_rejected
+          - identifier: reclaim
+            unified_job_template:
+              name: "FlashArray - capacity reclaim"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            extra_data:
+              reclaim_action: eradicate_pending
+              approver: workflow-approval
+              # lets the reclaim rebuild the request from the request node's
+              # artifacts when request_dir is not shared between the jobs; a
+              # launch without it is refused when the request file is absent
+              rebuild_from_artifacts: true
+            related:
+              failure_nodes:
+                - identifier: notify_failure
+          - identifier: notify_rejected
+            unified_job_template:
+              name: "FlashArray - notify"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            extra_data:
+              severity: warning
+              subject: "capacity reclaim not approved (denied or timed out)"
+              detail: "the request stays awaiting_approval; nothing was eradicated"
+          - identifier: notify_failure
+            unified_job_template:
+              name: "FlashArray - notify"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            extra_data:
+              severity: critical
+              subject: "capacity reclaim workflow failed"
+              detail: "see the failed node of the workflow job"
+
+    # --- Event-Driven Ansible controller --------------------------------------
+    - name: Decision environment reference
+      ansible.eda.decision_environment:
+        name: "{{ aap_eda_de_name }}"
+        description: "Image from decision-environment/: ansible-rulebook, the plugins, the two collections and py-pure-client"
+        image_url: "{{ aap_eda_de_image }}"
+        pull_policy: "{{ aap_eda_de_pull_policy }}"
+        organization_name: "{{ aap_organization }}"
+        state: present
+
+    - name: EDA project
+      ansible.eda.project:
+        name: "{{ aap_eda_project_name }}"
+        description: "{{ aap_project_url }} ({{ aap_project_branch }})"
+        url: "{{ aap_project_url }}"
+        scm_branch: "{{ aap_project_branch }}"
+        organization_name: "{{ aap_organization }}"
+        state: present
+
+    # Same inputs as the controller type; EDA credentials inject variables,
+    # which the rulebooks and run_job_template actions can use.
+    - name: EDA credential type for one array
+      ansible.eda.credential_type:
+        name: FlashArray API
+        description: "One array's management address, API token and inventory name as the variables fa_url, api_token and credential_array"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_api_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flasharray_api_injectors.json') | from_json }}"
+        state: present
+
+    - name: One EDA credential per array
+      ansible.eda.credential:
+        name: "{{ array_credential_prefix }}{{ item.name }}"
+        description: "fa_url and api_token for {{ item.name }}"
+        credential_type_name: FlashArray API
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          fa_url: "{{ lookup('env', item.fa_url_env) }}"
+          api_token: "{{ lookup('env', item.api_token_env) }}"
+          array_name: "{{ item.name }}"
+        state: present
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: One rulebook activation per rulebook (disabled until the plugins are packaged)
+      ansible.eda.rulebook_activation:
+        name: "FlashArray rulebook - {{ item | splitext | first }}"
+        description: "extensions/eda/rulebooks/{{ item }} with {{ aap_eda_vars_file | basename }} as extra vars"
+        project_name: "{{ aap_eda_project_name }}"
+        rulebook_name: "{{ item }}"
+        decision_environment_name: "{{ aap_eda_de_name }}"
+        organization_name: "{{ aap_organization }}"
+        extra_vars: "{{ lookup('file', aap_eda_vars_file) }}"
+        eda_credentials: "{{ aap_arrays | map(attribute='name') | map('regex_replace', '^', array_credential_prefix) | list }}"
+        enabled: "{{ aap_eda_activations_enabled | bool }}"
+        restart_policy: "{{ aap_eda_restart_policy }}"
+        log_level: "{{ aap_eda_log_level }}"
+        state: present
+      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/*.yml') | map('basename') | sort }}"

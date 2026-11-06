@@ -21,6 +21,15 @@
     is_ntp: "{{ audit_command == 'purearray' and audit_subcommand | default('') == 'setattr' and '--ntpserver' in (audit_arguments | default('')) }}"
     is_dns: "{{ audit_command == 'puredns' }}"
   tasks:
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array and fa_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
     - name: Load the baseline for this array
       when: baseline_file is file
       ansible.builtin.include_vars:
@@ -83,3 +92,15 @@
           {{ inventory_hostname }}: {{ audit_user }} ran {{ audit_command }} {{ audit_subcommand | default('') }}
           {{ audit_arguments | default('') }} ->
           {{ outcome }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish what changed as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname,
+              'ntp_changed': ntp_result.changed | default(false), 'dns_changed': dns_result.changed | default(false),
+              'reconciled': reconciled | bool, 'outcome': outcome | trim} }}
+      run_once: true
+      delegate_to: localhost

@@ -1,0 +1,152 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - capacity reclaim with approval",
+  "description": "A purefa_capacity event forwarded by the capacity rulebook raises a capacity request on the array. When the request lists reclaim candidates (volumes and snapshots already pending eradication) a human approves or rejects eradicating them; nothing is freed without that approval, and every outcome is written to the alert log.",
+  "triggers": [
+    {
+      "id": "fa_capacity_event",
+      "type": "eda_trigger",
+      "parameters": {
+        "webhook_path": "fa_capacity",
+        "authorized_service_account_ids": ["REPLACE_AT_SYNC"],
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["event"],
+          "properties": {
+            "event": {
+              "type": "object",
+              "required": ["schema", "event_type", "array", "maintenance_active", "observed_at", "data"],
+              "properties": {
+                "schema": {"type": "string", "const": "flasharray-eda/1"},
+                "event_type": {"type": "string", "const": "purefa_capacity"},
+                "array": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+                "maintenance_active": {"type": "boolean"},
+                "observed_at": {"type": "string"},
+                "data": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "capacity_request",
+      "type": "aap_job_template",
+      "name": "Raise the capacity request",
+      "parameters": {
+        "job_template_name": "FlashArray - capacity request",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credentials": ["FlashArray - ${trigger.payload.event.array}"],
+        "extra_vars": {
+          "at_risk_array": "${trigger.payload.event.array}",
+          "used_pct": "${trigger.payload.event.data.used_pct}",
+          "used_bytes": "${trigger.payload.event.data.used_bytes}",
+          "capacity_bytes": "${trigger.payload.event.data.capacity_bytes}",
+          "days_to_full": "${trigger.payload.event.data.days_to_full}",
+          "top_growers": "${trigger.payload.event.data.top_growers}",
+          "pending_eradication_volumes": "${trigger.payload.event.data.pending_eradication_volumes}",
+          "pending_eradication_snapshots": "${trigger.payload.event.data.pending_eradication_snapshots}",
+          "candidate_targets": "${trigger.payload.event.data.others}"
+        }
+      }
+    },
+    {
+      "id": "has_candidates",
+      "type": "condition",
+      "name": "Anything to reclaim?",
+      "parameters": {
+        "condition": "${capacity_request.artifacts.candidate_count} > 0"
+      }
+    },
+    {
+      "id": "notify_pending",
+      "type": "aap_job_template",
+      "name": "Notify: request awaits approval",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Capacity request ${capacity_request.artifacts.request_id}: ${trigger.payload.event.array} at ${trigger.payload.event.data.used_pct}% used awaits approval",
+          "detail": "${capacity_request.artifacts.candidate_count} volumes and snapshots pending eradication could be reclaimed; full in about ${trigger.payload.event.data.days_to_full} days at the 7-day growth rate. Approve or reject in the orchestrator within 24 hours.",
+          "target_array": "${trigger.payload.event.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_reclaim",
+      "type": "approval",
+      "name": "Approve eradicating the pending objects",
+      "parameters": {
+        "approver_group_ids": ["REPLACE_AT_SYNC"],
+        "timeout": 86400,
+        "prompt": "Capacity request ${capacity_request.artifacts.request_id}: eradicate the ${capacity_request.artifacts.candidate_count} volumes and snapshots already pending eradication on ${trigger.payload.event.array} (${trigger.payload.event.data.used_pct}% used, full in about ${trigger.payload.event.data.days_to_full} days). Only the objects the request listed, and only those still pending eradication now, are touched; objects under a SafeMode retention lock are refused by the array. Rejecting frees nothing."
+      }
+    },
+    {
+      "id": "capacity_reclaim",
+      "type": "aap_job_template",
+      "name": "Eradicate the approved candidates",
+      "parameters": {
+        "job_template_name": "FlashArray - capacity reclaim",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credentials": ["FlashArray - ${trigger.payload.event.array}"],
+        "extra_vars": {
+          "request_id": "${capacity_request.artifacts.request_id}",
+          "array": "${trigger.payload.event.array}",
+          "candidates": "${capacity_request.artifacts.candidates}",
+          "rebuild_from_artifacts": true,
+          "reclaim_action": "eradicate_pending",
+          "approver": "orchestrator"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: request rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Capacity request ${capacity_request.artifacts.request_id} on ${trigger.payload.event.array} rejected or expired; nothing reclaimed",
+          "detail": "${trigger.payload.event.array} is at ${trigger.payload.event.data.used_pct}% used and the ${capacity_request.artifacts.candidate_count} pending objects stay until the array's own eradication timer runs out. Capacity has to come from somewhere else.",
+          "target_array": "${trigger.payload.event.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_no_candidates",
+      "type": "aap_job_template",
+      "name": "Notify: nothing to reclaim",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Capacity request ${capacity_request.artifacts.request_id}: ${trigger.payload.event.array} at ${trigger.payload.event.data.used_pct}% used with no reclaim candidates",
+          "detail": "Nothing is pending eradication on ${trigger.payload.event.array} (full in about ${trigger.payload.event.data.days_to_full} days at the 7-day growth rate). The request file lists the top growers and the arrays with headroom; this needs a human decision, not an eradication.",
+          "target_array": "${trigger.payload.event.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "fa_capacity_event", "to": "capacity_request"},
+    {"from": "capacity_request", "to": "has_candidates"},
+    {"from": "has_candidates", "to": "notify_pending", "from_port": "true"},
+    {"from": "has_candidates", "to": "notify_no_candidates", "from_port": "false"},
+    {"from": "notify_pending", "to": "approve_reclaim"},
+    {"from": "approve_reclaim", "to": "capacity_reclaim", "from_port": "approved"},
+    {"from": "approve_reclaim", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

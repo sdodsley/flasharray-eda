@@ -1,0 +1,29 @@
+{
+  "schema_version": "2.0.0",
+  "name": "fixture",
+  "description": "A deliberately broken definition for tests/unit/test_ao_lint.py",
+  "triggers": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "parameters": {}
+    }
+  ],
+  "nodes": [
+    {
+      "id": "post_hook",
+      "type": "http_request",
+      "name": "Post",
+      "parameters": {
+        "method": "POST",
+        "url": "https://192.0.2.10/hook"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "post_hook"
+    }
+  ]
+}

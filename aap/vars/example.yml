@@ -1,0 +1,105 @@
+---
+# Variables for aap/seed.yml. The seed loads this file as its defaults; copy
+# it to vars/local-aap.yml (that name is gitignored with the other local
+# files) and pass `-e @vars/local-aap.yml` to override. Nothing secret
+# belongs in either copy: tokens and secrets are read from the environment
+# variables named here.
+
+# --- the platform ----------------------------------------------------------
+# Gateway URL and a token with permission to create an organization (a
+# platform administrator's token for the first run; an organization admin's
+# token is enough for re-runs once the organization exists).
+aap_hostname: "{{ lookup('env', 'AAP_HOST') }}"
+aap_token: "{{ lookup('env', 'AAP_TOKEN') }}"
+aap_validate_certs: true
+
+# --- names of the objects the seed creates ---------------------------------
+aap_organization: FlashArray
+aap_project_name: FlashArray EDA
+aap_project_url: https://github.com/sdodsley/flasharray-eda
+aap_project_branch: main
+aap_inventory_name: FlashArrays
+# Execution environment the job templates run in. The supported image name
+# is the default, without a registry: set aap_ee_registry to the registry
+# path the platform pulls from (for example the ansible-automation-platform-27
+# namespace on registry.redhat.io). The playbooks also need py-pure-client
+# and the everpure.flasharray collection in the image; see aap/README.md.
+aap_ee_name: FlashArray EDA EE
+aap_ee_registry: ""
+aap_ee_image: "{{ (aap_ee_registry ~ '/') if aap_ee_registry else '' }}ee-supported-rhel9:latest"
+aap_ee_pull: missing
+
+# --- arrays ------------------------------------------------------------------
+# One entry per array, named as in vars/example.yml and the inventory: the
+# seed creates a host and a "FlashArray API" credential per array from the
+# environment variables named here (the same names env.example uses).
+aap_arrays:
+  - name: array-a
+    fa_url_env: ARRAY_A_URL
+    api_token_env: ARRAY_A_TOKEN
+  - name: array-b
+    fa_url_env: ARRAY_B_URL
+    api_token_env: ARRAY_B_TOKEN
+# Credential attached to every array-facing job template by default; a
+# launch (orchestrator node, workflow node, EDA action, or a person) picks
+# another array's credential, see aap/README.md.
+aap_default_array: "{{ aap_arrays[0].name }}"
+# Re-send the secrets on every run (needed after a token rotation; otherwise
+# every run reports the credentials as changed).
+aap_update_secrets: false
+
+# --- orchestrator service account ------------------------------------------
+# The "Orchestrator service account" credential is created only when the
+# client id variable is set; the job template that posts events gets it.
+aap_orchestrator_url_env: AO_URL
+aap_orchestrator_client_id_env: AO_CLIENT_ID
+aap_orchestrator_client_secret_env: AO_CLIENT_SECRET
+# Create the "FlashArray - post orchestrator event" job template. Its
+# playbook (playbooks/orchestrator_post.yml) must exist in the project.
+aap_seed_orchestrator_template: true
+
+# --- variables every job template carries ----------------------------------
+# Paths are inside the execution environment: /tmp exists and is writable,
+# and disappears with the job. The durable record of a job in the platform
+# is its output and its artifacts (set_stats); for a persistent alert log or
+# a request directory the controller-tier workflow can read back, expose a
+# host path to the jobs (Settings > Jobs > Paths to expose to isolated jobs)
+# and point these at it. baseline_dir is a checkout of the baseline
+# repository (baseline/README.md) that must be reachable the same way.
+aap_job_extra_vars:
+  alert_log: /tmp/flasharray-eda-alerts.log
+  request_dir: /tmp/flasharray-eda-requests
+  baseline_dir: /tmp/flasharray-eda-baseline
+# Default drills for "FlashArray - DR drill" (same shape as dr_drills in
+# vars/example.yml; a launch may override it).
+aap_dr_drills:
+  - target_array: array-b
+    source_array: array-a
+    pgroup: pg-prod
+    volume: ""
+    prefix: eda-drill
+# Seconds the controller-tier approval node waits before it times out
+# (0 = never).
+aap_approval_timeout_s: 86400
+# Rebuild the workflow's nodes from scratch instead of updating them in place
+# (reports changed on every run; use after renaming a node).
+aap_rebuild_workflow_nodes: false
+
+# --- Event-Driven Ansible controller ---------------------------------------
+aap_eda_project_name: FlashArray EDA
+aap_eda_de_name: FlashArray EDA DE
+# Image built by `make de` (decision-environment/Containerfile), pushed to a
+# registry the platform can pull from; no registry is baked in here.
+aap_eda_de_registry: ""
+aap_eda_de_image: "{{ (aap_eda_de_registry ~ '/') if aap_eda_de_registry else '' }}flasharray-eda-de:latest"
+aap_eda_de_pull_policy: missing
+# The rulebook vars file handed to every activation as its extra vars
+# (FAEDA_VARS when set, else the example file).
+aap_eda_vars_file: "{{ lookup('env', 'FAEDA_VARS') | default(playbook_dir ~ '/../vars/example.yml', true) }}"
+# Activations are created disabled: the rulebooks' custom sources must be
+# packaged in a collection first (docs/PACKAGING.md) and the plugins read
+# their tokens from the environment, which an EDA credential does not set
+# (aap/README.md). Flip this once both are done.
+aap_eda_activations_enabled: false
+aap_eda_restart_policy: on-failure
+aap_eda_log_level: error

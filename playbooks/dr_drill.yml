@@ -17,3 +17,16 @@
       loop_control:
         loop_var: drill
         label: "{{ drill.target_array }}:{{ drill.source_array }}:{{ drill.pgroup }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one:
+    # one {target_array, source_array, pgroup, result, error} per drill
+    # (collected by dr_drill_one.yml) and how many failed.
+    - name: Publish the drills as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'drills': drills_done | default([]),
+              'failed_count': drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length} }}
+      run_once: true
+      delegate_to: localhost

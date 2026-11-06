@@ -1,0 +1,117 @@
+---
+# Day-2: grow one volume. Run by hand, by an Ansible Automation Platform job
+# template or by an orchestrator aap_job_template node with target_array,
+# volume, new_size, alert_log and optionally reason and requested_by:
+#   ansible-playbook -i inventory/local-<site>.yml playbooks/expand_volume.yml \
+#       -e target_array=array-a -e volume=vol1 -e new_size=2T -e alert_log=$PWD/alerts.log
+# new_size is a whole number with one of the unit letters K, M, G, T or P
+# (1024-based) or plain bytes: exactly what purefa_volume parses, which
+# treats anything else (1.5T, 2TB) as zero, so other forms are refused here.
+# The volume name arrives from a webhook, an approval or a prompt, so it is
+# checked against a plain name (pod::name and vgroup/name allowed) before it
+# is used. The current size is read first (one read-only SDK call) and the
+# play refuses anything that would not grow the volume: purefa_volume would
+# refuse a shrink too, but this way the reason is in the record and nothing
+# is sent to the array.
+- name: Expand a volume
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse a volume name that is not a plain name, or a size purefa_volume would not parse
+      ansible.builtin.assert:
+        that:
+          - volume is match('^([A-Za-z0-9][A-Za-z0-9_-]*(::|/))?[A-Za-z0-9][A-Za-z0-9_-]*$')
+          - new_size | string is match('^[0-9]+[KkMmGgTtPp]?$')
+        fail_msg: >-
+          volume {{ volume | string | truncate(80) }} must be a plain volume name and
+          new_size {{ new_size | string | truncate(40) }} a whole number with at most one unit letter (K, M, G, T, P)
+
+    - name: Read the volume's current size
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          r = c.get_volumes(names=[os.environ["VOL"]])
+          if r.status_code != 200:
+              print(json.dumps({"error": r.errors[0].message if getattr(r, "errors", None) else "HTTP %s" % r.status_code}))
+              raise SystemExit(0)
+          # to_dict(): SDK models raise AttributeError for fields the array did not return
+          v = list(r.items)[0].to_dict()
+          print(json.dumps({"provisioned": v.get("provisioned"), "destroyed": bool(v.get("destroyed"))}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        VOL: "{{ volume }}"
+      register: size_cmd
+      changed_when: false
+      no_log: true
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        before: "{{ size_cmd.stdout | from_json }}"
+        new_size_bytes: "{{ new_size | human_to_bytes }}"
+
+    - name: Refuse a volume that is missing or destroyed, or a size that would not grow it
+      ansible.builtin.assert:
+        that:
+          - before.error is not defined
+          - not (before.destroyed | default(false) | bool)
+          - new_size_bytes | int > before.provisioned | default(0) | int
+        fail_msg: >-
+          {{ before.error | default(volume ~ ' is '
+             ~ ('destroyed' if before.destroyed | default(false) else
+                (before.provisioned | default(0) | string) ~ ' bytes; ' ~ new_size ~ ' (' ~ new_size_bytes ~ ' bytes) would not grow it')) }}
+
+    - name: Grow the volume
+      everpure.flasharray.purefa_volume:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ volume }}"
+        size: "{{ new_size }}"
+      register: grown
+
+    - name: Record the expansion
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'volume_expand', 'severity': 'info',
+              'array': inventory_hostname, 'volume': volume,
+              'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
+              'changed': grown.changed | default(false),
+              'reason': reason | default('') | trim, 'requested_by': requested_by | default('')} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the expansion
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}/{{ volume }}: {{ before.provisioned }} -> {{ new_size_bytes }} bytes
+          ({{ new_size }}) {{ '(changed)' if grown.changed | default(false) else '(unchanged)' }}
+          {{ ':: ' ~ reason | trim if reason | default('') | trim else '' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one
+    # (sizes in bytes).
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'volume': volume,
+              'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
+              'changed': grown.changed | default(false)} }}
+      run_once: true
+      delegate_to: localhost

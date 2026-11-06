@@ -25,6 +25,9 @@ jobs:
       - name: Lint (black, pyflakes, yamllint)
         run: make lint
 
+      - name: Lint the orchestrator definitions
+        run: make lint-ao
+
       - name: Unit tests (plugins, rulebooks, vars)
         run: make test
 

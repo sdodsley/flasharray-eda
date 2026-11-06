@@ -10,11 +10,14 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   tasks:
-    - name: Refuse a host pattern that is not exactly this array
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
       ansible.builtin.assert:
         that:
           - inventory_hostname == target_array
-        fail_msg: "target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array"
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
 
     - name: Set the identify LED
       everpure.flasharray.purefa_hardware:
@@ -49,3 +52,17 @@
           identify LED {{ 'on' if led_state | default(true) | bool else 'off' }}
           {{ '(failed: ' ~ led_result.msg ~ ')' if led_result.failed | default(false)
              else '(changed)' if led_result.changed | default(false) else '(unchanged)' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one
+    # (led_state is on or off, as in the alert-log record).
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'component': component,
+              'led_state': ('on' if led_state | default(true) | bool else 'off'),
+              'led_changed': led_result.changed | default(false),
+              'led_error': ((led_result.msg | default('')) if led_result.failed | default(false) else '')} }}
+      run_once: true
+      delegate_to: localhost

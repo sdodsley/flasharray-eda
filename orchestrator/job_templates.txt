@@ -1,0 +1,12 @@
+# Every AAP job template the definitions in this directory launch, one name
+# per line. `make lint-ao` passes this file to tools/ao_lint.py as
+# --allowed-templates, so a definition that names a template not listed here
+# fails the build, and tests/unit/test_ao_lint.py checks the list matches
+# the definitions both ways. The templates live in the organization named
+# in each node (FlashArray, the organization aap/seed.yml creates); README.md
+# describes the variables each one takes.
+FlashArray - capacity request
+FlashArray - capacity reclaim
+FlashArray - notify
+FlashArray - expand volume
+FlashArray - DR drill

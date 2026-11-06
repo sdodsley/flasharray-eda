@@ -1,0 +1,125 @@
+---
+# Replay one capacity-at-risk event through the capacity rules, to exercise
+# the orchestrator handoff against the mock (or a real instance) without an
+# array. The payload is inline: array-a is the example inventory name, so
+# both the orchestrator path and the local request path resolve it.
+#
+#   python tests/mock_orchestrator.py --port 8800 --client-id nx_sa_demo \
+#       --client-secret demo --paths fa_capacity --record tests/out/orchestrator.jsonl &
+#   { cat vars/local-lab.yml; printf 'orchestrator_enabled: true\norchestrator_url: http://127.0.0.1:8800\n'; } \
+#     > tests/out/vars_replay.yml
+#   AO_CLIENT_ID=nx_sa_demo AO_CLIENT_SECRET=demo FAEDA_VARS=tests/out/vars_replay.yml \
+#     ./run.sh tests/replay_capacity.yml
+#
+# Expected: one orchestrator_post record (status 202, an execution_id) in
+# alert_log and the flasharray-eda/1 envelope as one line in the record file.
+# Only the at-risk rule fires for the replayed event: ansible-rulebook matches
+# one rule per event unless the ruleset sets match_multiple_rules, so the
+# days-to-full rule does not run on the same event (same as the real rulebook,
+# and as with the local rule before this change). With orchestrator_enabled
+# false the same event writes a request file instead (capacity_request.yml
+# reads the array's pending-eradication objects when array-a's credentials
+# are set, and records the error otherwise).
+# The rules are copies of the ones in extensions/eda/rulebooks/capacity.yml,
+# throttles included (ansible-rulebook has no include); the approvals
+# webhook ruleset is not replayed. tests/unit/test_rulebooks.py fails if a
+# copy drifts from the real rule.
+- name: FlashArray capacity (replayed event)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload:
+          - purefa_capacity:
+              array: array-a
+              used_pct: 97.3
+              used_bytes: 48650000000000
+              capacity_bytes: 50000000000000
+              days_to_full: 9
+              days_to_full_known: true
+              growth_bytes_per_day: 150000000000
+              top_growers:
+                - volume: vol-db-01
+                  growth_bytes: 90000000000
+                - volume: vol-logs-02
+                  growth_bytes: 40000000000
+              pending_eradication_volumes: 2
+              pending_eradication_snapshots: 5
+              others:
+                - array: array-b
+                  used_pct: 41.0
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefa_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
+
+    - name: Array over capacity risk threshold - raise an approval request
+      condition: >-
+        event.purefa_capacity.used_pct is defined and
+        event.purefa_capacity.used_pct >= vars.capacity_risk_pct and
+        vars.orchestrator_enabled == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/capacity_request.yml
+          extra_vars:
+            at_risk_array: "{{ event.purefa_capacity.array }}"
+            used_pct: "{{ event.purefa_capacity.used_pct }}"
+            used_bytes: "{{ event.purefa_capacity.used_bytes }}"
+            capacity_bytes: "{{ event.purefa_capacity.capacity_bytes }}"
+            days_to_full: "{{ event.purefa_capacity.days_to_full }}"
+            top_growers: "{{ event.purefa_capacity.top_growers }}"
+            pending_eradication_volumes: "{{ event.purefa_capacity.pending_eradication_volumes }}"
+            pending_eradication_snapshots: "{{ event.purefa_capacity.pending_eradication_snapshots }}"
+            candidate_targets: "{{ event.purefa_capacity.others }}"
+            request_dir: "{{ request_dir }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Array over capacity risk threshold - hand the event to the orchestrator
+      condition: >-
+        event.purefa_capacity.used_pct is defined and
+        event.purefa_capacity.used_pct >= vars.capacity_risk_pct and
+        vars.orchestrator_enabled == true
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/orchestrator_post.yml
+          extra_vars:
+            orchestrator_url: "{{ orchestrator_url }}"
+            orchestrator_webhook_path: "{{ orchestrator_paths.capacity }}"
+            orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
+            event: "{{ event }}"
+            array: "{{ event.purefa_capacity.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Array will be full within the warning horizon - notify
+      condition: >-
+        event.purefa_capacity.days_to_full_known == true and
+        event.purefa_capacity.days_to_full <= vars.capacity_days_to_full_warning
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefa_capacity.array }} full in about {{ event.purefa_capacity.days_to_full }} days at the 7-day growth rate"
+            detail: >-
+              used={{ event.purefa_capacity.used_pct }}%
+              growth={{ event.purefa_capacity.growth_bytes_per_day }} bytes/day
+              top growers={{ event.purefa_capacity.top_growers }}
+            target_array: "{{ event.purefa_capacity.array }}"
+            alert_log: "{{ alert_log }}"

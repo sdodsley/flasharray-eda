@@ -18,6 +18,16 @@
           - at_risk_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
         fail_msg: "array name {{ at_risk_array | string | truncate(80) }} is not a valid array name"
 
+    # On Ansible Automation Platform the FlashArray API credential injects
+    # credential_array, the array it belongs to; fa_url and api_token then
+    # point at that array whatever host name is used, so a request for any
+    # other array is refused instead of listing the wrong array's candidates.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == at_risk_array
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ at_risk_array }}"
+
     - name: Pin the request id and time
       ansible.builtin.set_fact:
         request_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
@@ -101,3 +111,22 @@
           candidates pending eradication: {{ candidates.volumes | length }} volumes /
           {{ candidates.snapshots | length }} snapshots{{ (' (' ~ candidates_error | trim ~ ')') if candidates_error | trim else '' }};
           arrays with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}
+
+    # Job artifacts: an Ansible Automation Platform workflow passes them to
+    # the next node as extra_vars (request_id reaches capacity_reclaim.yml
+    # that way) and an orchestrator aap_job_template node reads them as
+    # ${<node>.artifacts.request_id}. candidates is the request file's own
+    # {volumes, snapshots} dict, in full: a reclaim job that cannot see this
+    # job's request_dir rebuilds the request from it (capacity_reclaim.yml),
+    # so what it holds is exactly what an approval may eradicate. The data
+    # is one templated dict so that counts arrive as numbers, not strings.
+    - name: Publish the request as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'request_id': request_id, 'at_risk_array': at_risk_array,
+              'candidate_count': (candidates.volumes | length) + (candidates.snapshots | length),
+              'candidates': candidates} }}
+      run_once: true
+      delegate_to: localhost

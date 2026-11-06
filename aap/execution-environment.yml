@@ -1,0 +1,31 @@
+---
+# Execution environment for the job templates aap/seed.yml creates.
+# The supported base carries neither py-pure-client nor the
+# everpure.flasharray collection, so this definition adds both on top of
+# it. Build on a host that is logged in to registry.redhat.io:
+#
+#   pip install ansible-builder
+#   ansible-builder build -f aap/execution-environment.yml \
+#       -t flasharray-eda-ee:latest --container-runtime podman
+#
+# On a containerized platform whose jobs run under the same user that built
+# the image, the local image is enough (set aap_ee_image to
+# localhost/flasharray-eda-ee:latest and aap_ee_pull to missing); otherwise
+# push it to a registry the platform can pull from and point aap_ee_registry
+# and aap_ee_image at it.
+version: 3
+
+images:
+  base_image:
+    name: registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest
+
+dependencies:
+  python:
+    - py-pure-client>=1.94.1
+  galaxy:
+    collections:
+      - name: everpure.flasharray
+        version: ">=1.46.0"
+
+options:
+  package_manager_path: /usr/bin/microdnf
