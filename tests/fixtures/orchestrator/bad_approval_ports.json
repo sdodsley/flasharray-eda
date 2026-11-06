@@ -15,10 +15,10 @@
       "type": "approval",
       "name": "Gate",
       "parameters": {
-        "approver_group_ids": [
-          "REPLACE_AT_SYNC"
+        "approver_groups": [
+          "approvers"
         ],
-        "timeout": 3600
+        "decision_window": 3600
       }
     },
     {

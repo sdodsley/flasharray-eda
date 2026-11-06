@@ -40,17 +40,17 @@
         "job_template_name": "FlashArray - capacity request",
         "organization_name": "FlashArray",
         "credential_id": "REPLACE_AT_SYNC",
-        "credentials": ["FlashArray - ${trigger.payload.event.array}"],
+        "credential_names": ["FlashArray - ${trigger.event.array}"],
         "extra_vars": {
-          "at_risk_array": "${trigger.payload.event.array}",
-          "used_pct": "${trigger.payload.event.data.used_pct}",
-          "used_bytes": "${trigger.payload.event.data.used_bytes}",
-          "capacity_bytes": "${trigger.payload.event.data.capacity_bytes}",
-          "days_to_full": "${trigger.payload.event.data.days_to_full}",
-          "top_growers": "${trigger.payload.event.data.top_growers}",
-          "pending_eradication_volumes": "${trigger.payload.event.data.pending_eradication_volumes}",
-          "pending_eradication_snapshots": "${trigger.payload.event.data.pending_eradication_snapshots}",
-          "candidate_targets": "${trigger.payload.event.data.others}"
+          "at_risk_array": "${trigger.event.array}",
+          "used_pct": "${trigger.event.data.used_pct}",
+          "used_bytes": "${trigger.event.data.used_bytes}",
+          "capacity_bytes": "${trigger.event.data.capacity_bytes}",
+          "days_to_full": "${trigger.event.data.days_to_full}",
+          "top_growers": "${trigger.event.data.top_growers}",
+          "pending_eradication_volumes": "${trigger.event.data.pending_eradication_volumes}",
+          "pending_eradication_snapshots": "${trigger.event.data.pending_eradication_snapshots}",
+          "candidate_targets": "${trigger.event.data.others}"
         }
       }
     },
@@ -72,9 +72,9 @@
         "credential_id": "REPLACE_AT_SYNC",
         "extra_vars": {
           "severity": "warning",
-          "subject": "Capacity request ${capacity_request.artifacts.request_id}: ${trigger.payload.event.array} at ${trigger.payload.event.data.used_pct}% used awaits approval",
-          "detail": "${capacity_request.artifacts.candidate_count} volumes and snapshots pending eradication could be reclaimed; full in about ${trigger.payload.event.data.days_to_full} days at the 7-day growth rate. Approve or reject in the orchestrator within 24 hours.",
-          "target_array": "${trigger.payload.event.array}"
+          "subject": "Capacity request ${capacity_request.artifacts.request_id}: ${trigger.event.array} at ${trigger.event.data.used_pct}% used awaits approval",
+          "detail": "${capacity_request.artifacts.candidate_count} volumes and snapshots pending eradication could be reclaimed; full in about ${trigger.event.data.days_to_full} days at the 7-day growth rate. Approve or reject in the orchestrator within 24 hours.",
+          "target_array": "${trigger.event.array}"
         }
       }
     },
@@ -83,9 +83,9 @@
       "type": "approval",
       "name": "Approve eradicating the pending objects",
       "parameters": {
-        "approver_group_ids": ["REPLACE_AT_SYNC"],
-        "timeout": 86400,
-        "prompt": "Capacity request ${capacity_request.artifacts.request_id}: eradicate the ${capacity_request.artifacts.candidate_count} volumes and snapshots already pending eradication on ${trigger.payload.event.array} (${trigger.payload.event.data.used_pct}% used, full in about ${trigger.payload.event.data.days_to_full} days). Only the objects the request listed, and only those still pending eradication now, are touched; objects under a SafeMode retention lock are refused by the array. Rejecting frees nothing."
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Capacity request ${capacity_request.artifacts.request_id}: eradicate the ${capacity_request.artifacts.candidate_count} volumes and snapshots already pending eradication on ${trigger.event.array} (${trigger.event.data.used_pct}% used, full in about ${trigger.event.data.days_to_full} days). Only the objects the request listed, and only those still pending eradication now, are touched; objects under a SafeMode retention lock are refused by the array. Rejecting frees nothing."
       }
     },
     {
@@ -96,10 +96,10 @@
         "job_template_name": "FlashArray - capacity reclaim",
         "organization_name": "FlashArray",
         "credential_id": "REPLACE_AT_SYNC",
-        "credentials": ["FlashArray - ${trigger.payload.event.array}"],
+        "credential_names": ["FlashArray - ${trigger.event.array}"],
         "extra_vars": {
           "request_id": "${capacity_request.artifacts.request_id}",
-          "array": "${trigger.payload.event.array}",
+          "array": "${trigger.event.array}",
           "candidates": "${capacity_request.artifacts.candidates}",
           "rebuild_from_artifacts": true,
           "reclaim_action": "eradicate_pending",
@@ -117,9 +117,9 @@
         "credential_id": "REPLACE_AT_SYNC",
         "extra_vars": {
           "severity": "warning",
-          "subject": "Capacity request ${capacity_request.artifacts.request_id} on ${trigger.payload.event.array} rejected or expired; nothing reclaimed",
-          "detail": "${trigger.payload.event.array} is at ${trigger.payload.event.data.used_pct}% used and the ${capacity_request.artifacts.candidate_count} pending objects stay until the array's own eradication timer runs out. Capacity has to come from somewhere else.",
-          "target_array": "${trigger.payload.event.array}"
+          "subject": "Capacity request ${capacity_request.artifacts.request_id} on ${trigger.event.array} rejected or expired; nothing reclaimed",
+          "detail": "${trigger.event.array} is at ${trigger.event.data.used_pct}% used and the ${capacity_request.artifacts.candidate_count} pending objects stay until the array's own eradication timer runs out. Capacity has to come from somewhere else.",
+          "target_array": "${trigger.event.array}"
         }
       }
     },
@@ -133,9 +133,9 @@
         "credential_id": "REPLACE_AT_SYNC",
         "extra_vars": {
           "severity": "warning",
-          "subject": "Capacity request ${capacity_request.artifacts.request_id}: ${trigger.payload.event.array} at ${trigger.payload.event.data.used_pct}% used with no reclaim candidates",
-          "detail": "Nothing is pending eradication on ${trigger.payload.event.array} (full in about ${trigger.payload.event.data.days_to_full} days at the 7-day growth rate). The request file lists the top growers and the arrays with headroom; this needs a human decision, not an eradication.",
-          "target_array": "${trigger.payload.event.array}"
+          "subject": "Capacity request ${capacity_request.artifacts.request_id}: ${trigger.event.array} at ${trigger.event.data.used_pct}% used with no reclaim candidates",
+          "detail": "Nothing is pending eradication on ${trigger.event.array} (full in about ${trigger.event.data.days_to_full} days at the 7-day growth rate). The request file lists the top growers and the arrays with headroom; this needs a human decision, not an eradication.",
+          "target_array": "${trigger.event.array}"
         }
       }
     }

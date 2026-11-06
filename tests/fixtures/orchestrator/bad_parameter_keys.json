@@ -1,15 +1,12 @@
 {
   "schema_version": "2.0.0",
   "name": "fixture",
-  "description": "A deliberately broken definition for tests/unit/test_ao_lint.py: the trigger's id used as an expression namespace (its payload is ${trigger...})",
+  "description": "an aap_job_template node with a parameter the orchestrator's node schema does not have (credentials instead of credential_names)",
   "triggers": [
     {
       "id": "start",
-      "type": "eda_trigger",
-      "parameters": {
-        "webhook_path": "fixture",
-        "authorized_service_account_ids": ["REPLACE_AT_SYNC"]
-      }
+      "type": "manual_trigger",
+      "parameters": {}
     }
   ],
   "nodes": [
@@ -24,8 +21,11 @@
         "extra_vars": {
           "severity": "info",
           "subject": "fixture",
-          "detail": "${start.payload.x}"
-        }
+          "target_array": "a"
+        },
+        "credentials": [
+          "FlashArray - a"
+        ]
       }
     }
   ],

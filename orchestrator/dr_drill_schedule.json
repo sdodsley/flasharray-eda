@@ -7,8 +7,10 @@
       "id": "nightly",
       "type": "scheduled_trigger",
       "parameters": {
+        "schedule_type": "cron",
         "cron": "0 2 * * *",
-        "overlap_policy": "skip"
+        "timezone": "UTC",
+        "missed_schedule_policy": "skip"
       }
     }
   ],

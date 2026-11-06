@@ -15,7 +15,7 @@
       "type": "approval",
       "name": "Gate",
       "parameters": {
-        "timeout": 3600
+        "decision_window": 3600
       }
     },
     {

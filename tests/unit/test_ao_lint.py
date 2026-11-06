@@ -100,8 +100,9 @@ def test_only_placeholders_for_per_environment_ids(path):
             assert params["credential_id"] == PLACEHOLDER, node["id"]
             assert params["organization_name"] == "FlashArray", node["id"]
         if node["type"] == "approval":
-            assert params["approver_group_ids"] == [PLACEHOLDER], node["id"]
-            assert params["timeout"] == 86400, node["id"]
+            # approvers are named by group name, not id: the built-in group
+            assert params["approver_groups"] == ["admins"], node["id"]
+            assert params["decision_window"] == 86400, node["id"]
     for trigger in doc["triggers"]:
         accounts = trigger["parameters"].get("authorized_service_account_ids")
         if accounts is not None:
@@ -116,7 +117,7 @@ def test_capacity_definition_feeds_the_request_playbook():
     )
     nodes = {node["id"]: node for node in doc["nodes"]}
     extra = nodes["capacity_request"]["parameters"]["extra_vars"]
-    assert extra["at_risk_array"] == "${trigger.payload.event.array}"
+    assert extra["at_risk_array"] == "${trigger.event.array}"
     assert set(extra) == {
         "at_risk_array",
         "used_pct",
@@ -132,13 +133,13 @@ def test_capacity_definition_feeds_the_request_playbook():
     reclaim = nodes["capacity_reclaim"]["parameters"]["extra_vars"]
     assert reclaim["request_id"] == "${capacity_request.artifacts.request_id}"
     assert reclaim["candidates"] == "${capacity_request.artifacts.candidates}"
-    assert reclaim["array"] == "${trigger.payload.event.array}"
+    assert reclaim["array"] == "${trigger.event.array}"
     assert reclaim["reclaim_action"] == "eradicate_pending"
     assert doc["triggers"][0]["parameters"]["webhook_path"] == "fa_capacity"
     # both array-touching nodes run with the event's array's own credential
     for node_id in ("capacity_request", "capacity_reclaim"):
-        assert nodes[node_id]["parameters"]["credentials"] == [
-            "FlashArray - ${trigger.payload.event.array}"
+        assert nodes[node_id]["parameters"]["credential_names"] == [
+            "FlashArray - ${trigger.event.array}"
         ], node_id
 
 
@@ -181,28 +182,36 @@ def test_expand_node_uses_the_requested_arrays_credential():
     doc = json.loads((ROOT / "orchestrator" / "day2_expand_volume.json").read_text())
     nodes = {node["id"]: node for node in doc["nodes"]}
     params = nodes["expand_volume"]["parameters"]
-    assert params["credentials"] == ["FlashArray - ${trigger.array}"]
+    assert params["credential_names"] == ["FlashArray - ${trigger.array}"]
     assert params["extra_vars"]["target_array"] == "${trigger.array}"
     # the notify nodes need no array credential
     for node_id, node in nodes.items():
         if node_id != "expand_volume" and node["type"] == "aap_job_template":
-            assert "credentials" not in node["parameters"], node_id
+            assert "credential_names" not in node["parameters"], node_id
 
 
-def test_trigger_id_is_not_an_expression_namespace(ao_lint):
-    """${<trigger id>...} is a typo for ${trigger...}: the expression system
-    has the namespaces trigger, <node id>, workflow_context and loop only."""
+def test_trigger_id_is_an_alias_of_trigger(ao_lint):
+    """The engine registers the trigger output under trigger and under the
+    trigger's id, so ${<trigger id>.array} resolves like ${trigger.array}
+    and is checked the same way."""
     doc = json.loads((ROOT / "orchestrator" / "day2_expand_volume.json").read_text())
     assert ao_lint.lint_definition(doc) == []
     trigger_id = doc["triggers"][0]["id"]
     node = next(n for n in doc["nodes"] if n["id"] == "notify_requested")
     node["parameters"]["extra_vars"]["target_array"] = "${" + trigger_id + ".array}"
+    assert ao_lint.lint_definition(doc) == []
+    node["parameters"]["extra_vars"]["target_array"] = (
+        "${" + trigger_id + ".payload.array}"
+    )
+    problems = ao_lint.lint_definition(doc)
+    assert [(p.node, p.rule) for p in problems] == [("notify_requested", "trigger_ref")]
+    assert "array, new_size, volume" in problems[0].message
+    node["parameters"]["extra_vars"]["target_array"] = "${no_such_trigger.array}"
     problems = ao_lint.lint_definition(doc)
     assert [(p.node, p.rule) for p in problems] == [
         ("notify_requested", "expression_ref")
     ]
-    assert trigger_id in problems[0].message
-    assert "node id or namespace" in problems[0].message
+    assert "node id, trigger id or namespace" in problems[0].message
 
 
 def _definition(name):
@@ -214,10 +223,11 @@ def _node(doc, node_id):
 
 
 def test_trigger_refs_follow_the_trigger_type(ao_lint):
-    """A manual trigger's inputs are ${trigger.<property>}, a webhook or EDA
-    body is ${trigger.payload...}, a schedule has scheduled_at and
-    triggered_at; the two shipped forms swapped between the definitions
-    resolve to nothing at run time and lint as trigger_ref."""
+    """Manual inputs and webhook or EDA bodies are both read as
+    ${trigger.<top-level key>} (the body is not wrapped), a schedule has
+    scheduled_at and triggered_at; the wrapped form, a key the input_schema
+    does not have and a payload on a schedule all resolve to nothing at run
+    time and lint as trigger_ref."""
     doc = _definition("day2_expand_volume.json")
     extra = _node(doc, "notify_requested")["parameters"]["extra_vars"]
     extra["target_array"] = "${trigger.payload.event.array}"
@@ -229,10 +239,13 @@ def test_trigger_refs_follow_the_trigger_type(ao_lint):
     doc = _definition("capacity_reclaim_approval.json")
     _node(doc, "capacity_reclaim")["parameters"]["extra_vars"][
         "array"
-    ] = "${trigger.array}"
+    ] = "${trigger.payload.event.array}"
     problems = ao_lint.lint_definition(doc)
     assert [(p.node, p.rule) for p in problems] == [("capacity_reclaim", "trigger_ref")]
-    assert "${trigger.payload...}" in problems[0].message
+    assert "input_schema has event (the body is not wrapped)" in problems[0].message
+    # an EDA trigger without an input_schema takes any top-level key
+    del doc["triggers"][0]["parameters"]["input_schema"]
+    assert ao_lint.lint_definition(doc) == []
 
     doc = _definition("dr_drill_schedule.json")
     extra = _node(doc, "notify_summary")["parameters"]["extra_vars"]
@@ -244,6 +257,54 @@ def test_trigger_refs_follow_the_trigger_type(ao_lint):
     doc = _definition("day2_expand_volume.json")
     doc["triggers"][0]["parameters"] = {}
     assert ao_lint.lint_definition(doc) == []
+
+
+def test_parameter_keys_follow_the_node_schemas(ao_lint):
+    """Every node schema has additionalProperties false, so a key it does
+    not list (an old parameter name, the controller's names) is refused at
+    import; the linter holds the types whose schemas it has read to their
+    key sets, and a scheduled or webhook trigger to its required fields."""
+    doc = _definition("capacity_reclaim_approval.json")
+    _node(doc, "capacity_request")["parameters"]["credentials"] = ["x"]
+    _node(doc, "approve_reclaim")["parameters"]["timeout"] = 60
+    doc["triggers"][0]["parameters"]["secret"] = "x"
+    problems = ao_lint.lint_definition(doc)
+    assert sorted((p.node, p.rule) for p in problems) == [
+        ("approve_reclaim", "parameter_keys"),
+        ("capacity_request", "parameter_keys"),
+        ("fa_capacity_event", "parameter_keys"),
+    ]
+    messages = {p.node: p.message for p in problems}
+    assert "has no parameter credentials; it takes" in messages["capacity_request"]
+    assert "credential_names" in messages["capacity_request"]
+    assert "has no parameter timeout" in messages["approve_reclaim"]
+    assert "decision_window" in messages["approve_reclaim"]
+    # a type whose schema has not been read is not held to a key set
+    doc = _definition("dr_drill_schedule.json")
+    doc["nodes"].append(
+        {"id": "pause", "type": "wait", "name": "Pause", "parameters": {"anything": 1}}
+    )
+    doc["edges"].append({"from": "notify_summary", "to": "pause"})
+    assert ao_lint.lint_definition(doc) == []
+
+    doc = _definition("dr_drill_schedule.json")
+    params = doc["triggers"][0]["parameters"]
+    del params["schedule_type"]
+    problems = ao_lint.lint_definition(doc)
+    assert [(p.node, p.rule) for p in problems] == [("nightly", "trigger_parameters")]
+    assert "schedule_type" in problems[0].message
+    params["schedule_type"] = "interval"
+    problems = ao_lint.lint_definition(doc)
+    assert [(p.node, p.rule) for p in problems] == [("nightly", "trigger_parameters")]
+    assert "has no interval" in problems[0].message
+
+    doc = _definition("capacity_reclaim_approval.json")
+    doc["triggers"][0]["parameters"]["authorized_service_account_ids"] = []
+    problems = ao_lint.lint_definition(doc)
+    assert [(p.node, p.rule) for p in problems] == [
+        ("fa_capacity_event", "trigger_parameters")
+    ]
+    assert "authorized_service_account_ids" in problems[0].message
 
 
 def test_node_references_must_name_an_ancestor(ao_lint):
@@ -387,10 +448,10 @@ def test_oversize_definition(tmp_path, ao_lint, allowed):
     assert rules == {"cap_size"}
 
 
-def test_every_back_edge_is_a_cycle_and_to_port_is_not_an_edge_key(ao_lint):
-    """The published edge model is {from, to, from_port?}; how a loop node's
+def test_every_back_edge_is_a_cycle(ao_lint):
+    """The edge model is {from, to, from_port?, to_port?}; how a loop node's
     body returns to it is unconfirmed (orchestrator/README.md), so the linter
-    neither accepts a to_port key nor exempts any edge from the cycle rule."""
+    exempts no edge from the cycle rule, with or without a to_port."""
     doc = json.loads((ROOT / "orchestrator" / "dr_drill_schedule.json").read_text())
     doc["nodes"].append(
         {
@@ -413,7 +474,7 @@ def test_every_back_edge_is_a_cycle_and_to_port_is_not_an_edge_key(ao_lint):
     assert rules == {"cycle", "single_input"}
     doc["edges"][-1]["to_port"] = "iterate"
     rules = {p.rule for p in ao_lint.lint_definition(doc)}
-    assert rules == {"edge_keys", "cycle", "single_input"}
+    assert rules == {"cycle", "single_input"}
 
 
 def test_problem_line_format(ao_lint):

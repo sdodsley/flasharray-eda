@@ -61,8 +61,8 @@
       "type": "approval",
       "name": "Approve the expansion",
       "parameters": {
-        "approver_group_ids": ["REPLACE_AT_SYNC"],
-        "timeout": 86400,
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
         "prompt": "Expand volume ${trigger.volume} on ${trigger.array} to ${trigger.new_size}. A FlashArray volume grows in place and never shrinks through this workflow; the file system inside it still has to be grown by its owner afterwards."
       }
     },
@@ -74,7 +74,7 @@
         "job_template_name": "FlashArray - expand volume",
         "organization_name": "FlashArray",
         "credential_id": "REPLACE_AT_SYNC",
-        "credentials": ["FlashArray - ${trigger.array}"],
+        "credential_names": ["FlashArray - ${trigger.array}"],
         "extra_vars": {
           "target_array": "${trigger.array}",
           "volume": "${trigger.volume}",

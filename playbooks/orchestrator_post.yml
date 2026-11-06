@@ -3,8 +3,8 @@
 # Two HTTP calls: a client-credentials token from
 # {orchestrator_url}/api/v1/auth/token, then the event to
 # {orchestrator_url}/api/v1/webhooks/eda/{orchestrator_webhook_path}. The
-# orchestrator wraps the body as trigger.payload, so the body is
-# {"event": {...}} and a workflow node reads ${trigger.payload.event.<field>}
+# orchestrator passes the body through unwrapped, so the body is
+# {"event": {...}} and a workflow node reads ${trigger.event.<field>}
 # (the envelope is documented in docs/ORCHESTRATOR.md).
 #
 # Inputs (extra_vars from the rulebook): orchestrator_url,

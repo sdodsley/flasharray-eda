@@ -87,9 +87,9 @@ Content-Type: application/json
 | 413 | body over the orchestrator's 1 MB payload limit | `warning`, `status: 413` (the playbook refuses bodies over 1000000 bytes before sending, see below) |
 | -1 | no HTTP answer (connection refused, timeout, TLS failure) | `warning`, `status: -1` |
 
-The orchestrator wraps the body as `trigger.payload`, so a workflow node
-reads `${trigger.payload.event.array}`, `${trigger.payload.event.data.used_pct}`
-and so on.
+The orchestrator passes the body through unwrapped, so a workflow node
+reads `${trigger.event.array}`, `${trigger.event.data.used_pct}` and so on
+(the trigger's id is an alias of `trigger`).
 
 ### 3. Envelope
 
@@ -287,3 +287,62 @@ about ten seconds.
   under `orchestrator_paths`, a rule guarded by `vars.orchestrator_enabled
   == true` that runs `orchestrator_post.yml`, and `== false` on the local
   rule. Only capacity is wired in this phase.
+
+## Verified against a live orchestrator (2026-11-06)
+
+The upstream orchestrator code at the tag Red Hat ships as the 2026.8
+release (API 1.3.1) was run from its own compose file beside the
+containerized platform of aap/README.md, on the same host, with its host
+ports moved out of the platform's way. What ran:
+
+1. Setup through `/api/v1`: a service account `flasharray-eda` in the
+   default project with one client credential (`AO_CLIENT_ID` is its
+   identifier, the secret shown once); an `Ansible Automation Platform`
+   credential (platform admin, basic auth) and an
+   `ansible_automation_platform` integration, validated `success`, through
+   which `GET /api/v1/proxies/aap/job_templates` listed the ten FlashArray
+   templates and the array credentials of aap/seed.yml;
+   `orchestrator/capacity_reclaim_approval.json` with its two placeholders
+   substituted (`POST /api/v1/workflows/validate`: valid, 0 findings),
+   created as version 1 and published.
+2. `playbooks/orchestrator_post.yml`, run by hand with `AO_CLIENT_ID` and
+   `AO_CLIENT_SECRET` in the environment and a `purefa_capacity` event for a
+   lab array (91.2 % used, 12 days to full, another array in `others`):
+   token obtained, event posted, **202** with an execution id, one
+   `orchestrator_post` record (`stage: post`, `status: 202`, 582 body
+   bytes, `severity: info`).
+3. The execution: the trigger completed with the body unwrapped, so every
+   `${trigger.event...}` resolved; **FlashArray - capacity request**
+   launched with the credential `credential_names` named
+   (`FlashArray - <event array>`, interpolated, then resolved by name in
+   the organization) and its extra_vars typed as sent (`candidate_targets`
+   and `top_growers` lists, `used_pct` a float, the byte counts integers);
+   its `set_stats` surfaced as `${capacity_request.artifacts.*}`
+   (`request_id`, `at_risk_array`, `candidate_count` 4, `candidates`) and
+   its job URL as `job_url`; the condition evaluated `true`; **FlashArray -
+   notify** ran; the approval node created an approval for the `admins`
+   group carrying the prompt from the definition and paused the execution
+   (`approval_pending: true`, `status: paused`). The decision belongs to a
+   human and is not part of this run.
+
+Three facts about running that stack beside a containerized platform on
+one host (its development compose, not the product):
+
+- A rootless container cannot reach the host's own address (the user-mode
+  network gives the container that address itself), and the orchestrator's
+  URL validator refuses the link-local alias the container runtime offers
+  for the host. The AAP integration therefore points at a small TCP relay
+  container on the stack's network that forwards to that alias; the relay's
+  name goes into `APP_INTEGRATION_URL_ALLOWED_HOSTS`, and the API and worker
+  containers are recreated for the variable to take.
+- The compose gives the worker services an `extra_hosts` entry that points
+  the name `syntara` at the host (development mode, with the API outside
+  containers). With the API's host port moved, the approval node's calls to
+  the Approvals API fail ("Failed to connect to Approvals API after 3
+  attempts") and the execution fails at the approval. Removing the entry
+  lets the name resolve to the API container; `POST
+  /api/v1/executions/{id}/retry` then re-runs the workflow from its start
+  (a new execution, a new capacity request).
+- The secrets generator can fail to produce a bootstrap admin password; a
+  password written by hand must stay readable by the container user (the
+  generator's own last step is `chmod -R +r`).

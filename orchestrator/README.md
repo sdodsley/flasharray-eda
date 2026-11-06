@@ -53,8 +53,9 @@ account bearer token:
                     "pending_eradication_snapshots": 40}}}
 ```
 
-The orchestrator wraps the body as `trigger.payload`, so the nodes read
-`${trigger.payload.event.array}` and `${trigger.payload.event.data.<field>}`;
+The orchestrator passes the body through unwrapped (the trigger's output is
+the request body itself, and the trigger's id is an alias of `trigger`), so
+the nodes read `${trigger.event.array}` and `${trigger.event.data.<field>}`;
 `data` carries the `purefa_capacity` event fields unchanged. The trigger's
 `input_schema` (JSON Schema draft-07) requires the envelope keys and the
 array-name pattern the playbooks assert on.
@@ -96,10 +97,11 @@ to eradicate any object already pending eradication.
 The templates need the inventory of this project (one host per array) and
 the array credentials `aap/seed.yml` creates (`FlashArray - <array>`, one
 per array, each injecting `fa_url`, `api_token` and `credential_array`). A
-job holds one of them, so the two capacity nodes set `credentials` to
-`FlashArray - ${trigger.payload.event.array}`, the event's own array, and
+job holds one of them, so the two capacity nodes set `credential_names` to
+`FlashArray - ${trigger.event.array}`, the event's own array, and
 the expand-volume node to `FlashArray - ${trigger.array}`, the array the
-form asked for; the playbooks refuse to run when `credential_array` is not
+form asked for (the node resolves the names in the organization at
+launch); the playbooks refuse to run when `credential_array` is not
 the array they were asked to act on. The DR-drill node uses the credential
 its template carries (`aap/seed.yml` attaches the first drill's target
 array's); pick another array's credential on the node the same way.
@@ -132,13 +134,15 @@ definition is imported:
 | Placeholder | Where | Replaced by |
 | --- | --- | --- |
 | `credential_id` | every `aap_job_template` (and `aap_workflow_job_template`) node | the orchestrator's AAP credential (the integration's token or user) |
-| `approver_group_ids` | every `approval` node | the group ids allowed to decide; `approver_user_ids` works the same way |
 | `authorized_service_account_ids` | the `eda_trigger` | the service account the EDA bridge authenticates as |
 
 `organization_name` is `FlashArray`, the organization `aap/seed.yml`
 creates (`aap_organization`); change both together if the templates live
-elsewhere. Approval timeouts are 86400 seconds (24 hours), after which a
-run takes the `rejected` port.
+elsewhere. Approvers are named, not identified: `approver_groups` (and
+`approver_users`) take group and user names, so they are not placeholders.
+The shipped definitions name `admins`, the built-in group every instance
+has; change it to the group that should decide. `decision_window` is 86400
+seconds (24 hours), after which a run takes the `rejected` port.
 
 ## Importing
 
@@ -172,8 +176,13 @@ It needs nothing but the standard library and prints one line per problem
 as `file:node:rule:message`. The rules: `schema_version` is `2.0.0`; the
 top-level keys are present; ids match `^[a-zA-Z_][a-zA-Z0-9_]*$` and are
 unique across triggers and nodes; only the known trigger and node types;
-every edge has `from`/`to` (plus `from_port`) naming existing ids and
-never ending at a trigger; an approval node
+every edge has `from`/`to` (plus `from_port`, `to_port`) naming existing
+ids and never ending at a trigger; every trigger and node of a type whose
+schema has been read carries only the parameters that schema lists
+(`parameter_keys`: the orchestrator refuses an unknown key), a scheduled
+trigger has `schedule_type` and the matching `cron` or `interval`, a webhook
+or EDA trigger its `webhook_path` and `authorized_service_account_ids`; an
+approval node
 lists approvers and has `approved` and `rejected` edges to different nodes;
 a condition node has an expression and `true` and `false` edges; a switch
 has a `default_port` and complete cases; a converge node has at least two
@@ -185,41 +194,52 @@ nodes, 500 edges and 1.5 MB; every
 `workflow_job_template_id`), a name being one from the allowed list when
 that is given; every agentic node has `credential_id` and `prompt`; no
 `http_request` to a bare IP address; every `${name...}` expression names a
-node or one of the `trigger`, `workflow_context` and `loop` namespaces (a
-trigger's id is not a namespace: its payload is `${trigger...}`), and a
+node, a trigger id (an alias of `trigger`) or one of the `trigger`,
+`workflow_context` and `loop` namespaces, and a
 node it names runs before the referencing node (not on a parallel branch
 or later); every `${trigger...}` reads what the trigger exposes
-(`trigger_ref`: `${trigger.payload...}` for a webhook or EDA trigger,
-`scheduled_at` or `triggered_at` for a scheduled trigger, a property of the
-`input_schema` for a manual trigger, anything when it declares none);
+(`trigger_ref`: a top-level key of the body for a webhook or EDA trigger
+and a property of the `input_schema` for a manual trigger, anything when the
+trigger declares no `input_schema`; `scheduled_at` or `triggered_at` for a
+scheduled trigger);
 every node has an incoming edge (`unreachable`); `from_port` appears only
-on edges leaving an approval, condition or switch node; and every
+on edges leaving an approval, condition, switch or loop node; and every
 condition and switch-case expression, with each `${...}` replaced by a
 name, parses into the safe evaluator's operators only (`==`, `!=`, `>`,
 `<`, `>=`, `<=`, `and`, `or`, `not`, `in`, names and literals; no `&&`,
 arithmetic or function calls).
 
-## Assumptions to confirm on a live instance
+## Checked against a live instance
 
-These follow the published model and the Red Hat demo definitions, not a
-run against the product:
+Read from the node schemas and the engine of the upstream code at the tag
+Red Hat ships as the 2026.8 release (API 1.3.1), running beside the lab
+platform; the earlier assumptions that were wrong are corrected above:
 
-- Manual-trigger inputs are read as `${trigger.<field>}` (the demos do
-  that); webhook and EDA bodies as `${trigger.payload...}`.
-- The approval node's second port is named `rejected` and is also taken
-  on timeout.
-- The scheduled trigger's overlap policy is the `overlap_policy` parameter
-  and `0 2 * * *` is evaluated in the orchestrator's schedule time zone.
-- AAP job artifacts (`set_stats`) surface as `${<node>.artifacts.<name>}`
-  and the job URL as `${<node>.job_url}`.
-- A full-span expression such as `"${trigger.payload.event.data.top_growers}"`
-  keeps the value's type, so lists reach the playbooks as lists.
-- Expressions are interpolated inside an `aap_job_template` node's
-  `credentials` list, so `FlashArray - ${trigger.payload.event.array}`
-  names the event's array's credential at run time (and `FlashArray -
-  ${trigger.array}` the form's array's in the day-2 definition).
-- How a loop node's body is wired: the published edge shape is `{from, to,
-  from_port?}` with no back edge, so the linter rejects every cycle and
-  treats `from_port` on an edge leaving a loop node (or any node other than
-  approval, condition and switch) as a mistake; confirm the loop node's
-  wiring and ports before using one.
+- A webhook or EDA body is **not** wrapped: the trigger's output is the
+  request body, read as `${trigger.<top-level key>}`, and the trigger's id
+  is registered as a second name for the same output.
+- Approval nodes take `approver_groups` and `approver_users` (names),
+  `prompt`, `decision_window` (seconds) and `fallback_decision`; their
+  ports are `approved` and `rejected`, and the decision recorded is one of
+  approved, rejected, expired and cancelled.
+- Condition ports are `true` and `false`; loop ports `iterate` and
+  `complete`.
+- An `aap_job_template` node names its job credentials with
+  `credential_names` (or `job_credentials` ids); every node schema has
+  `additionalProperties: false`, so a key outside the list is refused at
+  import (the `parameter_keys` rule).
+- A scheduled trigger takes `schedule_type` (`cron` or `interval`), the
+  matching `cron` or `interval`, `timezone` (UTC when unset) and
+  `missed_schedule_policy`; its output is `scheduled_at` and
+  `triggered_at`.
+- An AAP node's result carries `job_id`, `job_url`, `job_status`,
+  `artifacts` (the job's `set_stats`), `created`, `started` and `finished`.
+
+Confirmed with a run (docs/ORCHESTRATOR.md, "Verified against a live
+orchestrator"): a full-span expression keeps its type (`candidate_targets`
+and `top_growers` reached the playbook as lists, `used_pct` as a float),
+`credential_names` is interpolated before the names are resolved (the job
+ran with `FlashArray - <event array>`), artifacts and `job_url` surface as
+described, the condition took its `true` port and the approval node paused
+the execution for the `admins` group. Still open: how a loop node's body is
+wired back (the linter rejects every cycle until then).

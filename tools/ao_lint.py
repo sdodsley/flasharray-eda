@@ -15,12 +15,12 @@ that only show up at run time (one successor shared by approved and
 rejected, a cycle, a plain node fed by two branches, a node nothing leads
 to, a from_port on a node without ports, an expression that names a node
 that has not run yet or a trigger field the trigger does not expose, a
-condition the safe evaluator cannot parse) and the published caps. An edge
-is {from, to, from_port?}, the shape the published model
-gives; how a loop node's body returns to it is not part of that model, so
-no back edge is exempt from the cycle rule (orchestrator/README.md,
-"Assumptions to confirm on a live instance"). A shell that does not expand
-globs can pass them as-is.
+condition the safe evaluator cannot parse), a parameter a type's schema
+does not have (the orchestrator refuses the import) and the published
+caps. An edge is {from, to, from_port?, to_port?}; how a loop node's body
+returns to it is not part of the checked contract, so no back edge is
+exempt from the cycle rule (orchestrator/README.md, "Checked against a
+live instance"). A shell that does not expand globs can pass them as-is.
 """
 
 import argparse
@@ -64,14 +64,70 @@ NODE_TYPES = (
     "script",
     "agentic",
 )
-EDGE_KEYS = ("from", "to", "from_port")
-# expression namespaces that are not node ids
+EDGE_KEYS = ("from", "to", "from_port", "to_port")
+# expression namespaces that are not node ids; a trigger's id is an alias of
+# trigger (the engine registers the trigger output under both names)
 EXPRESSION_NAMESPACES = ("trigger", "workflow_context", "loop")
-# ${trigger...} with whatever follows the namespace, up to the closing brace
-TRIGGER_REF_RE = re.compile(r"\$\{\s*trigger\b\s*([^}]*)\}")
-# the node types whose outgoing edges carry a from_port; nothing else has
-# ports, triggers included
-PORTED_NODE_TYPES = ("approval", "condition", "switch")
+# the node types whose outgoing edges carry a from_port (approval: approved,
+# rejected; condition: true, false; switch: its cases; loop: iterate,
+# complete); nothing else has ports, triggers included
+PORTED_NODE_TYPES = ("approval", "condition", "switch", "loop")
+# the parameters each trigger and node type accepts, from the orchestrator's
+# node schemas (additionalProperties false: an unknown key is refused at
+# import). A type not listed here has not had its schema checked and is not
+# held to a key set.
+PARAMETER_KEYS = {
+    "manual_trigger": ("input_schema",),
+    "webhook_trigger": (
+        "webhook_path",
+        "input_schema",
+        "authorized_service_account_ids",
+    ),
+    "eda_trigger": ("webhook_path", "input_schema", "authorized_service_account_ids"),
+    "scheduled_trigger": (
+        "schedule_type",
+        "cron",
+        "interval",
+        "timezone",
+        "missed_schedule_policy",
+    ),
+    "aap_job_template": (
+        "credential_id",
+        "integration_id",
+        "job_template_id",
+        "job_template_name",
+        "organization_name",
+        "organization_id",
+        "inventory_id",
+        "inventory_name",
+        "job_credentials",
+        "credential_names",
+        "extra_vars",
+        "limit",
+        "tags",
+        "skip_tags",
+        "verbosity",
+        "timeout",
+        "job_type",
+        "forks",
+        "job_slicing",
+        "diff_mode",
+        "execution_environment",
+        "instance_group_id",
+        "instance_group_name",
+        "labels",
+    ),
+    "approval": (
+        "credential_id",
+        "approver_users",
+        "approver_groups",
+        "prompt",
+        "fallback_decision",
+        "decision_window",
+    ),
+    "condition": ("condition",),
+    "switch": ("cases", "default_port"),
+}
 # what the safe evaluator accepts in a condition (expression-system.md):
 # comparisons, and/or/not, in/not in, names and literals. Every ${...} is
 # replaced by a name before parsing, so Load is the only context that occurs.
@@ -109,6 +165,7 @@ RULES = (
     "top_level",
     "trigger_type",
     "trigger_parameters",
+    "parameter_keys",
     "node_keys",
     "node_type",
     "id_format",
@@ -238,6 +295,7 @@ def lint_definition(doc, allowed_templates=None, shown=""):
                 f"unknown trigger type {ttype!r}; one of " + ", ".join(TRIGGER_TYPES),
             )
         _check_trigger_parameters(out, trigger, label)
+        _check_parameter_keys(out, label, ttype, trigger.get("parameters"))
 
     for index, node in enumerate(nodes):
         label = _label(node, f"nodes[{index}]")
@@ -325,10 +383,15 @@ def lint_definition(doc, allowed_templates=None, shown=""):
         _check_node(
             out, node_id, node, outgoing[node_id], incoming[node_id], allowed_templates
         )
-        # a trigger's id is not an expression namespace: its payload is read
-        # as ${trigger...}, whatever the trigger is called
+        # ${trigger...} and ${<trigger id>...} read the same output
         _check_expressions(
-            out, node_id, node, set(node_by_id), ancestors[node_id], typed_triggers
+            out,
+            node_id,
+            node,
+            set(node_by_id),
+            ancestors[node_id],
+            typed_triggers,
+            trigger_ids,
         )
 
     _check_cycles(out, graph)
@@ -387,12 +450,49 @@ def _check_trigger_parameters(out, trigger, label):
         )
         return
     ttype = trigger.get("type")
-    if ttype in ("webhook_trigger", "eda_trigger") and not _text(
-        params.get("webhook_path")
-    ):
-        out.add(label, "trigger_parameters", f"{ttype} has no webhook_path")
-    if ttype == "scheduled_trigger" and not _text(params.get("cron")):
-        out.add(label, "trigger_parameters", "scheduled_trigger has no cron")
+    if ttype in ("webhook_trigger", "eda_trigger"):
+        if not _text(params.get("webhook_path")):
+            out.add(label, "trigger_parameters", f"{ttype} has no webhook_path")
+        accounts = params.get("authorized_service_account_ids")
+        if not isinstance(accounts, list) or not accounts:
+            out.add(
+                label,
+                "trigger_parameters",
+                f"{ttype} has no authorized_service_account_ids "
+                "(REPLACE_AT_SYNC placeholders count)",
+            )
+    if ttype == "scheduled_trigger":
+        kind = params.get("schedule_type")
+        if kind not in ("cron", "interval"):
+            out.add(
+                label,
+                "trigger_parameters",
+                "scheduled_trigger has no schedule_type (cron or interval)",
+            )
+        elif not _text(params.get(kind)):
+            out.add(
+                label,
+                "trigger_parameters",
+                f"scheduled_trigger with schedule_type {kind} has no {kind}",
+            )
+
+
+def _check_parameter_keys(out, label, item_type, params):
+    """A trigger or node of a type whose schema is known carries only the
+    parameters that schema lists."""
+    allowed = PARAMETER_KEYS.get(item_type)
+    if allowed is None or not isinstance(params, dict):
+        return
+    unknown = sorted(key for key in params if key not in allowed)
+    if unknown:
+        out.add(
+            label,
+            "parameter_keys",
+            f"{item_type} has no parameter "
+            + ", ".join(unknown)
+            + "; it takes "
+            + ", ".join(allowed),
+        )
 
 
 def _text(value):
@@ -409,6 +509,7 @@ def _ref_id(value):
 def _check_node(out, node_id, node, outs, ins, allowed_templates):
     ntype = node.get("type")
     params = node.get("parameters") if isinstance(node.get("parameters"), dict) else {}
+    _check_parameter_keys(out, node_id, ntype, node.get("parameters"))
     if ntype == "converge":
         if len(ins) < 2:
             out.add(
@@ -461,14 +562,14 @@ def _check_node(out, node_id, node, outs, ins, allowed_templates):
             )
         approvers = [
             key
-            for key in ("approver_group_ids", "approver_user_ids")
+            for key in ("approver_groups", "approver_users")
             if isinstance(params.get(key), list) and params[key]
         ]
         if not approvers:
             out.add(
                 node_id,
                 "approval_approvers",
-                "lists neither approver_group_ids nor approver_user_ids (REPLACE_AT_SYNC placeholders count)",
+                "lists neither approver_groups nor approver_users (group and user names)",
             )
 
     elif ntype == "condition":
@@ -615,8 +716,8 @@ def _condition_problem(expr):
 
 
 def _input_properties(params):
-    """The property names of a manual trigger's input_schema, or None when
-    it declares none (then any ${trigger.<name>} may be right)."""
+    """The property names of a trigger's input_schema, or None when it
+    declares none (then any ${trigger.<name>} may be right)."""
     schema = params.get("input_schema")
     if not isinstance(schema, dict):
         return None
@@ -627,7 +728,7 @@ def _input_properties(params):
 
 
 def _trigger_rest(raw):
-    """'.payload.event.array' -> 'payload.event.array'."""
+    """'.event.array' -> 'event.array'."""
     rest = raw.strip()
     if rest.startswith("."):
         rest = rest[1:].strip()
@@ -636,10 +737,11 @@ def _trigger_rest(raw):
 
 def _trigger_ref_problem(rest, triggers):
     """None when one of the triggers exposes ${trigger.<rest>}: a webhook or
-    EDA trigger wraps its body as payload, a scheduled trigger has
-    scheduled_at and triggered_at, a manual trigger has the properties of
-    its input_schema (anything, when it declares none). Else a message
-    saying what the triggers do expose."""
+    EDA trigger passes its body through unwrapped and a manual trigger its
+    inputs, so all three expose the properties of their input_schema
+    (anything, when they declare none); a scheduled trigger has
+    scheduled_at and triggered_at. Else a message saying what the triggers
+    do expose."""
     first = re.split(r"[.\[\s]", rest, maxsplit=1)[0]
     exposes = []
     for trigger in triggers:
@@ -647,11 +749,7 @@ def _trigger_ref_problem(rest, triggers):
         params = trigger.get("parameters")
         if not isinstance(params, dict):
             params = {}
-        if ttype in ("webhook_trigger", "eda_trigger"):
-            if first == "payload":
-                return None
-            exposes.append(f"{ttype} exposes the body as ${{trigger.payload...}}")
-        elif ttype == "scheduled_trigger":
+        if ttype == "scheduled_trigger":
             if rest in ("scheduled_at", "triggered_at"):
                 return None
             exposes.append(
@@ -662,17 +760,21 @@ def _trigger_ref_problem(rest, triggers):
             if properties is None or first in properties:
                 return None
             exposes.append(
-                "manual_trigger's input_schema has "
+                f"{ttype}'s input_schema has "
                 + (", ".join(sorted(properties)) or "no properties")
+                + ("" if ttype == "manual_trigger" else " (the body is not wrapped)")
             )
     shown = "${trigger" + ("." + rest if rest else "") + "}"
     return f"{shown} resolves to nothing: " + "; ".join(exposes)
 
 
-def _check_expressions(out, node_id, node, node_ids, ancestors, triggers):
+def _check_expressions(
+    out, node_id, node, node_ids, ancestors, triggers, trigger_ids=frozenset()
+):
     """Every ${name....} in the node's parameters names a node that runs
-    before this one or one of the orchestrator's namespaces (a trigger's id
-    is neither), and every ${trigger...} reads what the trigger exposes."""
+    before this one, one of the orchestrator's namespaces or a trigger id
+    (an alias of trigger), and every ${trigger...} or ${<trigger id>...}
+    reads what the trigger exposes."""
     params = node.get("parameters")
     if params is None:
         return
@@ -685,16 +787,18 @@ def _check_expressions(out, node_id, node, node_ids, ancestors, triggers):
                     "expression_ref",
                     f"${{{name}...}} names a node that does not run before this one",
                 )
-        elif name not in EXPRESSION_NAMESPACES:
+        elif name not in EXPRESSION_NAMESPACES and name not in trigger_ids:
             out.add(
                 node_id,
                 "expression_ref",
-                f"${{{name}...}} references no node id or namespace "
+                f"${{{name}...}} references no node id, trigger id or namespace "
                 "(" + ", ".join(EXPRESSION_NAMESPACES) + ")",
             )
     if not triggers:
         return
-    for rest in sorted({_trigger_rest(raw) for raw in TRIGGER_REF_RE.findall(text)}):
+    names = "|".join(re.escape(name) for name in ("trigger", *sorted(trigger_ids)))
+    ref_re = re.compile(r"\$\{\s*(?:" + names + r")\b\s*([^}]*)\}")
+    for rest in sorted({_trigger_rest(raw) for raw in ref_re.findall(text)}):
         message = _trigger_ref_problem(rest, triggers)
         if message:
             out.add(node_id, "trigger_ref", message)

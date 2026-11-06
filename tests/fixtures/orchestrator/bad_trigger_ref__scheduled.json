@@ -7,6 +7,7 @@
       "id": "start",
       "type": "scheduled_trigger",
       "parameters": {
+        "schedule_type": "cron",
         "cron": "0 2 * * *"
       }
     }
