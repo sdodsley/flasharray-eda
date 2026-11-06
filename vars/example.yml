@@ -4,7 +4,7 @@
 # (playbooks/) into a temporary project; vars/ is not there, so relative
 # vars_files paths do not resolve.
 # Copy to vars/local-<site>.yml (gitignored) and edit. Comments give sane
-# production values; the lab file uses short intervals.
+# production values; the intervals set here are short, for a test run.
 # Uppercase names in the rulebooks ({{ APPROVAL_TOKEN }},
 # {{ GIT_WEBHOOK_SECRET }}) are environment variables handed over with
 # --env-vars (run.sh does that), never keys in this file.

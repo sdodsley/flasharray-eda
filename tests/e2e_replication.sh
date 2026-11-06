@@ -2,8 +2,8 @@
 # Copyright 2026 Everpure, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase 2 exit test: replication actions on real arrays.
-#   A=<source array> B=<target array> PGROUP=<replicated pg on A> POD=<stretched pod> ./tests/e2e_phase2.sh
+# End-to-end test: replication actions on real arrays.
+#   A=<source array> B=<target array> PGROUP=<replicated pg on A> POD=<stretched pod> ./tests/e2e_replication.sh
 #
 #  1. steady state: the replication rulebook with the enriched events (45 s)
 #  2. replay: an overdue protection group -> immediate replicated snapshot of

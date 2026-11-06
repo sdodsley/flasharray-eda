@@ -41,7 +41,9 @@ It creates nothing on an array and nothing in the automation orchestrator
   the supported `ee-supported-rhel9` name with no registry; it lacks both.
   `aap/execution-environment.yml` is an ansible-builder definition that
   adds them on top of the supported base (`aap/decision-environment.yml`
-  does the same for the Event-Driven Ansible side); build it, then set
+  does the same for the Event-Driven Ansible side), and
+  `aap/Containerfile.ee` builds the same content with `podman build` when
+  ansible-builder is not available; build one of them, then set
   `aap_ee_image` (and `aap_ee_registry` if it is pushed somewhere) to the
   result, or expect the job templates to fail on the first SDK call. The
   controller does not install Python packages for a project.
@@ -71,17 +73,17 @@ platform API from where it runs.
 | Execution environment | `FlashArray EDA EE` | image from `aap_ee_image` |
 | Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - post orchestrator event` | one per playbook; prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills` and the credential of its first drill's target array; apply baseline is limited to `localhost` plus the default array (one launch applies one array's baseline) |
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
-| EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image` (the `make de` image, pushed to a registry) |
+| EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the activation workers |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential type and credentials | `FlashArray API`, `FlashArray - <array>` | same inputs; injected as variables |
 | EDA rulebook activations | `FlashArray rulebook - <name>` | one per file in `extensions/eda/rulebooks/`, created disabled (see below) |
 
 The names in the job template column are fixed: the orchestrator workflow
 definitions and the rulebook actions refer to them, and
-`tests/unit/test_playbook_artifacts.py` checks that `seed.yml` still
-carries them. `FlashArray - post orchestrator event` runs
+`tests/unit/test_playbook_artifacts.py` checks that `seed.yml` carries
+them. `FlashArray - post orchestrator event` runs
 `playbooks/orchestrator_post.yml`; it is created only when the orchestrator
-credential exists, and the project sync must already see that playbook.
+credential exists and the synced project contains that playbook.
 
 ## How the array credentials reach the playbooks
 
@@ -144,10 +146,12 @@ localhost. Either push the image to a registry the platform can pull from
 (the private automation hub counts) and reference it by that name, or load
 it into the stores that need it:
 
-    podman save localhost/flasharray-eda-ee:latest \n      | podman exec -i automation-controller-task podman load
-    podman save localhost/flasharray-eda-de:latest \n      | podman exec -i automation-eda-activation-worker-1 podman load
+    podman save localhost/flasharray-eda-ee:latest \
+      | podman exec -i automation-controller-task podman load
+    podman save localhost/flasharray-eda-de:latest \
+      | podman exec -i automation-eda-activation-worker-1 podman load
 
-Repeat the second line for every activation worker.
+Repeat the second command for every activation worker.
 
 ## Paths inside the execution environment
 
@@ -162,7 +166,7 @@ outlives a job:
   `capacity_reclaim.yml` reads the request file `capacity_request.yml`
   wrote, in a later job. Without a shared path it rebuilds the request from
   the artifacts the launching node passes (`array` or `at_risk_array`, and
-  `candidates`), so the reclaim still works, but the request and its
+  `candidates`), so the reclaim works without one, but the request and its
   outcome then sit in two jobs' outputs rather than in one file;
 - the baseline playbooks: `baseline_dir` is a git checkout.
 
@@ -177,56 +181,59 @@ standalone webhook ruleset stands in for. Launch it with the variables the
 capacity rule passes to `capacity_request.yml` (`at_risk_array`,
 `used_pct`, `days_to_full`, ... and `target_array` set to the same array
 so the notify records carry it), from the capacity rulebook with
-`run_workflow_template` or by hand. The request node's artifacts
-(`request_id`, `at_risk_array`, `candidate_count`, `candidates`) are passed
-to the following nodes as extra vars, which is how the reclaim node learns
-`request_id` and, when `request_dir` is not a path shared by both jobs,
-rebuilds the request from `at_risk_array` and `candidates` (see "Paths
-inside the execution environment"; the reclaim node passes
-`rebuild_from_artifacts: true`, without which the playbook refuses a
-missing request file). Launch permission on `FlashArray - capacity
-reclaim` is permission to eradicate already-destroyed objects (the reclaim
-rebuilds its request from the `candidates` it is given when no request file
-exists); grant it to the workflow's and the orchestrator's identity only,
-and give people the workflow, not the template. The approval node waits
-`aap_approval_timeout_s` seconds for an approver; its denial or timeout
-takes the failure edge to a warning notify, and a failed job takes it to a
-critical one. The reclaim node runs with `reclaim_action:
-eradicate_pending` and records the approver as `workflow-approval`; the
-platform's activity stream holds who approved. The request and reclaim
-nodes run their templates with the credential the template carries (the
-default array's), so one copy of the workflow serves one array; a launch
-for another array fails at the `credential_array` check instead of acting
-on the wrong array. For a second array, seed the workflow again under
-another name with that array's credential on both nodes.
+`run_workflow_template` or by hand. The variables must have the event's
+shape: `candidate_targets` is a list of `{array, used_pct}` records, not a
+list of names. The request node's artifacts (`request_id`, `at_risk_array`,
+`candidate_count`, `candidates`) are passed to the following nodes as extra
+vars, which is how the reclaim node learns `request_id` and, when
+`request_dir` is not a path shared by both jobs, rebuilds the request from
+`at_risk_array` and `candidates` (see "Paths inside the execution
+environment"; the reclaim node passes `rebuild_from_artifacts: true`,
+without which the playbook refuses a missing request file). Launch
+permission on `FlashArray - capacity reclaim` is permission to eradicate
+already-destroyed objects (the reclaim rebuilds its request from the
+`candidates` it is given when no request file exists); grant it to the
+workflow's and the orchestrator's identity only, and give people the
+workflow, not the template. The approval node waits `aap_approval_timeout_s`
+seconds for an approver; its denial or timeout takes the failure edge to
+a warning notify, and a failed job takes it to a critical one. The
+reclaim node runs with `reclaim_action: eradicate_pending` and records
+the approver as `workflow-approval`; the platform's activity stream
+holds who approved. The request and reclaim nodes run their templates
+with the credential the template carries (the default array's), so one
+copy of the workflow serves one array; a launch for another array fails
+at the `credential_array` check instead of acting on the wrong array.
+For a second array, seed the workflow again under another name with that
+array's credential on both nodes.
 
 ## The Event-Driven Ansible controller side
 
 The decision environment, the project, a credential type, one credential
 per array and one activation per rulebook are created, each activation
 with the rulebook vars file (`FAEDA_VARS`, else `vars/example.yml`) as its
-extra vars and the array credentials attached. The activations are created
-**disabled** (`aap_eda_activations_enabled: false`) because two things in
-this tree are not yet done:
+extra vars. The activations are created **disabled**
+(`aap_eda_activations_enabled: false`) because an enabled activation
+cannot start with the rulebooks and plugins as this repository ships
+them:
 
 - activations resolve custom event sources only from collections in the
-  decision environment, so `purefa_events` and `purefa_syslog` must be
-  packaged and the rulebooks switched to FQCNs first
+  decision environment, so `purefa_events` and `purefa_syslog` have to be
+  packaged in a collection and the rulebooks switched to FQCNs
   ([docs/PACKAGING.md](../docs/PACKAGING.md));
 - the plugins read each array's token from the environment variable named
   in `purefa_arrays[].api_token_env`, and an EDA credential injects
-  variables, not environment. Until the plugin accepts the token as a
-  variable, an enabled activation would refuse to start with the token
-  "unset".
+  variables, not environment, so an activation would refuse to start with
+  the token "unset" unless the plugin accepts the token as a variable.
 
-The array credentials are still seeded as EDA credentials (type
-`FlashArray API`, injected as `fa_url` / `api_token`) so nothing secret has
-to be typed in later, but they are not attached to the activations: the
-controller refuses two credentials of one injecting type on an activation
-("Key: fa_url already exists in extra_vars"), so a fleet of arrays needs
-either one credential type per array or a type that carries the whole list. `APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` are not
-seeded; on the platform the webhook rulesets become event streams with
-their own credentials.
+The array credentials are seeded as EDA credentials (type
+`FlashArray API`, injected as `fa_url` / `api_token`) so that no secret
+has to be typed in when the activations are enabled, but they are not
+attached to the activations: the controller refuses two credentials of
+one injecting type on an activation ("Key: fa_url already exists in
+extra_vars"), so a fleet of arrays needs either one credential type per
+array or a type that carries the whole list. `APPROVAL_TOKEN` and
+`GIT_WEBHOOK_SECRET` are not seeded; on the platform the webhook rulesets
+become event streams with their own credentials.
 
 ## Re-running safely
 
@@ -240,37 +247,46 @@ changed on every run. `ansible.eda.rulebook_activation` cannot modify an
 existing activation; to change one, delete it in the UI and re-run. The
 seed never deletes anything.
 
-## What ran on a platform (2026-11-06)
+## Verified on a platform
 
-Ansible Automation Platform 2.7, containerized growth topology on one RHEL
-9.8 host, seeded by this playbook from empty (two runs: the second changed
-only the EDA credentials, as documented above). Execution environment built
-from `aap/Containerfile.ee` and loaded into the controller's task container.
+The seed and the controller-tier workflow have been exercised on Ansible
+Automation Platform 2.7, containerized growth topology on one RHEL 9.8
+host, seeded from empty by this playbook (a repeat run reports a change
+only for the EDA credentials, see "Re-running safely"), with the
+execution environment built from `aap/Containerfile.ee` and loaded into
+the controller's task container, against one FlashArray:
 
-| Check | Result |
-| --- | --- |
-| `FlashArray - notify` launched with `subject`, `severity`, `target_array`, `detail` | successful; artifacts `record_kind`, `severity`, `array` |
-| `FlashArray - capacity reclaim (controller tier)` launched with the capacity rule's variables for array A | request job read the array's pending-eradication objects (4 protection-group snapshot members), wrote the request and the alert record, published `request_id`, `candidate_count`, `candidates`; the workflow paused at the approval node |
-| Approval by a platform user | recorded on the approval (`approved_or_denied_by`); the reclaim node ran with `rebuild_from_artifacts`, rebuilt the request from the artifacts (`rebuilt_from: job artifacts`), asked the array to eradicate the four candidates and recorded the array's refusal of each ("Cannot eradicate volume snapshot because it belongs to a protection group snapshot"); nothing eradicated, `result: refused`, workflow successful |
-| Rulebook activations | created disabled; not started (plugins not yet packaged, decision environment not built) |
+- `FlashArray - notify`, launched with `subject`, `severity`,
+  `target_array` and `detail`, succeeds and publishes the artifacts
+  `record_kind`, `severity` and `array`.
+- `FlashArray - capacity reclaim (controller tier)`, launched with the
+  capacity rule's variables: the request job reads the array's
+  pending-eradication objects, writes the request and the alert record,
+  and publishes `request_id`, `candidate_count` and `candidates`; the
+  workflow pauses at the approval node; the approval records who decided
+  (`approved_or_denied_by`); the reclaim node rebuilds the request from
+  the artifacts (`rebuilt_from: job artifacts`) and asks the array to
+  eradicate the candidates. A snapshot that belongs to a protection group
+  snapshot is refused by the array ("Cannot eradicate volume snapshot
+  because it belongs to a protection group snapshot"); the reclaim records
+  each refusal, eradicates nothing, ends with `result: refused`, and the
+  workflow completes successfully.
 
-Two things the first run taught: the launch variables must have the event's
-shape (`candidate_targets` is a list of `{array, used_pct}` records, not
-names), and a job that references an image by a `localhost/` name needs
-that image in the platform's own image store (see above).
+Not verified: the rulebook activations (created disabled, see "The
+Event-Driven Ansible controller side"); the decision environment image has
+not been built or run on the platform.
 
 ## What it cannot seed
 
-- **The automation orchestrator.** It has no configuration-as-code API and
-  no certified collection: the AAP integration, the service account and
-  its client credentials, the EDA trigger with the service account bound to
-  it, and the workflow definitions are set up as
+- **The automation orchestrator.** It has no certified collection, and the
+  seed does not drive its API: the AAP integration, the service account
+  and its client credentials, the EDA trigger with the service account
+  bound to it, and the workflow definitions are set up as
   [orchestrator/README.md](../orchestrator/README.md) describes. The seed
   only stores the service account's credentials, once they exist, so that
-  `FlashArray - post orchestrator event` can use them; and the add-on is
-  documented for OpenShift-based AAP only (generally available 2026-08-21,
-  no published timeline for the containerized topology as of 2026-10-15),
-  so a containerized AAP 2.7 may not be able to host it.
+  `FlashArray - post orchestrator event` can use them. Red Hat documents
+  the add-on for OpenShift-based deployments only, so a containerized
+  AAP 2.7 may not be able to host it.
 - **The images.** The execution environment and the decision environment
   are references by name and image; building and pushing them is outside
   the platform.

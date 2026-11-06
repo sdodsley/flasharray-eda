@@ -70,7 +70,7 @@ every other field (array included) None; it is never named after the sender.
 Format verification: the audit parsing follows the message layout published
 by Pure's SIEM partners (`<PRI>Mon DD HH:MM:SS host purity.audit: (login
 message ID: N) Array name: 'x' Controller: 0 Interface: 'REST' ... User: 'u'
-... Action: '...' Method: '' Result: Success Description: ''`). Not yet
+... Action: '...' Method: '' Result: Success Description: ''`). Not
 verified against a live array; tests/syslog_send.py replays representative
 lines.
 """

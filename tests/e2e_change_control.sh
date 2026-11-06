@@ -2,17 +2,17 @@
 # Copyright 2026 Everpure, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase 1 exit test: change control from the audit log, maintenance-window
+# End-to-end test: change control from the audit log, maintenance-window
 # suppression, the git-push webhook and the alert runbook map.
 #
-#   A=<array> HUMAN_PASSWORD=<password for the test user> ./tests/e2e_phase1.sh
+#   A=<array> HUMAN_PASSWORD=<password for the test user> ./tests/e2e_change_control.sh
 #   (HUMAN_USER names the test user, default eda-human)
 #
 # Needs env.sh working, the vars and inventory files named by FAEDA_VARS /
 # FAEDA_INVENTORY, a git checkout at baseline_dir, and GIT_WEBHOOK_SECRET in
 # the environment (env file): run.sh hands it to change_control.yml and step
 # 3 signs its push payload with it. Credentials for A come from A_URL_ENV /
-# A_TOKEN_ENV (defaults ARRAY_A_URL / ARRAY_A_TOKEN) as in the other phases.
+# A_TOKEN_ENV (defaults ARRAY_A_URL / ARRAY_A_TOKEN) as in the other scripts.
 # Creates a local array_admin user HUMAN_USER on A and mints a token for it
 # (tests/out/human.env, mode 0600) so the out-of-band change is made by a
 # different identity from the automation account; the user and the file are

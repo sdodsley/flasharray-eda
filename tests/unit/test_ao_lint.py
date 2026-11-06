@@ -156,7 +156,7 @@ SIZE_SAMPLES = {
 def _playbook_size_regex():
     text = (ROOT / "playbooks" / "expand_volume.yml").read_text()
     match = re.search(r"new_size \| string is match\('([^']+)'\)", text)
-    assert match, "playbooks/expand_volume.yml no longer asserts on new_size"
+    assert match, "playbooks/expand_volume.yml does not assert on new_size"
     return match.group(1)
 
 

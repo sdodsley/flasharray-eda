@@ -11,7 +11,7 @@ not here.
 ```
 python3 -m venv venv && . venv/bin/activate
 make deps      # Python requirements and the two collections
-make check     # black, pyflakes, yamllint, unit tests, playbook syntax
+make check     # black, pyflakes, yamllint, ao_lint, unit tests, playbook syntax
 ```
 
 `make check` is what CI runs. The unit tests need no array: the plugins are
@@ -28,8 +28,9 @@ rulebooks, throttles included.
 - Rulebooks decide, plugins observe. A source plugin emits facts (including
   the booleans and counters rules need, because rulebook conditions cannot
   do arithmetic or use filters); policy lives in the rulebook.
-- ansible-rulebook facts to respect, not to fix: conditions allow no Jinja
-  filters or arithmetic (actions do); `throttle.once_within` must be a
+- ansible-rulebook facts to respect, not to fix (the full list is in
+  [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md)): conditions allow no
+  Jinja filters or arithmetic (actions do); `throttle.once_within` must be a
   literal and cannot sit on a multi-event condition; `--vars` is one
   untemplated file; `localhost` must be in the inventory; `run_playbook`
   copies the playbook's whole directory, so relative includes within

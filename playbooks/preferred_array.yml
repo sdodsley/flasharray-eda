@@ -35,7 +35,7 @@
           hosts = {}
           if vols:
               for conn in c.get_connections(volume_names=vols).items:
-                  # a stretched pod also lists the peer array's hosts as "<array>:<host>"; only local hosts are ours to change
+                  # a stretched pod also lists the peer array's hosts as "<array>:<host>"; only local hosts can be changed here
                   if conn.host and conn.host.name and ":" not in conn.host.name:
                       hosts.setdefault(conn.host.name, []).append(conn.volume.name)
           out = []
@@ -72,7 +72,7 @@
         label: "{{ item.host }}"
       register: prefer
 
-    - name: Restore hosts whose preference is exactly the online set we applied
+    - name: Restore hosts whose preference is exactly the online set this playbook applied
       when: mode == 'restore' and item.preferred | sort == online_arrays | sort and item.preferred | length > 0
       everpure.flasharray.purefa_host:
         fa_url: "{{ fa_url }}"

@@ -52,8 +52,9 @@ matters.
   can be forged, so syslog events are a fast hint: `syslog.yml` only
   notifies, and the REST plugin owns every action that changes an array.
 - **TLS verification is off by default** in the plugins and the playbooks
-  (`verify_ssl: false`, `disable_warnings: true`) because lab arrays carry
-  self-signed certificates. Turn it on where the arrays have real ones.
+  (`verify_ssl: false`, `disable_warnings: true`) because arrays in a lab
+  usually carry self-signed certificates. Turn it on where the arrays have
+  real ones.
 - **Reporting.** Please report a vulnerability privately to the maintainer
   through GitHub's security advisory form for this repository rather than in
   a public issue.

@@ -104,10 +104,10 @@ aap_eda_de_pull_policy: missing
 # The rulebook vars file handed to every activation as its extra vars
 # (FAEDA_VARS when set, else the example file).
 aap_eda_vars_file: "{{ lookup('env', 'FAEDA_VARS') | default(playbook_dir ~ '/../vars/example.yml', true) }}"
-# Activations are created disabled: the rulebooks' custom sources must be
-# packaged in a collection first (docs/PACKAGING.md) and the plugins read
-# their tokens from the environment, which an EDA credential does not set
-# (aap/README.md). Flip this once both are done.
+# Activations are created disabled: the rulebooks' custom sources resolve
+# only from a collection in the decision environment (docs/PACKAGING.md),
+# and the plugins read their tokens from the environment, which an EDA
+# credential does not set (aap/README.md). Set true once both hold.
 aap_eda_activations_enabled: false
 aap_eda_restart_policy: on-failure
 aap_eda_log_level: error

@@ -9,16 +9,19 @@ events and acts on them through the `everpure.flasharray` collection. No
 Pure1, no Fusion and no external monitoring stack are required; a
 Prometheus/Alertmanager path exists for sites that already run one.
 
-Status: all five phases of [docs/PLAN.md](docs/PLAN.md) are implemented.
-Phases 0-3 are exit-tested against two Purity//FA 6.10.6 arrays
-(2026-10-20); Phase 4's syslog listener and Prometheus rules are tested with
-replayed input (the lab arrays cannot reach the EDA host), the Alertmanager
-path drove a real identify LED, and the decision environment is unbuilt
-(see [PHASE4](docs/PHASE4.md)). Records per phase: [PHASE0](docs/PHASE0.md)
-sources and rulebooks, [PHASE1](docs/PHASE1.md) change control,
-[PHASE2](docs/PHASE2.md) replication, [PHASE3](docs/PHASE3.md) capacity,
-QoS and the anomaly rule, [PHASE4](docs/PHASE4.md) push, Prometheus and
-packaging. This is a prototype, not a supported product.
+Status: a prototype, not a supported product. The REST-pull rulebooks (the
+first eight rows of the table below) are verified against two Purity//FA
+6.10.6 arrays; the syslog listener is tested with replayed input; the
+Prometheus rules follow the exporter's metric specification and are not
+evaluated against a live Prometheus; the Alertmanager webhook path is
+verified against an array (a posted hardware alert lights the identify
+LED); the Ansible Automation Platform seed and controller-tier approval
+workflow are verified against a 2.7 installation and the orchestrator
+handoff against a live orchestrator; the decision environment is not
+built. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
+exercised on hardware, [docs/DESIGN.md](docs/DESIGN.md) the design and
+scope, and [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and
+rulebook behaviour the rules are written around.
 
 Three transports feed the same rulebooks and the same playbooks:
 
@@ -106,7 +109,7 @@ Three things to get right on the first run:
 | `performance.yml` | telemetry | noisy neighbour on a hot array; capped volume back to normal; array write latency vs the same half hour last week | temporary IOPS cap with an `eda/qos_cap` tag on the array; cap lifted; notify |
 | `anomaly.yml` | telemetry + audits | data reduction drop + snapshot or write surge + a human destroying snapshots, all on one array inside 15 minutes | snapshot every local protection group now, lengthen the eradication delay, page |
 | `syslog.yml` | purefa_syslog | `purity.audit` / `purity.alert` / `purity.test` lines pushed by the array | fast notification seconds after the fact |
-| `alertmanager.yml` | ansible.eda.alertmanager | alerts from `prometheus/flasharray.rules.yml` on the native OpenMetrics exporter | the same playbooks, no code of ours on the array side |
+| `alertmanager.yml` | ansible.eda.alertmanager | alerts from `prometheus/flasharray.rules.yml` on the native OpenMetrics exporter | the same playbooks, no custom code on the array side |
 
 Every remediation is gated: `maintenance_active` on the event (one cached
 `/maintenance-windows` read per array), an `automation_users` list so the
@@ -127,16 +130,18 @@ playbooks/                             notify, remediate_*, reconcile, apply_bas
 orchestrator/                          workflow definitions for the automation orchestrator and job_templates.txt
                                        (orchestrator/README.md)
 tools/ao_lint.py                       offline linter for those definitions (`make lint-ao`)
-aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects
-                                       (aap/README.md)
+aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects;
+                                       execution and decision environment definitions (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
 prometheus/flasharray.rules.yml        alert rules for the native exporter (belongs on the Prometheus server)
-decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2 (unbuilt)
+decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2 (not built; see below)
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)
 env.example, env.sh, run.sh            env file template, shared environment setup, launcher
 tests/                                 unit/ (no array needed), mock_orchestrator.py, lab induction playbooks, fixtures,
-                                       replay rulebooks, e2e_phase*.sh (everything they write goes under tests/out/)
-docs/                                  PLAN.md, the PHASE records, PACKAGING.md (moving into the collection)
+                                       replay rulebooks, e2e_*.sh (everything they write goes under tests/out/)
+docs/                                  DESIGN.md (design and scope), VERIFICATION.md (what is exercised on hardware),
+                                       HARDWARE_NOTES.md (array and rulebook behaviour), ORCHESTRATOR.md (the handoff
+                                       contract), PACKAGING.md (checklist for moving the content into the collection)
 Makefile                               `make check` runs what CI runs; `make de` builds the image
 requirements.txt, requirements.yml     Python packages and the two collections (everpure.flasharray >= 1.46.0)
 ```
@@ -172,9 +177,9 @@ The zero-code path needs neither plugin: Prometheus scrapes the array's
 native OpenMetrics exporter, `prometheus/flasharray.rules.yml` raises alerts
 carrying a `domain` label, Alertmanager posts them to
 `ansible.eda.alertmanager`, and `alertmanager.yml` runs the same playbooks.
-Caveat: the rules were written against the exporter's metric specification
-and have not been evaluated against a live Prometheus; check the metric and
-label names against the exporter version in use before relying on them.
+Not verified: the rules follow the exporter's metric specification and have
+not been evaluated against a live Prometheus; check the metric and label
+names against the exporter version in use before relying on them.
 
 ## Listeners
 
@@ -212,27 +217,28 @@ differently (see also [SECURITY.md](SECURITY.md)):
 `decision-environment/` holds a Containerfile and an ansible-builder
 definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
 the same tree: the plugins, rulebooks and playbooks under
-`/opt/flasharray-eda`, the two collections and py-pure-client. Neither has
-been built or run in this lab ([PHASE4](docs/PHASE4.md)); CI does not build
-them either. The image is self-contained for
-`ansible-rulebook --source-dir` runs: the Containerfile header has the
-`podman run` line, which mounts `vars/`, `inventory/` and the baseline
-checkout and passes the credentials as environment variables.
+`/opt/flasharray-eda`, the two collections and py-pure-client. Not verified:
+neither has been built or run, and CI does not build them. The image is
+self-contained for `ansible-rulebook --source-dir` runs: the Containerfile
+header has the `podman run` line, which mounts `vars/`, `inventory/` and the
+baseline checkout and passes the credentials as environment variables.
 
-Running the rulebooks as EDA Controller activations is a further step.
-Activations pass no `--source-dir` and resolve custom event sources only
-from collections installed in the decision environment, so the two plugins
-must first be packaged as a collection and the source names in the
-rulebooks switched to FQCNs ([docs/PACKAGING.md](docs/PACKAGING.md)). In
-Ansible Automation Platform `run_playbook` becomes `run_job_template`, and
-the capacity rule uses `run_workflow_template` against a workflow whose
+Running the rulebooks as EDA Controller activations needs changes this tree
+does not include. Activations pass no `--source-dir` and resolve custom
+event sources only from collections installed in the decision environment,
+so the two plugins must be packaged as a collection and the source names in
+the rulebooks switched to FQCNs ([docs/PACKAGING.md](docs/PACKAGING.md)).
+In Ansible Automation Platform `run_playbook` becomes `run_job_template`,
+and the capacity rule uses `run_workflow_template` against a workflow whose
 first node is a manual approval (the webhook approval ruleset is the
 stand-in for that). `aap/seed.yml` creates the organization, credential
 types, credentials, inventory, project, job templates, the controller-tier
 approval workflow and disabled rulebook activations
-([aap/README.md](aap/README.md)); it has not been run against a platform.
-The AAP path, the decision environment build and the workflow approval
-were not exercised in this lab.
+([aap/README.md](aap/README.md)). The seed, the job templates and the
+controller-tier approval workflow (request, human approval, reclaim) are
+verified against an Ansible Automation Platform 2.7 installation. Not
+verified: the decision environment build and the rulebooks running as
+activations.
 
 ### Orchestrator handoff
 
@@ -245,10 +251,14 @@ envelope to the workflow's EDA trigger; the approval and the reclaim then
 run in the orchestrator. Every attempt is recorded in the alert log and a
 refusal never fails the rule. [docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md)
 has the contract, the vars and the mock (`tests/mock_orchestrator.py`)
-the unit test and `tests/replay_capacity.yml` run against. Nothing has been
-tried against a live orchestrator yet.
+the unit test and `tests/replay_capacity.yml` run against. The handoff is
+verified against a live orchestrator (the upstream code of the 2026.8
+release): the post, the approval and the reclaim run through.
 
-## Things the hardware taught us
+## Array and rulebook behaviour
+
+Facts the rules are written around;
+[docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) has the longer list.
 
 - `/audits` rejects a filter on `time`; `/alerts/events` needs REST 2.50;
   history resolutions are fixed (30 s, 5 min, 30 min, 2 h, 8 h, 1 day);
@@ -288,26 +298,28 @@ Actions runs the same on every push.
 to the real rulebooks, throttles included; the unit test fails when they
 drift.
 
-`tests/e2e_phase0.sh` to `tests/e2e_phase3.sh` run each phase against a
-lab, inducing what can be induced (NTP drift, a second user's changes, a
-paused replica link, a maintenance window, a pending-eradication volume, a
-busy volume capped and uncapped) and replaying fixtures for what cannot
-(hardware failures, a degraded stretched pod, the anomaly signals); the
-replayed events still drive the real actions on the array. They source
-`env.sh`; read the array credentials from the environment variables named
-by `A_URL_ENV` / `A_TOKEN_ENV` (default `ARRAY_A_URL` / `ARRAY_A_TOKEN`);
-take array and object names from environment variables with no defaults
-(each script prints a usage line when one is missing); derive their own
-vars file into `tests/out/vars_test.yml` from `FAEDA_VARS` with
-`alert_log` and `request_dir` rewritten under `tests/out/`; and never
-delete anything outside `tests/out/`. Phase 3 refuses its eradicate step
+`tests/e2e_sources.sh`, `tests/e2e_change_control.sh`,
+`tests/e2e_replication.sh` and `tests/e2e_approvals.sh` run the rulebooks
+against live arrays, inducing what can be induced (NTP drift, a second
+user's changes, a paused replica link, a maintenance window, a
+pending-eradication volume, a busy volume capped and uncapped) and
+replaying fixtures for what cannot (hardware failures, a degraded stretched
+pod, the anomaly signals); the replayed events still drive the real actions
+on the array. They source `env.sh`; read the array credentials from the
+environment variables named by `A_URL_ENV` / `A_TOKEN_ENV` (default
+`ARRAY_A_URL` / `ARRAY_A_TOKEN`); take array and object names from
+environment variables with no defaults (each script prints a usage line
+when one is missing); derive their own vars file into
+`tests/out/vars_test.yml` from `FAEDA_VARS` with `alert_log` and
+`request_dir` rewritten under `tests/out/`; and never delete anything
+outside `tests/out/`. `tests/e2e_approvals.sh` refuses its eradicate step
 when the array already holds pending-eradication objects, unless
-`E2E_ERADICATE_ALL=1` is set.
+`E2E_ERADICATE_ALL=1` is set. [docs/VERIFICATION.md](docs/VERIFICATION.md)
+lists what each script exercises on hardware and what is replayed only.
 
 `tests/syslog_send.py` sends representative lines to the syslog listener.
 The Alertmanager path is exercised by POSTing a webhook payload to
-`alertmanager.yml`; this one is representative (the body used on
-2026-10-20 was not recorded):
+`alertmanager.yml`, for example:
 
     curl -s -X POST http://127.0.0.1:5002/alerts -H 'Content-Type: application/json' -d '{
       "status": "firing", "alerts": [{"status": "firing",
@@ -320,11 +332,9 @@ The Alertmanager path is exercised by POSTing a webhook payload to
 
 - Blog post: "Your FlashArray is already an event source"
   (https://theansibleguy.com/your-flasharray-is-already-an-event-source/),
-  the ideas and the plan this project was built from.
+  the ideas behind this project.
 - Predecessor: the "Fusion MCP + Ansible thought experiment"
-  (https://github.com/sdodsley/fusion-ansible-mcp). The runnable
-  Fusion-based EDA prototype that followed it, and that this project
-  forked, is unpublished.
+  (https://github.com/sdodsley/fusion-ansible-mcp).
 - Collection: https://github.com/Everpure-Ansible/FlashArray-Collection
   (module bugs go there, not here)
 - Rulebook docs: https://docs.ansible.com/projects/rulebook/en/latest/

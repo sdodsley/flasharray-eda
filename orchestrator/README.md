@@ -10,17 +10,15 @@ schedule with an overlap policy, and an audit record of who decided what.
 Every node that touches an array is still one of this project's playbooks,
 launched as an AAP job template.
 
-Nothing in this directory has been imported into a live orchestrator yet;
-the definitions follow the published model (see the assumptions at the end)
-and `tools/ao_lint.py` checks them offline. Availability: Red Hat announced the automation orchestrator as a
-technology preview in May 2026 and made it generally available as an
-add-on to Ansible Automation Platform 2.7 on 2026-08-21, for
-OpenShift-based deployments; as of 2026-10-15 Red Hat had published no
-timeline for the containerized (non-OpenShift) AAP topology, and the one
-configuration-as-code collection that targets its API (1.3.1) describes
-that API as a technology preview that may change. Treat every endpoint
-and parameter in this document as unverified until it has been exercised
-against a live instance.
+The capacity definition is verified on the upstream orchestrator code at
+the tag Red Hat ships as the 2026.8 release (API 1.3.1): it validates,
+imports, publishes and runs from the EDA trigger through the approval to
+the reclaim ("Checked against a live instance" below). All three
+definitions follow the node schemas of that release and `tools/ao_lint.py`
+checks them offline. The product add-on is generally available for
+OpenShift-based Ansible Automation Platform 2.7 only; no timeline is
+published for the containerized topology, and its API (1.3.1) is described
+as a technology preview that may change (docs/ORCHESTRATOR.md).
 
 ## The definitions
 
@@ -177,8 +175,8 @@ as `file:node:rule:message`. The rules: `schema_version` is `2.0.0`; the
 top-level keys are present; ids match `^[a-zA-Z_][a-zA-Z0-9_]*$` and are
 unique across triggers and nodes; only the known trigger and node types;
 every edge has `from`/`to` (plus `from_port`, `to_port`) naming existing
-ids and never ending at a trigger; every trigger and node of a type whose
-schema has been read carries only the parameters that schema lists
+ids and never ending at a trigger; every trigger and node of a type with a
+known parameter schema carries only the parameters that schema lists
 (`parameter_keys`: the orchestrator refuses an unknown key), a scheduled
 trigger has `schedule_type` and the matching `cron` or `interval`, a webhook
 or EDA trigger its `webhook_path` and `authorized_service_account_ids`; an
@@ -211,13 +209,13 @@ arithmetic or function calls).
 
 ## Checked against a live instance
 
-Read from the node schemas and the engine of the upstream code at the tag
-Red Hat ships as the 2026.8 release (API 1.3.1), running beside the lab
-platform; the earlier assumptions that were wrong are corrected above:
+Contract facts read from the node schemas and the engine of the upstream
+code at the tag Red Hat ships as the 2026.8 release (API 1.3.1); the
+sections above follow them:
 
-- A webhook or EDA body is **not** wrapped: the trigger's output is the
-  request body, read as `${trigger.<top-level key>}`, and the trigger's id
-  is registered as a second name for the same output.
+- A webhook or EDA body is passed through unwrapped: the trigger's output
+  is the request body, read as `${trigger.<top-level key>}`, and the
+  trigger's id is registered as a second name for the same output.
 - Approval nodes take `approver_groups` and `approver_users` (names),
   `prompt`, `decision_window` (seconds) and `fallback_decision`; their
   ports are `approved` and `rejected`, and the decision recorded is one of
@@ -235,13 +233,16 @@ platform; the earlier assumptions that were wrong are corrected above:
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,
   `artifacts` (the job's `set_stats`), `created`, `started` and `finished`.
 
-Confirmed with a run (docs/ORCHESTRATOR.md, "Verified against a live
-orchestrator"): a full-span expression keeps its type (`candidate_targets`
-and `top_growers` reached the playbook as lists, `used_pct` as a float),
-`credential_names` is interpolated before the names are resolved (the job
-ran with `FlashArray - <event array>`), artifacts and `job_url` surface as
-described, the condition took its `true` port, the approval node paused
-the execution for the `admins` group and, once approved, its `approved` port
-ran the reclaim with the request rebuilt from artifacts (the array refused
-the locked candidates; nothing eradicated). Still open: how a loop node's body is
-wired back (the linter rejects every cycle until then).
+Verified with a run of the capacity workflow (docs/ORCHESTRATOR.md,
+"Verified against a live orchestrator"): a full-span `${...}` expression
+keeps its type (`candidate_targets` and `top_growers` reach the playbook
+as lists, `used_pct` as a float); `credential_names` is interpolated
+before the names are resolved, so `FlashArray - ${trigger.event.array}`
+selects the event array's credential; artifacts and `job_url` surface as
+described; the condition takes its `true` port; the approval node pauses
+the execution for the `admins` group, and its `approved` port runs the
+reclaim with the request rebuilt from artifacts.
+
+Not verified: how a loop node's body is wired back to the node. The edge
+model is `{from, to, from_port?, to_port?}`, and the linter rejects every
+cycle, so a definition with a loop body does not pass `make lint-ao`.

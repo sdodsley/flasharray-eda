@@ -11,9 +11,9 @@
 #       -t flasharray-eda-de:latest --container-runtime podman
 #
 # The custom event sources are resolved from collections inside the image, so
-# until purefa_events and purefa_syslog are packaged as a collection
-# (docs/PACKAGING.md) an activation that names them still cannot start; the
-# seed therefore creates the activations disabled.
+# an activation that names purefa_events or purefa_syslog cannot start unless
+# the plugins ship in a collection (docs/PACKAGING.md); the seed therefore
+# creates the activations disabled.
 version: 3
 
 images:

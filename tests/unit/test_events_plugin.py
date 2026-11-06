@@ -231,7 +231,7 @@ def test_poll_error_shape(events):
 
 def test_documentation_block_covers_every_argument(events):
     """DOCUMENTATION parses as YAML and names every argument the code reads
-    (the two old threshold names are read as a fallback only)."""
+    (the two threshold aliases are read as a fallback only)."""
     doc = yaml.safe_load(events.DOCUMENTATION)
     assert doc["name"] == "purefa_events"
     options = set(doc["options"])
@@ -597,15 +597,15 @@ def test_growth_volumes_argument_bounds_the_space_query(events):
     )
 
 
-def test_threshold_arguments_new_names_and_old_fallback(events):
+def test_threshold_arguments_and_aliases(events):
     arr = FakeArray(FakeClient())
     # drr 3.0 now and in the (single-point) history: drop 0 %, never a drop
     row = events._capacity_row(
         arr, {}, {"drr_drop_threshold_pct": 0, "drr_drop_pct": 99}
     )
-    assert row["drr_drop_pct"] == 0.0 and row["drr_drop"] is True  # new name wins
+    assert row["drr_drop_pct"] == 0.0 and row["drr_drop"] is True  # primary name wins
     row = events._capacity_row(arr, {}, {"drr_drop_pct": 0})
-    assert row["drr_drop"] is True  # old name still read
+    assert row["drr_drop"] is True  # alias accepted
     row = events._capacity_row(arr, {}, {})
     assert row["drr_drop"] is False and row["time"] == NOW_MS
 

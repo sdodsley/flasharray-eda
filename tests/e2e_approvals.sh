@@ -2,9 +2,9 @@
 # Copyright 2026 Everpure, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase 3 exit test: capacity approval gate, QoS cap with hysteresis, the
+# End-to-end test: capacity approval gate, QoS cap with hysteresis, the
 # composite anomaly rule. All actions run on the real array.
-#   A=<array> VOLUME=<busy volume on A> ./tests/e2e_phase3.sh
+#   A=<array> VOLUME=<busy volume on A> ./tests/e2e_approvals.sh
 #
 #  1. approval gate: a throwaway volume is created and destroyed (pending
 #     eradication); the capacity rulebook runs with a 1 % risk threshold so

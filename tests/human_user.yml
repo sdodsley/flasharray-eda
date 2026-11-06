@@ -5,8 +5,9 @@
 #   ansible-playbook -i inventory/local-lab.yml tests/human_user.yml \
 #       -e target_array=<array> -e human_user=eda-human -e human_password=... \
 #       -e human_env_file=tests/out/human.env [-e user_state=absent]
-# (e2e_phase1.sh keeps the file under tests/out and removes it on exit.)
-- name: Lab "human" user for change control tests
+# (e2e_change_control.sh keeps the file under tests/out and removes it on
+# exit.)
+- name: Test "human" user for change control tests
   hosts: "{{ target_array }}"
   gather_facts: false
   no_log: true

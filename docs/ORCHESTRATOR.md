@@ -1,28 +1,25 @@
 # Orchestrator handoff
 
 How a rulebook hands an event to Red Hat's automation orchestrator (the
-AAP 2.7 add-on; upstream code: Syntara) instead of acting on it locally.
-This is Phase 1a of the orchestrator extension: the bridge, its mock and
-its tests. The workflow definition that consumes the event is
-orchestrator/capacity_reclaim_approval.json (orchestrator/README.md).
+AAP 2.7 add-on; upstream code: Syntara) instead of acting on it locally:
+the bridge playbook, its mock and its tests. The workflow definition that
+consumes the event is orchestrator/capacity_reclaim_approval.json
+(orchestrator/README.md).
 
-Status (2026-11-05): tested against `tests/mock_orchestrator.py` from the
+Verified: the bridge runs against `tests/mock_orchestrator.py` from the
 unit test and from ansible-rulebook 1.3.2 replaying one event through the
-real capacity rules (`tests/replay_capacity.yml`). No automation
-orchestrator instance has been reached from this project. The contract
-below comes from the upstream Syntara documentation and from the 1.3.1 API
-as third parties observed it; confirm it against a live instance before
-relying on it, in particular the authentication of the EDA webhook endpoint
-(one upstream page calls it public, another requires a service account
-token; this bridge always sends one). Availability: Red Hat announced the automation orchestrator as a
-technology preview in May 2026 and made it generally available as an
-add-on to Ansible Automation Platform 2.7 on 2026-08-21, for
-OpenShift-based deployments; as of 2026-10-15 Red Hat had published no
-timeline for the containerized (non-OpenShift) AAP topology, and the one
-configuration-as-code collection that targets its API (1.3.1) describes
-that API as a technology preview that may change. Treat every endpoint
-and parameter in this document as unverified until it has been exercised
-against a live instance.
+real capacity rules (`tests/replay_capacity.yml`), and end to end against
+the upstream orchestrator code at the tag Red Hat ships as the 2026.8
+release (API 1.3.1): token, post, 202, workflow execution, approval and
+reclaim ("Verified against a live orchestrator" below). The contract
+comes from the upstream Syntara documentation and the 1.3.1 API; what no
+run has exercised is listed under "Limitations".
+
+Availability: Red Hat ships the automation orchestrator as an add-on to
+Ansible Automation Platform 2.7 for OpenShift-based deployments only. No
+timeline is published for the containerized (non-OpenShift) topology,
+and the one configuration-as-code collection that targets its API (1.3.1)
+describes that API as a technology preview that may change.
 
 ## What moves, what stays
 
@@ -33,7 +30,7 @@ actions.
 
 `orchestrator_enabled` (vars) is the switch:
 
-- `false` (default): unchanged. The rule writes a request file and the
+- `false` (default): the rule writes a request file and the
   approvals webhook ruleset answers it (`capacity_request.yml`,
   `capacity_reclaim.yml`).
 - `true`: the rule runs `playbooks/orchestrator_post.yml`, which posts the
@@ -45,9 +42,10 @@ actions.
 
 The switch is a literal in the rule's condition (`vars.orchestrator_enabled
 == true` / `== false`), because rulebook conditions take no filters or
-defaults; an existing `vars/local-<site>.yml` needs the key added.
+defaults; a `vars/local-<site>.yml` must carry the key, as
+`vars/example.yml` does.
 
-The rule keeps its 24 hour per-array throttle. A handoff that fails (the
+The rule has a 24 hour per-array throttle. A handoff that fails (the
 orchestrator is down, the token is refused, the service account is not
 bound) is recorded as a warning and is not retried until the throttle
 window has passed; nothing is written locally in that case. Watch the alert
@@ -186,12 +184,21 @@ a rotation grace period), and list the account in each EDA trigger's
 `authorized_service_account_ids`. A service account bound to no trigger
 gets a token and then a 403.
 
+## On the platform
+
+As an Event-Driven Ansible controller activation the rule's `run_playbook`
+becomes `run_job_template` against `FlashArray - post orchestrator event`.
+`aap/seed.yml` creates that template and the `Orchestrator service
+account` credential type, which injects `AO_CLIENT_ID` and
+`AO_CLIENT_SECRET` as environment variables and `orchestrator_url` as an
+extra var (aap/README.md).
+
 ## The alert-log record
 
 One line per handoff, whatever happened, kind `orchestrator_post`:
 
 ```json
-{"time": "2026-11-05T21:40:50Z", "kind": "orchestrator_post", "severity": "info", "array": "array-a", "event_type": "purefa_capacity", "webhook_path": "fa_capacity", "stage": "post", "status": 202, "execution_id": "e639e52f-5e55-4564-a639-00d729606dd6", "reason": "", "body_bytes": 608}
+{"time": "...", "kind": "orchestrator_post", "severity": "info", "array": "array-a", "event_type": "purefa_capacity", "webhook_path": "fa_capacity", "stage": "post", "status": 202, "execution_id": "00000000-0000-4000-8000-000000000000", "reason": "", "body_bytes": 608}
 {"time": "...", "kind": "orchestrator_post", "severity": "warning", "array": "array-a", "event_type": "purefa_capacity", "webhook_path": "fa_capacity", "stage": "token", "status": 401, "execution_id": "", "reason": "token request failed: invalid client credentials", "body_bytes": 608}
 {"time": "...", "kind": "orchestrator_post", "severity": "warning", "array": "array-a", "event_type": "purefa_capacity", "webhook_path": "fa_other", "stage": "post", "status": 403, "execution_id": "", "reason": "service account is not authorized for this trigger", "body_bytes": 608}
 {"time": "...", "kind": "orchestrator_post", "severity": "warning", "array": "array-a", "event_type": "purefa_capacity", "webhook_path": "fa_capacity", "stage": "token", "status": -1, "execution_id": "", "reason": "token request failed: Status code was -1 and not [200]: Request failed: <urlopen error [Errno 111] Connection refused>", "body_bytes": 608}
@@ -269,90 +276,89 @@ about ten seconds.
   a 401 on the token call means the credential is wrong, disabled or
   expired. Both are recorded, never retried in a loop.
 
-## Open items
+## Verified against a live orchestrator
 
-- Verify against a live automation orchestrator: the token endpoint's
-  form fields, whether the EDA webhook requires the bearer token, the
-  exact 403 semantics and the problem-details shape.
-- A failed handoff leaves no local request. If a site wants a fallback
-  (write the request file and notify when the post fails), that is a
-  small addition to the rule or the playbook, not done here.
-- As an EDA Controller activation `run_playbook` becomes
-  `run_job_template` against `FlashArray - post orchestrator event`;
-  `aap/seed.yml` creates that template and the `Orchestrator service
-  account` credential type that injects `AO_CLIENT_ID` / `AO_CLIENT_SECRET`
-  as environment variables (aap/README.md); neither has run against a
-  platform.
-- Other routes (replication, anomaly) follow the same pattern: add a key
-  under `orchestrator_paths`, a rule guarded by `vars.orchestrator_enabled
-  == true` that runs `orchestrator_post.yml`, and `== false` on the local
-  rule. Only capacity is wired in this phase.
+Exercised end to end on the upstream orchestrator code at the tag Red Hat
+ships as the 2026.8 release (API 1.3.1), run from its own compose file
+beside the containerized platform of aap/README.md, with one array as the
+at-risk array and a second in `others`:
 
-## Verified against a live orchestrator (2026-11-06)
+- **Setup through `/api/v1`.** A service account with one client
+  credential (`AO_CLIENT_ID` is its identifier; the secret is shown once);
+  an `Ansible Automation Platform` credential (platform admin, basic auth)
+  and an `ansible_automation_platform` integration that validates
+  `success`, through which `GET /api/v1/proxies/aap/job_templates` lists
+  the FlashArray templates and the array credentials of aap/seed.yml;
+  `orchestrator/capacity_reclaim_approval.json` with its two placeholders
+  substituted passes `POST /api/v1/workflows/validate` with no findings,
+  is created as version 1 and published.
+- **The bridge.** `playbooks/orchestrator_post.yml` with `AO_CLIENT_ID`
+  and `AO_CLIENT_SECRET` in the environment and a `purefa_capacity` event:
+  token obtained, event posted, 202 with an execution id, one
+  `orchestrator_post` record (`stage: post`, `status: 202`,
+  `severity: info`).
+- **The execution.** The trigger completes with the body unwrapped and
+  every `${trigger.event...}` resolves. **FlashArray - capacity request**
+  launches with `credential_names` interpolated to
+  `FlashArray - <event array>` and resolved by name in the organization,
+  and with its extra_vars typed as sent (`candidate_targets` and
+  `top_growers` lists, `used_pct` a float, the byte counts integers); its
+  `set_stats` surface as `${capacity_request.artifacts.*}` (`request_id`,
+  `at_risk_array`, `candidate_count`, `candidates`) and its job URL as
+  `job_url`; the condition evaluates `true`; **FlashArray - notify** runs;
+  the approval node creates an approval for the `admins` group carrying
+  the prompt from the definition and pauses the execution
+  (`approval_pending: true`, `status: paused`).
+- **After approval.** Granted in the orchestrator UI (the approval record
+  carries `decision: approved`, who decided and when), the execution
+  resumes on its own: **FlashArray - capacity reclaim** runs with the
+  event array's credential and the request rebuilt from the job artifacts
+  (`rebuilt_from: job artifacts`; `candidates` arrives as a dict and
+  `rebuild_from_artifacts` as a boolean); candidates that are members of a
+  protection group snapshot are refused by the array and nothing is
+  eradicated (`result: refused`); the rejected-branch notify is skipped and
+  the execution completes. This is the outcome the controller-tier
+  workflow of aap/README.md reaches through its own approval node.
 
-The upstream orchestrator code at the tag Red Hat ships as the 2026.8
-release (API 1.3.1) was run from its own compose file beside the
-containerized platform of aap/README.md, on the same host, with its host
-ports moved out of the platform's way. What ran:
+### Running the upstream compose beside a containerized platform
 
-1. Setup through `/api/v1`: a service account `flasharray-eda` in the
-   default project with one client credential (`AO_CLIENT_ID` is its
-   identifier, the secret shown once); an `Ansible Automation Platform`
-   credential (platform admin, basic auth) and an
-   `ansible_automation_platform` integration, validated `success`, through
-   which `GET /api/v1/proxies/aap/job_templates` listed the ten FlashArray
-   templates and the array credentials of aap/seed.yml;
-   `orchestrator/capacity_reclaim_approval.json` with its two placeholders
-   substituted (`POST /api/v1/workflows/validate`: valid, 0 findings),
-   created as version 1 and published.
-2. `playbooks/orchestrator_post.yml`, run by hand with `AO_CLIENT_ID` and
-   `AO_CLIENT_SECRET` in the environment and a `purefa_capacity` event for a
-   lab array (91.2 % used, 12 days to full, another array in `others`):
-   token obtained, event posted, **202** with an execution id, one
-   `orchestrator_post` record (`stage: post`, `status: 202`, 582 body
-   bytes, `severity: info`).
-3. The execution: the trigger completed with the body unwrapped, so every
-   `${trigger.event...}` resolved; **FlashArray - capacity request**
-   launched with the credential `credential_names` named
-   (`FlashArray - <event array>`, interpolated, then resolved by name in
-   the organization) and its extra_vars typed as sent (`candidate_targets`
-   and `top_growers` lists, `used_pct` a float, the byte counts integers);
-   its `set_stats` surfaced as `${capacity_request.artifacts.*}`
-   (`request_id`, `at_risk_array`, `candidate_count` 4, `candidates`) and
-   its job URL as `job_url`; the condition evaluated `true`; **FlashArray -
-   notify** ran; the approval node created an approval for the `admins`
-   group carrying the prompt from the definition and paused the execution
-   (`approval_pending: true`, `status: paused`).
-4. The approval was granted in the orchestrator UI (the approval record
-   carries `decision: approved`, who decided and when) and the execution
-   resumed on its own: **FlashArray - capacity reclaim** ran with the
-   event array's credential and the request rebuilt from the job
-   artifacts (`rebuilt_from: job artifacts`; `candidates` arrived as a
-   dict and `rebuild_from_artifacts` as a boolean), the array refused all
-   four candidates (members of a protection group snapshot) and eradicated
-   nothing (`result: refused`, `refused` 4, `eradicated` 0); the
-   rejected-branch notify was skipped and the execution completed. The same
-   outcome as the controller-tier run in aap/README.md, reached through the
-   EDA trigger and the orchestrator's approval node instead.
-
-Three facts about running that stack beside a containerized platform on
-one host (its development compose, not the product):
+The upstream development compose (not the product) runs on the same host
+as a containerized platform once its host ports are moved off the ones
+the platform uses. Three deployment notes:
 
 - A rootless container cannot reach the host's own address (the user-mode
   network gives the container that address itself), and the orchestrator's
   URL validator refuses the link-local alias the container runtime offers
-  for the host. The AAP integration therefore points at a small TCP relay
-  container on the stack's network that forwards to that alias; the relay's
-  name goes into `APP_INTEGRATION_URL_ALLOWED_HOSTS`, and the API and worker
-  containers are recreated for the variable to take.
+  for the host. Point the AAP integration at a small TCP relay container
+  on the stack's network that forwards to that alias, add the relay's name
+  to `APP_INTEGRATION_URL_ALLOWED_HOSTS`, and recreate the API and worker
+  containers for the variable to take.
 - The compose gives the worker services an `extra_hosts` entry that points
   the name `syntara` at the host (development mode, with the API outside
-  containers). With the API's host port moved, the approval node's calls to
-  the Approvals API fail ("Failed to connect to Approvals API after 3
-  attempts") and the execution fails at the approval. Removing the entry
-  lets the name resolve to the API container; `POST
-  /api/v1/executions/{id}/retry` then re-runs the workflow from its start
-  (a new execution, a new capacity request).
+  containers). With the API in a container and its host port moved, the
+  approval node's calls to the Approvals API fail ("Failed to connect to
+  Approvals API after 3 attempts") and the execution fails at the
+  approval. Remove the entry so the name resolves to the API container.
+  `POST /api/v1/executions/{id}/retry` re-runs a failed execution from
+  its start (a new execution, so a new capacity request).
 - The secrets generator can fail to produce a bootstrap admin password; a
-  password written by hand must stay readable by the container user (the
-  generator's own last step is `chmod -R +r`).
+  password file written by hand must stay readable by the container user
+  (the generator's own last step is `chmod -R +r`).
+
+## Limitations
+
+- Not verified against a live instance: whether the EDA webhook accepts a
+  post without a bearer token (upstream pages disagree; the bridge always
+  sends one), the 403 answer for a service account bound to no trigger,
+  and the problem-details shape of error answers. The mock implements
+  them as the upstream documentation describes and the unit test covers
+  them against the mock.
+- Not verified: `FlashArray - post orchestrator event` launched from an
+  Event-Driven Ansible controller activation (see "On the platform").
+- A failed handoff leaves no local request: the alert-log warning is the
+  only trace, and the rule does not fall back to the request file. A site
+  that wants that fallback adds it to the rule or the playbook.
+- Only the capacity route is wired. Another route (replication, anomaly)
+  follows the same pattern: a key under `orchestrator_paths`, a rule
+  guarded by `vars.orchestrator_enabled == true` that runs
+  `orchestrator_post.yml`, and `== false` on the local rule.

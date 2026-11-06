@@ -63,12 +63,12 @@ baseline          telemetry: also fetch the same half hour one week ago
                   from the array's own history (default true)
 drr_drop_threshold_pct
                   telemetry: data reduction this much below a week ago sets
-                  drr_drop (default 10). The old name drr_drop_pct is still
-                  read.
+                  drr_drop (default 10); drr_drop_pct is accepted as an
+                  alias.
 snapshot_growth_threshold_pct
                   telemetry: snapshot space this much above a week ago sets
-                  snapshot_surge (default 25). The old name
-                  snapshot_growth_pct is still read.
+                  snapshot_surge (default 25); snapshot_growth_pct is
+                  accepted as an alias.
 write_surge_ratio telemetry: write bandwidth this many times last week's
                   sets write_surge (default 3)
 rpo_seconds       replication: informational; copied onto replica-link
@@ -788,8 +788,9 @@ def _capacity_row(arr, state, args):
         else None
     )
     st["prev_space"] = {"drr": drr_now, "snap": snap_now}
-    # the old argument names (drr_drop_pct, snapshot_growth_pct) are still
-    # read; they doubled as event field names, which misread in a rulebook
+    # drr_drop_pct and snapshot_growth_pct are accepted as aliases; the event
+    # fields of the same names carry the measured values, hence the distinct
+    # *_threshold_pct argument names
     drr_drop_threshold = float(
         args.get("drr_drop_threshold_pct", args.get("drr_drop_pct", 10))
     )

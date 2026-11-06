@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # shellcheck shell=bash
 #
-# Shared environment for run.sh and tests/e2e_phase*.sh. Sourced from the
+# Shared environment for run.sh and tests/e2e_*.sh. Sourced from the
 # repo root, never executed:
 #   . ./env.sh
 # In order:

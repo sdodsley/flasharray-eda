@@ -1,0 +1,144 @@
+# Verification
+
+What is exercised against FlashArray hardware, what is replayed from
+fixtures, and what is not verified. The design is in
+[DESIGN.md](DESIGN.md); array and tool facts are in
+[HARDWARE_NOTES.md](HARDWARE_NOTES.md).
+
+## Environment
+
+Verified against two Purity//FA 6.10.6 arrays (REST 2.46) connected for sync
+replication, with one async pod replica link, one stretched (ActiveCluster)
+pod and one protection group replicating hourly from one array to the other.
+Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client 1.94.1,
+ansible.eda 2.13.0. Array A below is the replication source (change control,
+capacity and QoS tests run there); array B is the target (the DR drill runs
+there). This is a prototype; it is not a supported product.
+
+## How the tests run
+
+`tests/e2e_sources.sh`, `tests/e2e_change_control.sh`,
+`tests/e2e_replication.sh` and `tests/e2e_approvals.sh` induce on a lab
+array what can be induced safely and restore it afterwards: NTP drift, a
+second local user's changes, a replica link pause and resume
+(`purefa_pod_replica`), a maintenance window, a replicate-now snapshot, a
+test alert (`/alert-watchers/test` -> `purity.test`), the identify LED, a
+pending-eradication volume, and a QoS cap on a volume with live IOPS
+(thresholds lowered). What cannot be induced (drive, controller or PSU
+failure, a degraded stretched pod, the anomaly signature) is replayed from
+`tests/fixtures/` through `ansible.eda.generic`; the replayed events still
+drive the real actions on the array. Everything the scripts write goes under
+`tests/out/`. The environment variables the scripts read, the files under
+`tests/out/` and the `E2E_ERADICATE_ALL=1` guard on the eradicate step are
+described in [Testing](../README.md#testing).
+
+## Exercised on hardware
+
+Every test restores what it changes: links are resumed, windows removed,
+LEDs cleared, the eradication delay put back, scratch objects eradicated.
+Replayed fixture events still drive real actions on the array: the identify
+LED, the replicate-now snapshot, the preferred arrays and the protection
+snapshots.
+
+### Pull path and the base rulebooks
+
+| Area | Test | Result |
+| --- | --- | --- |
+| alerts steady state | runs `alerts.yml` against both arrays | alerts already open at start are reported as `initial`, no false `opened` |
+| config drift | adds a server to the NTP list (`tests/induce_ntp_drift.yml`) | the next poll emits the drift, `remediate_ntp.yml` reapplies the baseline (`changed: true`), the following poll is clean |
+| replication | pauses the pod replica link (`tests/replica_link_pause.yml`) | the paused rule fires on the source array and on the target (inbound view); the test resumes the link |
+| health, maintenance window | opens a window (`tests/maintenance_window.yml`) | the health event carries `maintenance_active: true` with the window's expiry |
+| health, hardware replay | replays three fixture events: a critical controller, an unhealthy bay inside a window, a controller failover | the identify LED lights on the named controller of the real array, the in-window bay is logged not actioned, the failover notifies; the test clears the LED |
+| audits | runs the audits signal with a lookback | every change made by the tests appears with user, command, subcommand and arguments |
+| test alert | runs `tests/send_test_alert.py` | the array sends its test alert to the configured watcher |
+| capacity, performance steady state | runs the telemetry signal on an idle array | events flow, nothing fires |
+
+### Change control, suppression, runbook map
+
+| Area | Test | Result |
+| --- | --- | --- |
+| human change | a second local user (created by the test) adds an NTP server | the audit arrives with that user's name; `reconcile.yml` reverts it to the baseline within one poll |
+| human destroy | the same user creates, destroys and eradicates a scratch volume | each destructive command is reported with user and interface |
+| maintenance window | opens a window, then induces the same drift again | the audit carries `maintenance_active: true`; logged, not reconciled |
+| git push | makes an empty commit in the baseline repository and POSTs the signed push payload to the webhook | `apply_baseline.yml` pulls and reapplies NTP and DNS |
+| runbook map | replays four alerts: a ticket code, a code with per-code tasks, an unknown code, one inside a window | ticket; ticket plus per-code tasks; default notify; logged, not routed |
+
+### Replication
+
+| Area | Test | Result |
+| --- | --- | --- |
+| steady state | runs `replication.yml` against both arrays | events flow, nothing fires; the tick ruleset runs one DR drill |
+| DR drill | runs on array B, from the protection group replicated out of array A | the drill finds the latest completed snapshot, copies one member volume, verifies its size, destroys and eradicates the copy, and writes a `dr_drill` record of severity `info` |
+| replicate now | replays an overdue event for the protection group | an immediate replicated snapshot `<group>.eda-overdue-<stamp>` is created on the real array |
+| preferred arrays | replays a degraded-pod event, with a throwaway host connected to a volume in the stretched pod | the preferred array is set to the online array on the pod's local hosts (the peer array's hosts, listed as `<array>:<host>`, are skipped); the recovery event clears it again |
+
+### Capacity approval, QoS hysteresis, the composite rule
+
+| Area | Test | Result |
+| --- | --- | --- |
+| approval gate | destroys a scratch volume (pending eradication); runs `capacity.yml` with a threshold low enough to fire; POSTs an approval to the webhook with the bearer token | the request is written and logged; on approval the scratch volume is eradicated, and a SafeMode-locked snapshot is reported as refused by the array, not forced |
+| QoS cap | lowers thresholds so a volume with live IOPS counts as a noisy neighbour on a hot array | a temporary IOPS limit is applied, tags `qos_cap` and `qos_prev_iops` set, a record written |
+| QoS lift | raises thresholds so the same volume reads as normal | after two normal polls (`qos_lift_normal_polls`, set to 2 by the test; the example default is 5) the previous limit is restored and the tags removed |
+| anomaly | replays three signals for one array | the multi-event condition fires; snapshots are created on every protection group with members (empty groups report as failures); the enabled eradication delay is lengthened from one day to two (put back by the test); the snapshot in a SafeMode-protected group cannot be eradicated afterwards, as designed |
+
+### Push path and zero-code path (replayed input)
+
+| Area | Test | Result |
+| --- | --- | --- |
+| syslog parser | feeds representative audit, alert, test and garbage lines through `purefa_syslog.py parse` | the audit line's user, action, result and key/value fields parse; alert and test lines are recognised; garbage returns `kind: other` |
+| syslog listener | runs `syslog.yml` and sends lines over UDP and then TCP with `tests/syslog_send.py` | both transports deliver; a human's `purevol destroy` and the alert produce notifications, the test line is logged |
+| Alertmanager | runs `alertmanager.yml` and sends one webhook payload with a replica-link alert, a hardware alert and a resolved capacity alert (README 'Testing' shows a representative body) | the hardware alert lights the identify LED on a controller of the real array (cleared by the test); the others notify and log |
+
+## Exercised on a platform
+
+The objects `aap/seed.yml` builds are seeded on Ansible Automation Platform
+2.7 and the capacity reclaim workflow is launched by hand: the request job
+reads the array's pending-eradication objects and publishes its artifacts,
+the workflow pauses at the approval node, a platform user approves, and the
+reclaim node rebuilds the request from the artifacts; the array refuses
+every candidate (members of a protection group snapshot) and the reclaim
+records each refusal; nothing is eradicated. The checks and their results
+are in [aap/README.md](../aap/README.md). The rulebook activations are
+created disabled and not started.
+
+The EDA-to-orchestrator handoff is exercised end to end against a live
+orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md).
+
+## Replayed only
+
+Exercised from fixtures under `tests/fixtures/`, not induced on an array:
+hardware failures (a critical controller, an unhealthy bay, a controller
+failover), a degraded stretched pod and its recovery, an overdue protection
+group, the four alert routes, the anomaly signature, syslog lines and one
+Alertmanager payload. The replay rulebooks `tests/replay_*.yml` are kept
+rule-for-rule identical to the live ones by the unit test, so a replayed
+event takes the same path as a live one.
+
+## Not verified
+
+- A live `purity.audit` or `purity.alert` line from an array. The listener
+  and `syslog.yml` are exercised with replayed lines
+  (`tests/syslog_send.py`); the parser follows the layout published by
+  Pure's SIEM partners, and the first real line may need a regex adjustment.
+- The Prometheus rules against a live Prometheus. They are written from the
+  exporter's metric specification; check metric and label names against the
+  exporter version in use.
+- The decision environment image. Neither definition is built or run, and
+  CI runs the static checks only. Both pin
+  `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
+  `latest` on that repository is not guaranteed to be the newest release.
+  The image serves `ansible-rulebook --source-dir` runs only; EDA Controller
+  activations need the plugins in a collection ([PACKAGING.md](PACKAGING.md)).
+- A rulebook activation launching the platform workflow. The workflow is
+  launched by hand and pauses at its approval node (above); whether an
+  approval node pauses a workflow launched from a rulebook as a manual
+  launch does is unconfirmed, because the activations are not started.
+- Scale beyond two arrays.
+- Drive, controller or PSU failure and real performance degradation:
+  fixtures only (`tests/fixtures/`), though the replayed events drive the
+  real identify LED.
+- Array connection path failure or throttle changes: not induced.
+- QoS under synthetic load: thresholds are lowered on a volume with live
+  IOPS; no load generator is run.
+- Packaging into `everpure.flasharray` and the Red Hat EDA certification
+  track ([PACKAGING.md](PACKAGING.md)).

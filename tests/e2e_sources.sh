@@ -2,13 +2,14 @@
 # Copyright 2026 Everpure, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase 0 exit test against two lab arrays. Each step starts a rulebook with
-# lab intervals, induces the condition with a test playbook, waits for the
-# rule to act, then restores the array. Output goes to tests/out/*.log and
-# the alert log is printed at the end.
+# End-to-end test of the REST event source and its rulebooks against two
+# arrays. Each step starts a rulebook with short intervals, induces the
+# condition with a test playbook, waits for the rule to act, then restores
+# the array. Output goes to tests/out/*.log and the alert log is printed
+# at the end.
 #
 #   A=<array a> B=<array b> POD=<pod on A> REMOTE_POD=<replica pod on B> \
-#     LED_COMPONENT=<component, e.g. CT1> ./tests/e2e_phase0.sh
+#     LED_COMPONENT=<component, e.g. CT1> ./tests/e2e_sources.sh
 #
 # Needs env.sh working (env file, venv) and the vars and inventory files
 # named by FAEDA_VARS / FAEDA_INVENTORY (defaults vars/local-lab.yml and

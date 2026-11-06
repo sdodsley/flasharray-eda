@@ -1,7 +1,7 @@
 # Decision environment for the FlashArray rulebooks: ansible-rulebook plus
 # the collections and the SDK the source plugins and playbooks need. A
-# self-contained image for `ansible-rulebook --source-dir` runs. It has not
-# been built or run in the lab yet (docs/PHASE4.md) and CI does not build it.
+# self-contained image for `ansible-rulebook --source-dir` runs. CI does not
+# build it.
 #
 # Build, from the repository root (the ansible-builder definition next to
 # this file produces the same tree):
@@ -33,8 +33,9 @@
 # with FQCN source names (docs/PACKAGING.md).
 #
 # quay.io publishes v-prefixed release tags; v1.3.2 is the ansible-rulebook
-# the lab ran. `latest` on that repository is not guaranteed to be the newest
-# release, so the tag is pinned here and in execution-environment.yml.
+# release the project is tested with. `latest` on that repository is not
+# guaranteed to be the newest release, so the tag is pinned here and in
+# execution-environment.yml.
 FROM quay.io/ansible/ansible-rulebook:v1.3.2
 
 USER root

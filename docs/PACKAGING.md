@@ -1,8 +1,9 @@
 # Packaging into everpure.flasharray
 
 A checklist for moving this prototype's Event-Driven Ansible content into
-the `everpure.flasharray` collection. Nothing on it has been done yet; the
-repository runs standalone with `ansible-rulebook --source-dir`.
+the `everpure.flasharray` collection. The repository runs standalone with
+`ansible-rulebook --source-dir`; the steps below are what changes when the
+content ships in the collection.
 
 ## Why it matters
 
@@ -18,8 +19,8 @@ running these rulebooks as activations needs the plugins in a collection.
 1. **Layout.** Copy `extensions/eda/plugins/event_source/purefa_events.py`
    and `purefa_syslog.py` to the same path in the collection, the rulebooks
    to `extensions/eda/rulebooks/`, and `playbooks/` (with its `runbooks/`
-   subdirectory) to the collection's top-level `playbooks/`. The layout here
-   already follows the collection convention, so this is a copy.
+   subdirectory) to the collection's top-level `playbooks/`. The layout
+   follows the collection convention, so this step is a copy.
 2. **Source names.** Change the nine source declarations to FQCNs:
    `everpure.flasharray.purefa_events` in alerts, anomaly, capacity,
    change_control, config_drift, health, performance and replication, and
@@ -33,8 +34,8 @@ running these rulebooks as activations needs the plugins in a collection.
    per playbook. Re-check `alert_runbook.yml`'s relative include of
    `runbooks/<code>.yml` from a collection playbook, where `playbook_dir`
    points into the installed collection.
-4. **Requirements.** `py-pure-client` is already a collection requirement.
-   The rulebooks also use the stock `ansible.eda` sources (webhook, tick,
+4. **Requirements.** `py-pure-client` is a collection requirement. The
+   rulebooks also use the stock `ansible.eda` sources (webhook, tick,
    generic, alertmanager): declare `ansible.eda` under `dependencies` in
    `galaxy.yml` or document it; `aiohttp` arrives with ansible-rulebook.
    `meta/runtime.yml` `requires_ansible` must cover the ansible-core the
@@ -42,10 +43,10 @@ running these rulebooks as activations needs the plugins in a collection.
 5. **Variables and secrets.** The `--vars` file (`vars/example.yml`) becomes
    the activation's extra vars. `APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET`
    become credentials injected as environment variables; the rulebooks
-   already read them as `{{ APPROVAL_TOKEN }}`-style names, which
-   `--env-vars` provides today. In the controller the two webhook rulesets
+   read them as `{{ APPROVAL_TOKEN }}`-style names, which `--env-vars`
+   provides in a standalone run. In the controller the two webhook rulesets
    can be replaced by event streams, which authenticate at the platform.
-6. **Documentation.** Both event sources already carry `DOCUMENTATION` and
+6. **Documentation.** Both event sources carry `DOCUMENTATION` and
    `EXAMPLES` blocks (a unit test asserts every argument the code reads is
    an option). On the move, re-check them with the collection's doc
    tooling, add a README section for the EDA content, and a changelog
@@ -57,21 +58,15 @@ running these rulebooks as activations needs the plugins in a collection.
    `main()` with a fake queue; run `ansible-test sanity` and `ansible-lint`
    as the collection's CI does. The replay rulebooks and
    `tests/unit/test_rulebooks.py` stay in this repository.
-8. **Decision environment.** Once the collection carries the plugins, the
+8. **Decision environment.** When the collection carries the plugins, the
    Containerfile and the builder definition install the released collection
    from `requirements.yml` instead of copying `extensions/` and
    `playbooks/`, and the `podman run` line drops `--source-dir`.
 9. **Certification.** Red Hat's review of certified EDA content looks for
    asyncio sources with `main(queue, args)` that never block the event loop
-   (the pollers already run SDK calls in a thread pool), clean shutdown on
+   (the pollers run SDK calls in a thread pool), clean shutdown on
    cancellation, documented arguments, rulebook examples under
    `extensions/eda/rulebooks`, unit tests, and a published decision
    environment definition. Confirm the current list against the partner
    guide before submitting. Automation Hub judges the built artifact, so
    check that `build_ignore` does not drop `extensions/`.
-
-## Publishing this repository
-
-GitHub description: "Event-Driven Ansible for standalone Everpure
-FlashArrays". Topics: ansible, event-driven-ansible, ansible-rulebook,
-ansible-eda, flasharray, everpure, pure-storage, syslog, prometheus.
