@@ -322,8 +322,18 @@ ports moved out of the platform's way. What ran:
    its job URL as `job_url`; the condition evaluated `true`; **FlashArray -
    notify** ran; the approval node created an approval for the `admins`
    group carrying the prompt from the definition and paused the execution
-   (`approval_pending: true`, `status: paused`). The decision belongs to a
-   human and is not part of this run.
+   (`approval_pending: true`, `status: paused`).
+4. The approval was granted in the orchestrator UI (the approval record
+   carries `decision: approved`, who decided and when) and the execution
+   resumed on its own: **FlashArray - capacity reclaim** ran with the
+   event array's credential and the request rebuilt from the job
+   artifacts (`rebuilt_from: job artifacts`; `candidates` arrived as a
+   dict and `rebuild_from_artifacts` as a boolean), the array refused all
+   four candidates (members of a protection group snapshot) and eradicated
+   nothing (`result: refused`, `refused` 4, `eradicated` 0); the
+   rejected-branch notify was skipped and the execution completed. The same
+   outcome as the controller-tier run in aap/README.md, reached through the
+   EDA trigger and the orchestrator's approval node instead.
 
 Three facts about running that stack beside a containerized platform on
 one host (its development compose, not the product):

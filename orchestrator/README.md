@@ -240,6 +240,8 @@ orchestrator"): a full-span expression keeps its type (`candidate_targets`
 and `top_growers` reached the playbook as lists, `used_pct` as a float),
 `credential_names` is interpolated before the names are resolved (the job
 ran with `FlashArray - <event array>`), artifacts and `job_url` surface as
-described, the condition took its `true` port and the approval node paused
-the execution for the `admins` group. Still open: how a loop node's body is
+described, the condition took its `true` port, the approval node paused
+the execution for the `admins` group and, once approved, its `approved` port
+ran the reclaim with the request rebuilt from artifacts (the array refused
+the locked candidates; nothing eradicated). Still open: how a loop node's body is
 wired back (the linter rejects every cycle until then).
