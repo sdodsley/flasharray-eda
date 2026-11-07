@@ -191,7 +191,12 @@ becomes `run_job_template` against `FlashArray - orchestrator post`.
 `aap/seed.yml` creates that template and the `Orchestrator service
 account` credential type, which injects `AO_CLIENT_ID` and
 `AO_CLIENT_SECRET` as environment variables and `orchestrator_url` as an
-extra var (aap/README.md).
+extra var (aap/README.md). On a containerized platform a job's execution
+environment reaches an orchestrator on the same host only as
+`https://host.containers.internal:<port>`; the host's own address and
+loopback both point back at the container. That is the URL the credential
+carries. Verified with the capacity activation handing a live event over
+(VERIFICATION.md, "Exercised on a platform").
 
 ## The alert-log record
 
@@ -353,8 +358,6 @@ the platform uses. Three deployment notes:
   and the problem-details shape of error answers. The mock implements
   them as the upstream documentation describes and the unit test covers
   them against the mock.
-- Not verified: `FlashArray - orchestrator post` launched from an
-  Event-Driven Ansible controller activation (see "On the platform").
 - A failed handoff leaves no local request: the alert-log warning is the
   only trace, and the rule does not fall back to the request file. A site
   that wants that fallback adds it to the rule or the playbook.

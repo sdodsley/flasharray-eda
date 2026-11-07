@@ -321,7 +321,11 @@ websocket and some fail their first start.
   bound to it, and the workflow definitions are set up as
   [orchestrator/README.md](../orchestrator/README.md) describes. The seed
   only stores the service account's credentials, once they exist, so that
-  `FlashArray - orchestrator post` and the activations can use them. Red
+  `FlashArray - orchestrator post` and the activations can use them;
+  `AO_URL` is the orchestrator as the jobs reach it, which for an
+  orchestrator on the platform host of a containerized platform is
+  `https://host.containers.internal:<port>` (a job's execution environment
+  cannot reach the host's own address). Red
   Hat documents the add-on for OpenShift-based deployments only, so a
   containerized AAP 2.7 may not be able to host it.
 - **The images.** The execution environment and the decision environment

@@ -33,6 +33,10 @@ unless stated.
   and `dr_demote.yml` therefore accept a pod only with a source count above
   zero and an inbound link. Demoting with quiesce discards the writes made
   while the pod was promoted; the source pod is never touched.
+- Twenty-six minutes with the NTP servers pointed at an unroutable address
+  raised no alert on 6.10.6, and neither did pausing and resuming a pod
+  replica link; a test that needs a real alert needs a fault the array
+  treats as one.
 
 ## Syslog
 

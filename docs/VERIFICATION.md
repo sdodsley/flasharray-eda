@@ -110,12 +110,17 @@ no family for the array's open alerts or its array connections, and only
 
 The chain is exercised with a lab-only rule file that lowers the capacity
 threshold to one percent (the shipped rules stay at 85): FlashArrayCapacityHigh
-fires for the array at 2.6 percent used, Alertmanager delivers it to
-`alertmanager.yml` running from the decision-environment image on port 5002,
-and `capacity_request.yml` runs against the array (one `capacity_request`
-record with `status: awaiting_approval`, the request file written, the
-four snapshots pending eradication listed as candidates). Removing the
-override resolves the alert.
+fires for the array at 2.6 percent used, Alertmanager delivers it to the
+platform's alertmanager activation (`alertmanager.yml` as a rulebook
+activation on port 5057 of the platform host), and its capacity rule
+launches **FlashArray - capacity request** against the array (the request
+file written, the objects pending eradication listed as candidates).
+Removing the override resolves the alert. FlashArrayReplicaLinkNotReplicating
+fires for real: pausing the pod replica link for eight minutes takes the
+rule through pending to firing on both arrays, Alertmanager delivers both,
+and the activation launches **FlashArray - notify** for each; resuming the
+link resolves them. The same chain ran earlier into `alertmanager.yml` as a
+standalone container from the decision-environment image.
 
 ## Exercised on a platform
 
@@ -158,18 +163,30 @@ forward (sshd, sudo, bash, kernel, hundreds of lines a minute) is dropped
 by program before any rule sees it; before that filter existed the
 catch-all rule fired about 1,200 times in five minutes. `run_job_template`
 holds the ruleset until the job ends, so three commands three seconds
-apart became three notifications about a minute apart.
+apart became three notifications about a minute apart. A `purity.test`
+line sent over UDP from the platform host is accepted the same way; the
+arrays kept their TCP connections after their server URI was switched to
+`udp://`, so UDP from an array itself is not exercised.
 
 The EDA-to-orchestrator handoff is exercised end to end against a live
-orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md). On the same
+orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md). It also runs from
+a running activation: with the capacity threshold lowered to one percent
+for one poll, the capacity activation's handoff rule launches
+**FlashArray - orchestrator post**, the job posts the event (the
+orchestrator on the platform host is reached from the job's execution
+environment as `host.containers.internal`), the execution runs the
+request and pauses at its approval, and on approval the reclaim
+eradicates the two scratch volumes pending eradication and is refused the
+four SafeMode-locked snapshots (`result: partial`). On the same
 orchestrator, `orchestrator/day2_expand_volume.json` runs from its manual
 trigger against a scratch volume (notify, approval, the expand job grows
 the volume from one to two gibibytes and publishes `old_size`, `new_size`
 and `changed`, notify) and `orchestrator/dr_drill_schedule.json`,
-published with its schedule and started by hand from its scheduled
-trigger, runs the DR drill job (one drill against the replicated
-protection group, `failed_count` 0), takes the condition's `false` port
-and notifies the summary. The three day-2 definitions run from their
+published with its schedule, runs the DR drill job (one drill against the
+replicated protection group, `failed_count` 0), takes the condition's
+`false` port and notifies the summary, first started by hand from its
+scheduled trigger and then by the schedule itself at 02:00 UTC the next
+night, with nobody starting it. The three day-2 definitions run from their
 forms: identify LED lights and clears a controller's LED with no
 approval; QoS cap caps a scratch volume at the requested IOPS after its
 approval (`previous_iops` null, the volume destroyed afterwards); protect
@@ -199,13 +216,15 @@ event takes the same path as a live one.
 ## Not verified
 
 - A live `purity.alert` line. The audit and test lines are verified live
-  (above); no alert was raised during the test (a replica-link pause and
-  resume raised none), so alert lines are emitted whole with the severity
+  (above); no alert was raised during the tests (a replica-link pause and
+  resume raised none, and 26 minutes without a reachable NTP server raised
+  none), so alert lines are emitted whole with the severity
   read from the text, and the first real one may still need an adjustment.
-- The Prometheus rules other than FlashArrayCapacityHigh firing for real:
-  all eleven load and evaluate against live series, and the capacity rule
-  is driven through Alertmanager to the rulebook; the hardware, drive,
-  latency, replication and scrape rules wait for a real fault.
+- The hardware, drive, latency, data-reduction, mediator and scrape rules
+  firing for real: all eleven load and evaluate against live series, the
+  capacity rule (lab override) and the replica-link rule (a real pause)
+  are driven through Alertmanager to the platform activation; the rest
+  wait for a real fault.
 - The images from the ansible-builder definitions
   (`decision-environment/execution-environment.yml`,
   `aap/decision-environment.yml`, `aap/execution-environment.yml`). The
@@ -215,9 +234,10 @@ event takes the same path as a live one.
   only. The upstream-based definitions pin
   `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
   `latest` on that repository is not guaranteed to be the newest release.
-- A rulebook activation launching the controller-tier approval workflow
-  (the platform capacity rulebook hands the event to the orchestrator or
-  launches the request job; it does not launch the controller workflow).
+- A rulebook activation launching the controller-tier approval workflow:
+  the platform capacity rulebook hands the event to the orchestrator
+  (verified above) or launches the request job; it does not launch the
+  controller workflow.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

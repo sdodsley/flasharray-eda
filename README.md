@@ -14,8 +14,9 @@ first eight rows of the table below) are verified against two Purity//FA
 6.10.6 arrays; the syslog listener receives both arrays' live syslog as a
 platform activation and its audit rule launches job templates; the
 Prometheus rules evaluate on a live Prometheus scraping both arrays'
-native exporters and the capacity rule drives the Alertmanager path end
-to end (a posted hardware alert also lights the identify LED); the
+native exporters and the capacity and replica-link rules drive the
+Alertmanager path end to end into the platform's activation (a posted
+hardware alert also lights the identify LED); the
 Ansible Automation Platform seed, the controller-tier approval workflow
 and the capacity, day-2 and DR orchestrator workflows are verified against
 a 2.7 installation and a live orchestrator; the rulebooks run as activations

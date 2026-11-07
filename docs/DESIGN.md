@@ -179,8 +179,8 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   `orchestrator_enabled` hands the event to the automation orchestrator
   instead ([ORCHESTRATOR.md](ORCHESTRATOR.md)). Both platform paths are
   exercised, the workflow by a launch through its approval node and the
-  handoff end to end against a live orchestrator; the launch from a
-  running rulebook activation is not ([VERIFICATION.md](VERIFICATION.md)).
+  handoff end to end against a live orchestrator, from a running rulebook
+  activation as well ([VERIFICATION.md](VERIFICATION.md)).
 
 ### 4.6 Performance gets a safe actuator with hysteresis
 
@@ -248,7 +248,8 @@ Every remediation passes the same gates; the table in
   ([SECURITY.md](../SECURITY.md)).
 - Whether a Controller workflow approval node pauses a workflow launched from
   a rulebook exactly as a manual launch does is not stated in the AAP 2.5
-  documentation; the manual launch is verified, the rulebook launch is not
+  documentation; the manual launch is verified, and the rulebooks hand
+  the event to the orchestrator rather than launch the controller workflow
   ([VERIFICATION.md](VERIFICATION.md)).
 - Scale: one plugin instance polls N arrays with one REST client per array;
   verified with two arrays, larger fleets untested.
