@@ -1,0 +1,120 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - replicate now with approval",
+  "description": "A purefa_pg_replication event forwarded by the replication rulebook: a protection group whose replication is overdue or whose transfer is stuck. A human approves an immediate replicated snapshot of the group; nothing is sent without that approval, the group's schedule is untouched, and every outcome is written to the alert log.",
+  "triggers": [
+    {
+      "id": "fa_replication_event",
+      "type": "eda_trigger",
+      "parameters": {
+        "webhook_path": "fa_replication",
+        "authorized_service_account_ids": ["REPLACE_AT_SYNC"],
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["event"],
+          "properties": {
+            "event": {
+              "type": "object",
+              "required": ["schema", "event_type", "array", "maintenance_active", "observed_at", "data"],
+              "properties": {
+                "schema": {"type": "string", "const": "flasharray-eda/1"},
+                "event_type": {"type": "string", "const": "purefa_pg_replication"},
+                "array": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+                "maintenance_active": {"type": "boolean"},
+                "observed_at": {"type": "string"},
+                "data": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_overdue",
+      "type": "aap_job_template",
+      "name": "Notify: replication overdue, awaiting approval",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Protection group ${trigger.event.data.pgroup} on ${trigger.event.array} is overdue or stuck; an immediate replicated snapshot awaits approval",
+          "detail": "Last completed ${trigger.event.data.since_last_completed_s} s ago, schedule every ${trigger.event.data.frequency_ms} ms, in progress: ${trigger.event.data.in_progress}, targets ${trigger.event.data.targets}. Approve or reject in the orchestrator within one hour.",
+          "target_array": "${trigger.event.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_replicate",
+      "type": "approval",
+      "name": "Approve an immediate replicated snapshot",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 3600,
+        "prompt": "Protection group ${trigger.event.data.pgroup} on ${trigger.event.array}: replication is overdue or stuck (last completed ${trigger.event.data.since_last_completed_s} s ago, schedule every ${trigger.event.data.frequency_ms} ms). Approve to take an immediate snapshot of the group and replicate it to its targets now; the group's schedule is not changed. Rejecting sends nothing."
+      }
+    },
+    {
+      "id": "replicate_now",
+      "type": "aap_job_template",
+      "name": "Replicate the group now",
+      "parameters": {
+        "job_template_name": "FlashArray - replicate now",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashArray - ${trigger.event.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.event.array}",
+          "pgroup": "${trigger.event.data.pgroup}",
+          "reason": "approved",
+          "since_last_completed_s": "${trigger.event.data.since_last_completed_s}",
+          "frequency_ms": "${trigger.event.data.frequency_ms}",
+          "in_progress": "${trigger.event.data.in_progress}"
+        }
+      }
+    },
+    {
+      "id": "notify_sent",
+      "type": "aap_job_template",
+      "name": "Notify: snapshot requested",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "${trigger.event.array}: immediate replicated snapshot of ${trigger.event.data.pgroup} requested after approval",
+          "detail": "Snapshot ${replicate_now.artifacts.pgroup}.eda-approved-<time> sent to the group's targets (changed: ${replicate_now.artifacts.changed}). Job: ${replicate_now.job_url}",
+          "target_array": "${trigger.event.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: request rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Immediate replication of ${trigger.event.data.pgroup} on ${trigger.event.array} rejected or expired; nothing sent",
+          "detail": "The group stays on its schedule (every ${trigger.event.data.frequency_ms} ms, last completed ${trigger.event.data.since_last_completed_s} s before the event). Check the array connection and the target if it stays overdue.",
+          "target_array": "${trigger.event.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "fa_replication_event", "to": "notify_overdue"},
+    {"from": "notify_overdue", "to": "approve_replicate"},
+    {"from": "approve_replicate", "to": "replicate_now", "from_port": "approved"},
+    {"from": "replicate_now", "to": "notify_sent"},
+    {"from": "approve_replicate", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

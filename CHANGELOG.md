@@ -23,6 +23,12 @@
 - `tools/ao_lint.py` knows loop nodes: `iterate` and `complete` ports, the
   body's return edge (`to_port: iterate`) as the one allowed back edge
   (`loop_ports`), and the loop parameter keys.
+- A second orchestrator route: a protection group whose replication is
+  overdue or stuck is handed over when `orchestrator_enabled` is true, and
+  `orchestrator/replication_overdue_approval.json` gates the immediate
+  replicated snapshot behind an approval (`orchestrator_paths.replication`).
+- `orchestrator_fallback_local` (default false): a capacity handoff that
+  produced no execution raises the local request anyway.
 - `purefa_syslog` counts the array's own service accounts as automation
   (`system_users`, default `pure_datainsights`; `purity` writes with auth
   source `system`), so the human-action rule stays quiet for the array's

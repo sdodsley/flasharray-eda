@@ -281,7 +281,8 @@ Automation Platform 2.7 installation.
 ### Orchestrator handoff
 
 With `orchestrator_enabled: true` in the vars file, the capacity-at-risk
-rule hands its event to Red Hat's automation orchestrator instead of
+rule (and the overdue-replication rule, whose approval gates an immediate
+replicated snapshot) hands its event to Red Hat's automation orchestrator instead of
 writing a local request: `playbooks/orchestrator_post.yml` obtains a
 client-credentials token (`AO_CLIENT_ID` / `AO_CLIENT_SECRET` from the
 environment, forwarded by `run.sh`) and posts a `flasharray-eda/1`

@@ -16,6 +16,13 @@
 # (env.example; run.sh passes them on with --env-vars). The token lives 15
 # minutes, is held in a no_log fact and is never written anywhere.
 #
+# Optional: orchestrator_fallback_local (default false). When true and the
+# handoff of a purefa_capacity event produced no execution, the second play
+# raises the local capacity request (capacity_request.yml, with request_dir)
+# exactly as the standalone capacity rule would, so the approvals webhook
+# can still answer it. Off by default: on a platform the request file would
+# live in a job's /tmp and the webhook ruleset is not deployed there.
+#
 # Outcome: one alert-log record of kind orchestrator_post. Severity info on
 # 202 (with the execution_id); warning on anything else, with the status and
 # a one-line reason, including a body over 1000000 bytes, which is refused
@@ -187,3 +194,23 @@
           status={{ orchestrator_record.status }}
           execution_id={{ orchestrator_record.execution_id | default('-', true) }}
           {{ orchestrator_record.reason }}
+
+# The fallback: the local request for a capacity event the orchestrator did
+# not take (see the header). Every task of the imported playbook carries the
+# condition, so with the switch off or a 202 recorded nothing here runs.
+- name: Fall back to the local capacity request when the handoff failed
+  import_playbook: capacity_request.yml
+  when:
+    - orchestrator_fallback_local | default(false) | bool
+    - hostvars['localhost'].event_type | default('') == 'purefa_capacity'
+    - (hostvars['localhost'].orchestrator_record.status | default(0)) != 202
+  vars:
+    at_risk_array: "{{ hostvars['localhost'].event_data.array }}"
+    used_pct: "{{ hostvars['localhost'].event_data.used_pct }}"
+    used_bytes: "{{ hostvars['localhost'].event_data.used_bytes }}"
+    capacity_bytes: "{{ hostvars['localhost'].event_data.capacity_bytes }}"
+    days_to_full: "{{ hostvars['localhost'].event_data.days_to_full }}"
+    top_growers: "{{ hostvars['localhost'].event_data.top_growers }}"
+    pending_eradication_volumes: "{{ hostvars['localhost'].event_data.pending_eradication_volumes }}"
+    pending_eradication_snapshots: "{{ hostvars['localhost'].event_data.pending_eradication_snapshots }}"
+    candidate_targets: "{{ hostvars['localhost'].event_data.others }}"

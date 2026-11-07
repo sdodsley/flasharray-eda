@@ -62,6 +62,7 @@
               orchestrator_validate_certs: '{{ orchestrator_validate_certs }}'
               event: '{{ event }}'
               array: '{{ event.purefa_capacity.array }}'
+              orchestrator_fallback_local: '{{ orchestrator_fallback_local }}'
     - name: Array will be full within the warning horizon - notify
       condition: event.purefa_capacity.days_to_full_known == true and event.purefa_capacity.days_to_full <= vars.capacity_days_to_full_warning
       throttle:

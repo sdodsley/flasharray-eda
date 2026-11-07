@@ -232,7 +232,8 @@
         event.purefa_pg_replication.pgroup is defined and
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
         event.purefa_pg_replication.maintenance_active == false and
-        vars.replication_auto_replicate_now == true
+        vars.replication_auto_replicate_now == true and
+        vars.orchestrator_enabled == false
       throttle:
         once_within: 1 hour
         group_by_attributes:
@@ -250,11 +251,38 @@
             in_progress: "{{ event.purefa_pg_replication.in_progress }}"
             alert_log: "{{ alert_log }}"
 
+    # With orchestrator_enabled true the overdue or stuck group is handed to
+    # the automation orchestrator, where an approval gates the immediate
+    # replicated snapshot (orchestrator/replication_overdue_approval.json);
+    # the auto switch is not consulted on that route. Same throttle as above.
+    - name: Protection group replication overdue or stuck - hand the event to the orchestrator
+      condition: >-
+        event.purefa_pg_replication.pgroup is defined and
+        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        event.purefa_pg_replication.maintenance_active == false and
+        vars.orchestrator_enabled == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
+      action:
+        run_playbook:
+          name: playbooks/orchestrator_post.yml
+          extra_vars:
+            orchestrator_url: "{{ orchestrator_url }}"
+            orchestrator_webhook_path: "{{ orchestrator_paths.replication }}"
+            orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
+            event: "{{ event }}"
+            array: "{{ event.purefa_pg_replication.array }}"
+            alert_log: "{{ alert_log }}"
+
     - name: Protection group replication overdue or stuck - notify only
       condition: >-
         event.purefa_pg_replication.pgroup is defined and
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
-        (event.purefa_pg_replication.maintenance_active == true or vars.replication_auto_replicate_now == false)
+        (event.purefa_pg_replication.maintenance_active == true or
+         (vars.replication_auto_replicate_now == false and vars.orchestrator_enabled == false))
       throttle:
         once_within: 1 hour
         group_by_attributes:

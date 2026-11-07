@@ -23,7 +23,10 @@ describes that API as a technology preview that may change.
 
 ## What moves, what stays
 
-Only the capacity-at-risk rule moves. Everything else stays in EDA:
+Two rules move: capacity at risk, and a protection group whose replication
+is overdue or stuck (an approval then gates the immediate replicated
+snapshot, `orchestrator/replication_overdue_approval.json`). Everything
+else stays in EDA:
 polling, the gates (`maintenance_active`, `automation_users`, the per-site
 switches), the throttles, notifications, the QoS cap and the replication
 actions.
@@ -164,7 +167,8 @@ Vars (`vars/example.yml`, copied to `vars/local-<site>.yml`):
 | --- | --- | --- |
 | `orchestrator_enabled` | `false` | the switch described above |
 | `orchestrator_url` | `https://orchestrator.example.com` | base URL; `/api/v1/...` is appended |
-| `orchestrator_paths` | `{capacity: fa_capacity}` | `webhook_path` per route; one key per rule that hands over |
+| `orchestrator_paths` | `{capacity: fa_capacity, replication: fa_replication}` | `webhook_path` per route; one key per rule that hands over |
+| `orchestrator_fallback_local` | `false` | when true, a capacity handoff that produced no execution raises the local request anyway (`capacity_request.yml`), so the approvals webhook can answer it; off because on a platform the request file would live in a job's /tmp |
 | `orchestrator_validate_certs` | `true` | TLS verification for both calls (the orchestrator normally has a real certificate, unlike lab arrays) |
 
 Playbook-only knobs, overridable as extra_vars: `orchestrator_timeout`
@@ -358,10 +362,11 @@ the platform uses. Three deployment notes:
   and the problem-details shape of error answers. The mock implements
   them as the upstream documentation describes and the unit test covers
   them against the mock.
-- A failed handoff leaves no local request: the alert-log warning is the
-  only trace, and the rule does not fall back to the request file. A site
-  that wants that fallback adds it to the rule or the playbook.
-- Only the capacity route is wired. Another route (replication, anomaly)
-  follows the same pattern: a key under `orchestrator_paths`, a rule
-  guarded by `vars.orchestrator_enabled == true` that runs
-  `orchestrator_post.yml`, and `== false` on the local rule.
+- A failed handoff leaves no local request unless
+  `orchestrator_fallback_local` is true; by default the alert-log warning
+  is the only trace.
+- Two routes are wired, capacity and overdue replication. Another one
+  (anomaly, say) follows the same pattern: a key under
+  `orchestrator_paths`, a rule guarded by `vars.orchestrator_enabled ==
+  true` that runs `orchestrator_post.yml`, `== false` on the local rule,
+  and a definition with an `eda_trigger` on that path.

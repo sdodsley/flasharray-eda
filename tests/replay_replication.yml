@@ -26,7 +26,8 @@
         event.purefa_pg_replication.pgroup is defined and
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
         event.purefa_pg_replication.maintenance_active == false and
-        vars.replication_auto_replicate_now == true
+        vars.replication_auto_replicate_now == true and
+        vars.orchestrator_enabled == false
       throttle:
         once_within: 1 hour
         group_by_attributes:

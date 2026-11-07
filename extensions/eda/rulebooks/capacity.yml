@@ -90,6 +90,8 @@
             event: "{{ event }}"
             array: "{{ event.purefa_capacity.array }}"
             alert_log: "{{ alert_log }}"
+            orchestrator_fallback_local: "{{ orchestrator_fallback_local }}"
+            request_dir: "{{ request_dir }}"
 
     - name: Array will be full within the warning horizon - notify
       condition: >-

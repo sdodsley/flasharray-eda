@@ -176,7 +176,7 @@
               offline_arrays: []
               mode: restore
     - name: Protection group replication overdue or stuck - replicate now
-      condition: event.purefa_pg_replication.pgroup is defined and (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and event.purefa_pg_replication.maintenance_active == false and vars.replication_auto_replicate_now == true
+      condition: event.purefa_pg_replication.pgroup is defined and (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and event.purefa_pg_replication.maintenance_active == false and vars.replication_auto_replicate_now == true and vars.orchestrator_enabled == false
       throttle:
         once_within: 1 hour
         group_by_attributes:
@@ -194,8 +194,26 @@
               since_last_completed_s: '{{ event.purefa_pg_replication.since_last_completed_s }}'
               frequency_ms: '{{ event.purefa_pg_replication.frequency_ms }}'
               in_progress: '{{ event.purefa_pg_replication.in_progress }}'
+    - name: Protection group replication overdue or stuck - hand the event to the orchestrator
+      condition: event.purefa_pg_replication.pgroup is defined and (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and event.purefa_pg_replication.maintenance_active == false and vars.orchestrator_enabled == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
+      action:
+        run_job_template:
+          name: FlashArray - orchestrator post
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              orchestrator_url: '{{ orchestrator_url }}'
+              orchestrator_webhook_path: '{{ orchestrator_paths.replication }}'
+              orchestrator_validate_certs: '{{ orchestrator_validate_certs }}'
+              event: '{{ event }}'
+              array: '{{ event.purefa_pg_replication.array }}'
     - name: Protection group replication overdue or stuck - notify only
-      condition: event.purefa_pg_replication.pgroup is defined and (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and (event.purefa_pg_replication.maintenance_active == true or vars.replication_auto_replicate_now == false)
+      condition: "event.purefa_pg_replication.pgroup is defined and (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and (event.purefa_pg_replication.maintenance_active == true or\n (vars.replication_auto_replicate_now == false and vars.orchestrator_enabled == false))"
       throttle:
         once_within: 1 hour
         group_by_attributes:

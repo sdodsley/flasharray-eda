@@ -77,7 +77,7 @@ def _platform_job_template_names():
     return names
 
 
-def test_there_are_seven_shipped_definitions():
+def test_there_are_eight_shipped_definitions():
     assert [p.name for p in DEFINITIONS] == [
         "capacity_reclaim_approval.json",
         "day2_expand_volume.json",
@@ -86,6 +86,7 @@ def test_there_are_seven_shipped_definitions():
         "day2_qos_cap.json",
         "dr_drill_schedule.json",
         "dr_failover_test.json",
+        "replication_overdue_approval.json",
     ]
 
 
@@ -179,7 +180,8 @@ def test_only_placeholders_for_per_environment_ids(path):
         if node["type"] == "approval":
             # approvers are named by group name, not id: the built-in group
             assert params["approver_groups"] == ["admins"], node["id"]
-            assert params["decision_window"] == 86400, node["id"]
+            # 24 hours, or one hour for the time-sensitive replication route
+            assert params["decision_window"] in (86400, 3600), node["id"]
     for trigger in doc["triggers"]:
         accounts = trigger["parameters"].get("authorized_service_account_ids")
         if accounts is not None:

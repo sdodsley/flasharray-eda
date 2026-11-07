@@ -169,7 +169,12 @@ orchestrator_url: https://orchestrator.example.com
 # (the service account must be bound to each trigger, or the post gets 403).
 orchestrator_paths:
   capacity: fa_capacity
+  replication: fa_replication   # overdue or stuck protection group -> approval, then replicate now
 orchestrator_validate_certs: true  # the orchestrator normally carries a real certificate
+# When a capacity handoff fails (orchestrator down, token refused), raise the
+# local request anyway so the approvals webhook can answer it. Off by default:
+# on a platform the request file would live in a job's /tmp.
+orchestrator_fallback_local: false
 qos_auto_cap: true                # noisy neighbour on a hot array -> temporary IOPS cap
 qos_cap_iops: 20000               # the cap applied
 qos_cap_min_iops_share_pct: 40    # only volumes holding at least this share of the array's IOPS

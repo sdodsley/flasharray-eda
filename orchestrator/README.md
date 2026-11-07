@@ -30,6 +30,7 @@ as a technology preview that may change (docs/ORCHESTRATOR.md).
 | `day2_protect_now.json` | `manual_trigger` with an input form (array, seconds to add to the eradication delay) | Approval (24 hours), then **FlashArray - protect now** with the requested array's credential: an immediate snapshot of every local protection group and a longer enabled eradication delay (0 seconds snapshots only), then a warning notify with the snapshot suffix, the groups snapshotted or failed and the delay. A rejection notifies and changes nothing. |
 | `day2_identify_led.json` | `manual_trigger` with an input form (array, component, LED on or off) | No approval: **FlashArray - identify LED** with the requested array's credential sets the component's identify LED, then an info notify reports the state, whether it changed and any error (a component without an identify LED), with the AAP job URL. |
 | `dr_failover_test.json` | `manual_trigger` with an input form (target_array, pod) | A DR failover test on an ActiveDR replica link: notify, approval "promote" (24 hours), **FlashArray - DR promote** promotes the replica-link target pod on `target_array`, a notify with the promotion artifacts, then approval "revert" (its prompt says the writes made during the test are discarded), **FlashArray - DR demote** demotes the pod again and a notify reports the revert. Each rejection has its own notify; a rejected revert leaves the pod promoted and says so. |
+| `replication_overdue_approval.json` | `eda_trigger` on webhook path `fa_replication` | A `purefa_pg_replication` event forwarded by the replication rulebook (a protection group overdue or stuck, with `orchestrator_enabled` on): **FlashArray - notify** announces it, an approval node waits up to one hour, and an approval runs **FlashArray - replicate now** (an immediate snapshot of the group replicated to its targets; the schedule is untouched), then a notify with the job URL. A rejection notifies and sends nothing. |
 | `dr_drill_schedule.json` | `scheduled_trigger`, cron `0 2 * * *` (UTC), missed runs skipped | Every night **FlashArray - DR drill** copies a volume out of the latest completed replicated snapshot on each drill target, verifies and destroys it; a condition on `failed_count` sends a critical **FlashArray - notify** when any drill failed and a one-line summary otherwise. Publishing the definition creates the schedule. |
 
 Approval nodes always have two distinct successors: `approved` and
@@ -45,12 +46,13 @@ on its own keeps a boolean or integer's type), the node carries
 
 ## The event envelope
 
-The capacity definition expects what the EDA bridge
-(`playbooks/orchestrator_post.yml`, run by the capacity rulebook when
-`orchestrator_enabled` is true; the path is `orchestrator_paths.capacity`
-in the vars file and the contract is in `docs/ORCHESTRATOR.md`) sends to
-`POST {orchestrator_url}/api/v1/webhooks/eda/fa_capacity` with a service
-account bearer token:
+The capacity and replication definitions expect what the EDA bridge
+(`playbooks/orchestrator_post.yml`, run by the capacity and replication
+rulebooks when `orchestrator_enabled` is true; the paths are
+`orchestrator_paths.capacity` and `orchestrator_paths.replication` in the
+vars file and the contract is in `docs/ORCHESTRATOR.md`) sends to
+`POST {orchestrator_url}/api/v1/webhooks/eda/<path>` with a service
+account bearer token; for the capacity route:
 
 ```json
 {"event": {"schema": "flasharray-eda/1", "event_type": "purefa_capacity",
@@ -86,6 +88,7 @@ template itself (extra vars or a survey), not in these files:
 | FlashArray - notify | `playbooks/notify.yml` | `severity`, `subject`, `detail`, `target_array` | `alert_log` |
 | FlashArray - expand volume | `playbooks/expand_volume.yml` | `target_array`, `volume`, `new_size` | `alert_log` (optionally `reason`, `requested_by`) |
 | FlashArray - DR drill | `playbooks/dr_drill.yml` | nothing | `dr_drills`, `alert_log` |
+| FlashArray - replicate now | `playbooks/replicate_now.yml` | `target_array`, `pgroup`, `reason` (`approved`), `since_last_completed_s`, `frequency_ms`, `in_progress` | `alert_log` |
 | FlashArray - QoS cap | `playbooks/qos_cap.yml` | `target_array`, `volume`, `mode` (`cap`), `cap_iops`, `reason` | `alert_log` |
 | FlashArray - protect now | `playbooks/protect_now.yml` | `target_array`, `extend_eradication_by_s`, `audit_user` and `audit_command` (constants naming the workflow, so the record shows what asked) | `alert_log` |
 | FlashArray - identify LED | `playbooks/identify_led.yml` | `target_array`, `component`, `led_state`, `severity` (`info`) | `alert_log` |
@@ -175,7 +178,8 @@ elsewhere. Approvers are named, not identified: `approver_groups` (and
 `approver_users`) take group and user names, so they are not placeholders.
 The shipped definitions name `admins`, the built-in group every instance
 has; change it to the group that should decide. `decision_window` is 86400
-seconds (24 hours); an approval nobody decides within it expires.
+seconds (24 hours), 3600 for the overdue-replication route; an approval
+nobody decides within it expires.
 `fallback_decision` (`approve` or `reject`) names the port an expired
 approval takes; the shipped definitions leave it unset, so an expired
 approval never takes the `approved` port. How the execution ends in that
