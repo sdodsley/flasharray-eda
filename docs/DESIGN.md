@@ -51,7 +51,7 @@ Forward both into tickets.
 | Transport | How | Latency | Customer needs |
 | --- | --- | --- | --- |
 | Pull | `purefa_events`: one asyncio source plugin, N arrays (verified with two), six signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
-| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 and 5424 headers, `purity.audit`, `purity.alert` and `purity.test` recognised, audit `Key: 'value'` pairs parsed into fields (user, action, result, interface, session, location); `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
+| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 and 5424 headers with or without a priority, the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array forwards too) dropped, audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes; `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
 | Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
 The Prometheus rules cover hardware and drive status, capacity and

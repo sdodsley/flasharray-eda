@@ -6,9 +6,12 @@ syslog messages (push path, sub-second).
 
 Point the array at this host (GUI: Settings > System > Syslog Servers, or
 everpure.flasharray.purefa_syslog with a tcp:// or udp:// URI). Purity sends
-three programs: purity.alert, purity.audit and purity.test. Each line is
-turned into one event; the audit lines are parsed into fields so rules can
-match on user, action and result without regexes.
+three programs of its own: purity.alert, purity.audit and purity.test. Each
+line is turned into one event; the audit lines are parsed into fields so
+rules can match on user, action and result without regexes. A syslog target
+also receives the controllers' whole system log (sshd, sudo, kernel and the
+rest), so by default only the three Purity programs are emitted and every
+other program is dropped and counted.
 
 Arguments
 ---------
@@ -17,6 +20,11 @@ host              bind address (default 0.0.0.0; bind to the interface the
 port              port (default 5140; 514 needs root or a capability)
 protocols         list or comma-separated string, udp and/or tcp (default
                   both)
+programs          list or comma-separated string of syslog programs to emit
+                  (default purity.alert, purity.audit, purity.test). Lines
+                  from any other program, and lines with no syslog header,
+                  are dropped and counted; `all` (or an empty list) passes
+                  everything through as kind `other`.
 arrays            optional mapping array name or syslog hostname -> inventory
                   host name, for arrays whose own name or logged hostname
                   differs from the inventory (default {}). It must be a
@@ -47,17 +55,31 @@ kind           alert | audit | test | other
 array          inventory name: the message's "Array name" field, else the
                syslog hostname, whichever is first found in `arrays`
                (unmapped names pass through unchanged)
-host           syslog hostname from the header, before mapping
-severity       syslog severity word from the PRI (emerg..debug)
-facility       syslog facility number
-time           timestamp text from the header
-program        purity.alert | purity.audit | purity.test | other program
+host           syslog hostname from the header, before mapping (Purity logs
+               the controller's name, `<array>-ct0`; `array` is the array)
+severity       syslog severity word from the PRI (emerg..debug); the array
+               sends no PRI, so it is taken from a leading level word or a
+               "severity <word>" phrase in the text when there is one, else
+               None
+facility       syslog facility number, None without a PRI
+time           timestamp text from the header (the array's local time; the
+               audit and test messages also carry `fields.utc_time`)
+program        purity.alert | purity.audit | purity.test | other program,
+               without the `[pid]` Purity appends
 message        the text after the program name
-fields         key -> value for every `Key: 'value'` pair in an audit
-               message (User, Interface, Session, Location, Action, Method,
-               Result, Description, ...), lower-cased keys with spaces as
-               underscores, plus message_id and message_kind from the
-               "(login message ID: N)" prefix when present
+fields         audit lines come in two layouts and both are parsed:
+               - a command: `[user (auth)]@array(id) command arguments.
+                 Message ID: N UTC Time: ... Array Name: x` gives user,
+                 auth_source, array_name, array_id, command, subcommand,
+                 arguments, action (the whole command line), message_id,
+                 utc_time and message_kind `command`;
+               - a session record: `(login message ID: N) Array name: 'x'
+                 ... User: 'u' Action: 'session request' ...` gives every
+                 `Key: 'value'` pair (lower-cased keys, spaces as
+                 underscores), result, message_id and message_kind `login`
+                 (`operation` and others as the prefix says).
+               Every audit line carries message_kind (`other` when neither
+               layout matched); test lines carry utc_time and array_name.
 user           fields.user when present
 action         fields.action when present
 result         fields.result when present
@@ -70,12 +92,12 @@ A line with no recognisable syslog header arrives with the same keys: kind
 other, message and raw set to the line, fields {}, by_automation false and
 every other field (array included) None; it is never named after the sender.
 
-Format verification: the audit parsing follows the message layout published
-by Pure's SIEM partners (`<PRI>Mon DD HH:MM:SS host purity.audit: (login
-message ID: N) Array name: 'x' Controller: 0 Interface: 'REST' ... User: 'u'
-... Action: '...' Method: '' Result: Success Description: ''`). Not
-verified against a live array; tests/syslog_send.py replays representative
-lines.
+Format verification: the layouts above are the ones Purity//FA 6.10.6 sends
+over TCP (no PRI, `purity.audit[pid]:`, the command layout for every CLI,
+GUI and REST command and the `Key: 'value'` layout for session records);
+the `Key: 'value'` layout is also what Pure's SIEM partners publish. The
+purity.alert text has not been seen from a live array; alert lines are
+emitted whole with the severity read from the text when present.
 """
 
 DOCUMENTATION = r"""
@@ -85,7 +107,11 @@ short_description: Receive Everpure FlashArray syslog messages as events.
 description:
   - Listens on UDP and/or TCP for syslog lines from FlashArrays and emits one
     C(purefa_syslog) event per line. C(purity.audit) lines are parsed into
-    fields (user, action, result, ...) so rules can match without regexes.
+    fields (user, command, action, result, ...) so rules can match without
+    regexes.
+  - A FlashArray forwards its controllers' whole system log to a syslog
+    target. By default only the C(purity.alert), C(purity.audit) and
+    C(purity.test) programs are emitted; the rest is dropped and counted.
   - Syslog carries no authentication and a UDP source address can be forged.
     Bind to the interface the arrays reach, prefer TCP behind a host
     firewall, and drive notifications from these events, not remediation.
@@ -103,6 +129,15 @@ options:
     type: list
     elements: str
     default: [udp, tcp]
+  programs:
+    description:
+      - Syslog programs to emit (list or comma-separated string). Lines from
+        any other program, and lines with no syslog header, are dropped and
+        counted. C(all) or an empty list passes everything through as kind
+        C(other).
+    type: list
+    elements: str
+    default: [purity.alert, purity.audit, purity.test]
   arrays:
     description:
       - Mapping of an array's own name or syslog hostname to the inventory
@@ -136,6 +171,7 @@ EXAMPLES = r"""
         host: "{{ syslog_host }}"
         port: "{{ syslog_port }}"
         protocols: [tcp]
+        programs: "{{ syslog_programs }}"
         arrays: "{{ syslog_hostnames }}"
         automation_users: "{{ automation_users }}"
         allowed_sources: "{{ syslog_allowed_sources }}"
@@ -143,7 +179,8 @@ EXAMPLES = r"""
     - name: Human action via syslog audit - notify
       condition: >-
         event.purefa_syslog.kind == "audit" and
-        event.purefa_syslog.by_automation == false
+        event.purefa_syslog.by_automation == false and
+        event.purefa_syslog.fields.message_kind != "login"
       action:
         debug:
           msg: "{{ event.purefa_syslog.user }} on {{ event.purefa_syslog.array }}: {{ event.purefa_syslog.action }}"
@@ -163,14 +200,41 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
 logger = logging.getLogger(__name__)
 
 SEVERITIES = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
-# <PRI>Mon DD HH:MM:SS host program: message      (RFC 3164 style)
+# Severity words as they appear in message text (purity.test starts with
+# "INFO", alert texts may say "severity warning"), mapped to the PRI words.
+SEVERITY_WORDS = {
+    "emergency": "emerg",
+    "emerg": "emerg",
+    "alert": "alert",
+    "critical": "crit",
+    "crit": "crit",
+    "error": "err",
+    "err": "err",
+    "warning": "warning",
+    "warn": "warning",
+    "notice": "notice",
+    "info": "info",
+    "informational": "info",
+    "debug": "debug",
+}
+# The three programs Purity itself writes; everything else a syslog target
+# receives is the controllers' system log.
+DEFAULT_PROGRAMS = ["purity.alert", "purity.audit", "purity.test"]
+# [<PRI>]Mon DD HH:MM:SS host program[pid]: message      (RFC 3164 style; the
+# array sends no PRI and appends the pid to the program)
 RFC3164 = re.compile(
-    r"^<(?P<pri>\d{1,3})>(?P<time>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?P<host>\S+)\s+"
-    r"(?P<prog>purity\.\w+|\S+?):\s*(?P<msg>.*)$"
+    r"^(?:<(?P<pri>\d{1,3})>)?(?P<time>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?P<host>\S+)\s+"
+    r"(?P<prog>[^\s:\[]+)(?:\[\d+\])?:\s*(?P<msg>.*)$"
 )
 # <PRI>1 2026-10-20T18:00:00Z host program - - - message   (RFC 5424 style)
 RFC5424 = re.compile(
     r"^<(?P<pri>\d{1,3})>1\s+(?P<time>\S+)\s+(?P<host>\S+)\s+(?P<prog>\S+)\s+\S+\s+\S+\s+(?:\[.*?\]|-)\s*(?P<msg>.*)$"
+)
+# The command layout of a purity.audit message:
+#   [user (auth)]@array(array-id) command arguments. Message ID: N UTC Time: T Array Name: x
+COMMAND = re.compile(
+    r"^\[(?P<user>[^\]\(]+?)(?:\s*\((?P<auth>[^)]*)\))?\]@(?P<array>[^(\s]+)\((?P<array_id>[^)]*)\)\s+"
+    r"(?P<cmd>.*?)\s*\.?\s*Message ID:\s*(?P<id>\d+)(?P<rest>.*)$"
 )
 # Key: 'value' pairs; the key starts with a capital after whitespace (so "UTC
 # Time: 2026-...Z User: 'u'" yields User, not "Z User"), later words may be
@@ -179,6 +243,15 @@ RFC5424 = re.compile(
 FIELD = re.compile(r"(?:^|(?<=\s))([A-Z][A-Za-z]*(?: [A-Za-z]+)*):?\s*'([^']*)'")
 RESULT = re.compile(r"\bResult:\s*(\w+)")
 MSGID = re.compile(r"\((?P<what>[^)]*?)\s*message ID:\s*(?P<id>\d+)\)")
+# Unquoted trailers the array appends to command and test messages
+MSGID_TRAILER = re.compile(r"\bMessage ID:\s*(\d+)")
+UTC_TRAILER = re.compile(
+    r"\bUTC Time:\s*(.+?)(?=\s+(?:Array Name|Message ID|User|Location):|\s*$)"
+)
+ARRAY_TRAILER = re.compile(r"\bArray [Nn]ame:\s*'?([^'\s]+)'?")
+SEVERITY_IN_TEXT = re.compile(
+    r"^(?P<lead>[A-Z]{4,13})\b|\bseverity[:=\s]+'?(?P<word>[A-Za-z]+)'?", re.I
+)
 
 # Every event carries these keys, parsed or not, so a rule that reads
 # `severity` or `array` never meets a different shape.
@@ -201,6 +274,8 @@ EVENT_KEYS = (
 # An RFC 3164/5424 syslog line is a few KiB at most; a longer "line" is not
 # syslog and closes the TCP connection instead of growing the buffer.
 TCP_LINE_LIMIT = 16384
+# How often a dropped program is mentioned in the log after its first line
+DROP_LOG_EVERY = 1000
 
 
 def _as_list(value):
@@ -211,6 +286,20 @@ def _as_list(value):
     if isinstance(value, str):
         return [v.strip() for v in value.split(",") if v.strip()]
     return list(value)
+
+
+def _programs(value):
+    """The programs argument as a list; [] means emit every program.
+
+    None (argument absent) gives the Purity programs; `all` anywhere in the
+    list, or an explicit empty list, gives [].
+    """
+    if value is None:
+        return list(DEFAULT_PROGRAMS)
+    programs = _as_list(value)
+    if any(p.lower() == "all" for p in programs):
+        return []
+    return programs
 
 
 def _networks(spec):
@@ -245,6 +334,39 @@ def _array_name(fields, host, arrays):
     return candidates[0] if candidates else None
 
 
+def _severity_from_text(msg):
+    """A severity word from the message text: a leading upper-case level
+    word (purity.test's "INFO [pure_middleware] ...") or a "severity <word>"
+    phrase; None when the text carries neither."""
+    m = SEVERITY_IN_TEXT.search(msg)
+    if not m:
+        return None
+    word = (m.group("lead") or m.group("word") or "").lower()
+    return SEVERITY_WORDS.get(word)
+
+
+def _command_fields(m):
+    """Fields of the command layout from its regex match."""
+    action = " ".join(m.group("cmd").split())
+    words = action.split()
+    fields = {
+        "user": m.group("user").strip(),
+        "array_name": m.group("array"),
+        "array_id": m.group("array_id"),
+        "action": action,
+        "command": words[0] if words else "",
+        "subcommand": (
+            words[1] if len(words) > 1 and not words[1].startswith("-") else ""
+        ),
+        "message_id": m.group("id"),
+        "message_kind": "command",
+    }
+    fields["arguments"] = " ".join(words[2:] if fields["subcommand"] else words[1:])
+    if m.group("auth") is not None:
+        fields["auth_source"] = m.group("auth").strip()
+    return fields
+
+
 def parse(line, arrays, automation):
     line = line.strip()
     event = dict.fromkeys(EVENT_KEYS)
@@ -252,29 +374,51 @@ def parse(line, arrays, automation):
     m = RFC3164.match(line) or RFC5424.match(line)
     if not m:
         return event
-    pri = int(m.group("pri"))
+    pri = m.group("pri")
     prog = m.group("prog")
     msg = m.group("msg")
     kind = (prog.split(".", 1)[1] if prog.startswith("purity.") else "") or "other"
-    r = RESULT.search(msg)
-    # take "Result: Success" out before pairing keys, or the next key reads as
-    # "Success Description"
-    body = RESULT.sub(" ", msg) if r else msg
-    fields = {k.strip().lower().replace(" ", "_"): v for k, v in FIELD.findall(body)}
-    if r:
-        fields["result"] = r.group(1)
-    mid = MSGID.search(msg)
-    if mid:
-        fields["message_id"] = mid.group("id")
-        fields["message_kind"] = mid.group("what").strip()
+    cmd = COMMAND.match(msg)
+    if cmd:
+        fields = _command_fields(cmd)
+        trailer = cmd.group("rest")
+    else:
+        r = RESULT.search(msg)
+        # take "Result: Success" out before pairing keys, or the next key
+        # reads as "Success Description"
+        body = RESULT.sub(" ", msg) if r else msg
+        fields = {
+            k.strip().lower().replace(" ", "_"): v for k, v in FIELD.findall(body)
+        }
+        if r:
+            fields["result"] = r.group(1)
+        mid = MSGID.search(msg)
+        if mid:
+            fields["message_id"] = mid.group("id")
+            fields["message_kind"] = mid.group("what").strip()
+        trailer = msg
+    # the unquoted trailers of the command and test layouts
+    t = MSGID_TRAILER.search(trailer)
+    if t and "message_id" not in fields:
+        fields["message_id"] = t.group(1)
+    t = UTC_TRAILER.search(trailer)
+    if t:
+        fields["utc_time"] = t.group(1).strip()
+    t = ARRAY_TRAILER.search(trailer)
+    if t and "array_name" not in fields:
+        fields["array_name"] = t.group(1)
+    if kind == "audit":
+        fields.setdefault("message_kind", "other")
     host = m.group("host")
     user = fields.get("user")
     event.update(
         kind=kind,
         array=_array_name(fields, host, arrays),
         host=host,
-        severity=SEVERITIES[pri % 8],
-        facility=pri // 8,
+        severity=(
+            SEVERITIES[int(pri) % 8] if pri is not None else _severity_from_text(msg)
+        ),
+        facility=int(pri) // 8 if pri is not None else None,
         time=m.group("time"),
         program=prog,
         message=msg,
@@ -287,10 +431,13 @@ def parse(line, arrays, automation):
     return event
 
 
-def _emitter(local, arrays, automation, networks):
+def _emitter(local, arrays, automation, networks, programs=None):
     """Build the synchronous emit(line, source, protocol) callback: filter the
-    sender, parse, and hand the event to the local queue (unbounded, so
-    put_nowait never fails and the UDP callback never blocks)."""
+    sender, parse, keep only the wanted programs, and hand the event to the
+    local queue (unbounded, so put_nowait never fails and the UDP callback
+    never blocks). `programs` None means the Purity programs; [] means all."""
+    wanted = list(DEFAULT_PROGRAMS) if programs is None else list(programs)
+    dropped = {}
 
     def emit(line, source, protocol):
         if not _source_allowed(source, networks):
@@ -301,6 +448,20 @@ def _emitter(local, arrays, automation, networks):
             )
             return False
         event = parse(line, arrays, automation)
+        program = event["program"] or "(no syslog header)"
+        if wanted and program not in wanted:
+            n = dropped[program] = dropped.get(program, 0) + 1
+            if n == 1:
+                logger.info(
+                    "purefa_syslog: dropping lines of program %s from %s (not in programs); counting from now on",
+                    program,
+                    source,
+                )
+            elif n % DROP_LOG_EVERY == 0:
+                logger.debug(
+                    "purefa_syslog: %d lines of program %s dropped", n, program
+                )
+            return False
         event["source"] = source
         event["protocol"] = protocol
         local.put_nowait(event)
@@ -388,6 +549,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
     host = args.get("host") or "0.0.0.0"
     port = int(args.get("port", 5140))
     protocols = _as_list(args.get("protocols")) or ["udp", "tcp"]
+    programs = _programs(args.get("programs"))
     arrays = _decode_arrays(args.get("arrays"), "purefa_syslog") or {}
     if not isinstance(arrays, dict):
         raise ValueError(
@@ -402,7 +564,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
     # order, there is one task instead of one per line, and ansible-rulebook's
     # own (one-slot) queue applies back-pressure to the forwarder only.
     local: asyncio.Queue = asyncio.Queue()
-    emit = _emitter(local, arrays, automation, networks)
+    emit = _emitter(local, arrays, automation, networks, programs)
 
     async def forward():
         while True:
@@ -425,11 +587,12 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
         )
         servers.append(srv)
     logger.info(
-        "purefa_syslog: listening on %s:%s (%s)%s",
+        "purefa_syslog: listening on %s:%s (%s)%s, programs %s",
         host,
         port,
         ",".join(protocols),
         f", sources {[str(n) for n in networks]}" if networks else ", any source",
+        programs or "all",
     )
     try:
         await asyncio.Event().wait()

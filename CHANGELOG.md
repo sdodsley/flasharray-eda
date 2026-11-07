@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `purefa_syslog` parses what Purity//FA 6.10.6 sends: lines without a
+  `<PRI>`, a pid on the program, the command layout of `purity.audit`
+  (`[user (local)]@array(id) command. Message ID: N UTC Time: ... Array
+  Name: x`, giving `command`, `subcommand`, `arguments`, `action`,
+  `utc_time` and `message_kind: command`) beside the session layout, and
+  the severity from the text when there is no priority. New `programs`
+  option (vars `syslog_programs`): the array forwards its controllers'
+  whole system log, so only `purity.alert`, `purity.audit` and
+  `purity.test` are emitted by default and the rest is dropped and
+  counted. `syslog.yml` skips session records by `message_kind`.
+
 ## 0.2.0 (2026-11-07)
 
 The project runs on Ansible Automation Platform 2.7 and drives the

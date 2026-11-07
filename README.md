@@ -182,11 +182,18 @@ also carry `maintenance_active`; poll failures arrive as `purefa_poll_error`
 and polling continues. Full argument and field lists are in the plugin
 docstrings.
 
-`purefa_syslog` listens on UDP and TCP for the array's own syslog and emits
-`purefa_syslog` with the audit fields parsed. `allowed_sources` restricts the
-senders it accepts (empty = any) and `arrays` maps an array's own name or
-its syslog hostname to the inventory name (the message's "Array name" field
-is tried first, then the syslog hostname).
+`purefa_syslog` listens on UDP and TCP for the array's syslog and emits
+`purefa_syslog` with the audit fields parsed: Purity writes a command record
+(`[user (local)]@array(id) purevol destroy v1. Message ID: N ...`) for
+every CLI, GUI and REST command and a `Key: 'value'` record for sessions,
+and both become `user`, `action`, `command`, `result` and the rest. An
+array forwards its controllers' whole system log to a syslog target, so
+the listener keeps the `purity.alert`, `purity.audit` and `purity.test`
+programs and drops everything else (`programs`; `all` passes it through as
+kind `other`). `allowed_sources` restricts the senders it accepts (empty =
+any) and `arrays` maps an array's own name or its syslog hostname to the
+inventory name (the message's "Array name" field is tried first, then the
+syslog hostname, which is the controller's).
 
 The zero-code path needs neither plugin: Prometheus scrapes the array's
 native OpenMetrics exporter, `prometheus/flasharray.rules.yml` raises alerts
@@ -223,10 +230,13 @@ differently (see also [SECURITY.md](SECURITY.md)):
   5002): `ansible.eda.alertmanager` has no token option. Bind it to an
   interface only Alertmanager can reach and put it behind the EDA
   controller's event streams or a reverse proxy that authenticates.
-- **Syslog** (`syslog_host`, `syslog_port`, default 5140):
+- **Syslog** (`syslog_host`, `syslog_port`, default 5140; on the array,
+  a syslog server with the URI `tcp://<eda host>:5140`):
   `syslog_allowed_sources` lists the addresses or CIDR prefixes the listener
   accepts (empty = any). It is a filter, not authentication; UDP source
   addresses can be forged, which is one reason `syslog.yml` only notifies.
+  `syslog_programs` keeps the Purity programs and drops the controllers'
+  other system log, which the array forwards too.
 
 ## Decision environment and Ansible Automation Platform
 

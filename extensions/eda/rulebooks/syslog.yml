@@ -8,7 +8,11 @@
 #
 # Syslog carries no authentication: the listener binds to syslog_host and,
 # when syslog_allowed_sources lists addresses or CIDR prefixes, drops
-# anything from elsewhere (an empty list accepts any source).
+# anything from elsewhere (an empty list accepts any source). An array
+# forwards its controllers' whole system log to a syslog target; the
+# listener emits the programs in syslog_programs (the three Purity ones by
+# default) and drops the rest, so the last rule only sees events when a
+# site widens that list.
 
 - name: FlashArray syslog
   hosts: all
@@ -18,6 +22,7 @@
         host: "{{ syslog_host }}"
         port: "{{ syslog_port }}"
         allowed_sources: "{{ syslog_allowed_sources }}"
+        programs: "{{ syslog_programs }}"
         automation_users: "{{ automation_users }}"
         arrays: "{{ syslog_hostnames }}"
 
@@ -45,7 +50,7 @@
         event.purefa_syslog.by_automation == false and
         event.purefa_syslog.fields.user is defined and
         event.purefa_syslog.fields.action is defined and
-        event.purefa_syslog.action not in ["login", "logout", "operation request"]
+        event.purefa_syslog.fields.message_kind != "login"
       action:
         run_playbook:
           name: playbooks/notify.yml

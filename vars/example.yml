@@ -182,12 +182,16 @@ anomaly_write_surge_ratio: 3      # write bandwidth this many times last week's
 anomaly_extend_eradication_by_s: 86400   # lengthen the eradication delay by a day
 
 # --- push and zero-code paths ----------------------------------------------
-# purefa_syslog listener (point the arrays' syslog target here; 514 needs
-# root). The listener has no authentication: bind it to an interface the
-# arrays reach and list the arrays' addresses in syslog_allowed_sources.
+# purefa_syslog listener (point the arrays' syslog target here, for example
+# tcp://<this host>:5140; 514 needs root). The listener has no
+# authentication: bind it to an interface the arrays reach and list the
+# arrays' addresses in syslog_allowed_sources. An array forwards its
+# controllers' whole system log, so the listener keeps the Purity programs
+# and drops the rest.
 syslog_host: 0.0.0.0
 syslog_port: 5140
 syslog_allowed_sources: []       # [] = accept any sender; otherwise IPv4/IPv6 addresses or CIDR prefixes, e.g. ["192.0.2.0/24", "2001:db8::10"]
+syslog_programs: [purity.alert, purity.audit, purity.test]   # programs emitted as events; [] or "all" passes every program through as kind other
 syslog_hostnames: {}             # array name or syslog hostname -> inventory array name, when they differ
 # ansible.eda.alertmanager listener for prometheus/flasharray.rules.yml. The
 # stock source has no token option: bind it to an interface only Alertmanager

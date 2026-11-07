@@ -16,6 +16,7 @@
         host: '{{ syslog_host }}'
         port: '{{ syslog_port }}'
         allowed_sources: '{{ syslog_allowed_sources }}'
+        programs: '{{ syslog_programs }}'
         automation_users: '{{ automation_users }}'
         arrays: '{{ syslog_hostnames }}'
   rules:
@@ -37,7 +38,7 @@
               detail: syslog {{ event.purefa_syslog.severity }} from {{ event.purefa_syslog.source }} at {{ event.purefa_syslog.time }}
               target_array: '{{ event.purefa_syslog.array }}'
     - name: Human action via syslog audit - fast notification
-      condition: event.purefa_syslog.kind == "audit" and event.purefa_syslog.by_automation == false and event.purefa_syslog.fields.user is defined and event.purefa_syslog.fields.action is defined and event.purefa_syslog.action not in ["login", "logout", "operation request"]
+      condition: event.purefa_syslog.kind == "audit" and event.purefa_syslog.by_automation == false and event.purefa_syslog.fields.user is defined and event.purefa_syslog.fields.action is defined and event.purefa_syslog.fields.message_kind != "login"
       action:
         run_job_template:
           name: FlashArray - notify
