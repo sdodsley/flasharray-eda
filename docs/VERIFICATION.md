@@ -225,15 +225,21 @@ event takes the same path as a live one.
   capacity rule (lab override) and the replica-link rule (a real pause)
   are driven through Alertmanager to the platform activation; the rest
   wait for a real fault.
-- The images from the ansible-builder definitions
-  (`decision-environment/execution-environment.yml`,
-  `aap/decision-environment.yml`, `aap/execution-environment.yml`). The
-  images that ran are the ones `decision-environment/Containerfile` and
-  `aap/Containerfile.ee` build: the first runs `alertmanager.yml` and the
-  ten activations, the second the job templates; CI runs the static checks
-  only. The upstream-based definitions pin
-  `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
-  `latest` on that repository is not guaranteed to be the newest release.
+- The images from the ansible-builder definitions running anything. The
+  decision environment from `decision-environment/execution-environment.yml`
+  builds with ansible-builder 3.2 and carries the three collections at the
+  right paths, ansible-rulebook 1.3.2 and the plain-file tree, but only on a
+  `vfs` image store: rootless podman with native overlay on the lab host
+  fails every multi-stage `COPY --from` with "copier: stat ... no such file"
+  although the stage image holds the path
+  ([PACKAGING.md](PACKAGING.md)). `aap/decision-environment.yml` and
+  `aap/execution-environment.yml` are not built. The images that ran are
+  the ones `decision-environment/Containerfile` and `aap/Containerfile.ee`
+  build: the first runs `alertmanager.yml` and the ten activations, the
+  second the job templates; CI runs the static checks only. The
+  upstream-based definitions pin `quay.io/ansible/ansible-rulebook:v1.3.2`,
+  the tested ansible-rulebook; `latest` on that repository is not
+  guaranteed to be the newest release.
 - A rulebook activation launching the controller-tier approval workflow:
   the platform capacity rulebook hands the event to the orchestrator
   (verified above) or launches the request job; it does not launch the

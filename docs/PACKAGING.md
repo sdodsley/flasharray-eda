@@ -91,6 +91,19 @@ the other stock sources. The supported base already keeps `ansible.eda`
 under `/usr/share/ansible/collections`, so `aap/decision-environment.yml`
 needs no override.
 
+Two things about ansible-builder 3 that the definitions are written around:
+`additional_build_files` copies a directory's *contents* into
+`_build/<dest>`, so each collection directory names its own `dest`
+(`flasharray_eda/extensions`, `flasharray_eda/playbooks`,
+`flasharray_eda/meta`) or the three merge into one; and the base image's
+`/usr/bin/python3` is 3.9 while ansible-rulebook and the `PYTHONPATH` it
+sets are 3.12, so `python_interpreter` pins `/usr/bin/python3.12` for the
+build stages. On a rootless host with native overlay, buildah can fail
+every multi-stage `COPY --from` with "copier: stat ... no such file or
+directory" although the stage image holds the path; a separate image
+store with the `vfs` driver (`podman --root <dir> --storage-driver vfs`,
+put first on the PATH as `podman` for the build) builds the image.
+
 Because the sources resolve from the installed collection, the image serves
 two uses with one tree: a standalone `podman run ... ansible-rulebook
 --rulebook extensions/eda/rulebooks/<name>.yml` without `--source-dir` (the
