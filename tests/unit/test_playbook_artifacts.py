@@ -41,6 +41,7 @@ ARTIFACT_KEYS = {
     "apply_baseline.yml": {"ntp_changed", "dns_changed", "git_head"},
     "notify.yml": {"record_kind"},
     "expand_volume.yml": {"volume", "old_size", "new_size"},
+    "replicate_now.yml": {"pgroup", "reason", "snapshot_suffix", "changed"},
 }
 
 # task files included by a playbook: the set_stats sits in the block's always

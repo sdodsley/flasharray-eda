@@ -29,6 +29,9 @@
   replicated snapshot behind an approval (`orchestrator_paths.replication`).
 - `orchestrator_fallback_local` (default false): a capacity handoff that
   produced no execution raises the local request anyway.
+- `replicate_now.yml` publishes job artifacts (`pgroup`, `snapshot_suffix`,
+  `changed`, ...), and a unit test checks that every `${node.artifacts.key}`
+  a definition reads is published by that template's playbook.
 - `purefa_syslog` counts the array's own service accounts as automation
   (`system_users`, default `pure_datainsights`; `purity` writes with auth
   source `system`), so the human-action rule stays quiet for the array's

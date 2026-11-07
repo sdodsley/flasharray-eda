@@ -169,6 +169,101 @@ def test_day2_form_declares_exactly_what_its_job_node_reads(path):
             assert "${trigger." + name + "}" in params["extra_vars"].values(), name
 
 
+ARTIFACT_REF = re.compile(
+    r"\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\.artifacts\.([A-Za-z_][A-Za-z0-9_]*)"
+)
+DATA_KEY = re.compile(r"'([a-z][a-z0-9_]*)':")
+
+
+class _AnyTagLoader(yaml.SafeLoader):
+    """safe_load that keeps the text of Ansible-only tags such as !unsafe."""
+
+
+def _any_tag(loader, suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    return loader.construct_mapping(node)
+
+
+_AnyTagLoader.add_multi_constructor("!", _any_tag)
+
+
+def _flatten(obj):
+    if isinstance(obj, dict):
+        yield obj
+        for key in ("tasks", "pre_tasks", "post_tasks", "block", "always", "rescue"):
+            for item in obj.get(key) or []:
+                yield from _flatten(item)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _flatten(item)
+
+
+def _published_keys(playbook):
+    """Keys of every set_stats data dict in the playbook and in the task files
+    under playbooks/ it names (dr_drill.yml publishes from dr_drill_one.yml)."""
+    text = (ROOT / playbook).read_text()
+    files = [ROOT / playbook] + [
+        ROOT / "playbooks" / name
+        for name in sorted(set(re.findall(r"([a-z_]+\.yml)", text)))
+        if (ROOT / "playbooks" / name).exists() and name != pathlib.Path(playbook).name
+    ]
+    keys = set()
+    for path in files:
+        for item in _flatten(yaml.load(path.read_text(), Loader=_AnyTagLoader)):
+            if "ansible.builtin.set_stats" in item:
+                keys |= set(
+                    DATA_KEY.findall(
+                        str(item["ansible.builtin.set_stats"].get("data", ""))
+                    )
+                )
+    return keys
+
+
+def test_artifacts_a_definition_reads_are_published_by_the_playbook():
+    """`${<node>.artifacts.<key>}` works only when the node's job template's
+    playbook publishes <key> with set_stats; a missing key fails the node at
+    run time, which the orchestrator's validator cannot know."""
+    templates = {}
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            if (
+                str(obj.get("name", "")).startswith("FlashArray - ")
+                and "playbook" in obj
+            ):
+                templates[obj["name"]] = obj["playbook"]
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(yaml.load((ROOT / "aap" / "seed.yml").read_text(), Loader=_AnyTagLoader))
+    assert templates, "no job templates found in aap/seed.yml"
+    checked = 0
+    for path in DEFINITIONS:
+        text = path.read_text()
+        doc = json.loads(text)
+        node_template = {
+            n["id"]: n["parameters"].get("job_template_name")
+            for n in doc["nodes"]
+            if n["type"] == "aap_job_template"
+        }
+        for node_id, key in sorted(set(ARTIFACT_REF.findall(text))):
+            assert (
+                node_id in node_template
+            ), f"{path.name}: {node_id} is not a job template node"
+            playbook = templates[node_template[node_id]]
+            assert key in _published_keys(
+                playbook
+            ), f"{path.name}: {node_id}.artifacts.{key} is not published by {playbook}"
+            checked += 1
+    assert checked >= 10
+
+
 @pytest.mark.parametrize("path", DEFINITIONS, ids=lambda p: p.name)
 def test_only_placeholders_for_per_environment_ids(path):
     doc = json.loads(path.read_text())

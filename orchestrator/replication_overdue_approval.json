@@ -88,7 +88,7 @@
         "extra_vars": {
           "severity": "info",
           "subject": "${trigger.event.array}: immediate replicated snapshot of ${trigger.event.data.pgroup} requested after approval",
-          "detail": "Snapshot ${replicate_now.artifacts.pgroup}.eda-approved-<time> sent to the group's targets (changed: ${replicate_now.artifacts.changed}). Job: ${replicate_now.job_url}",
+          "detail": "Snapshot ${trigger.event.data.pgroup}.${replicate_now.artifacts.snapshot_suffix} sent to the group's targets (changed: ${replicate_now.artifacts.changed}). Job: ${replicate_now.job_url}",
           "target_array": "${trigger.event.array}"
         }
       }

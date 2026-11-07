@@ -112,7 +112,7 @@
         description: "Reapply the baseline NTP servers to one array after a drift poll"
       - name: "FlashArray - replicate now"
         playbook: playbooks/replicate_now.yml
-        description: "Take an immediate replicated snapshot of an overdue or stuck protection group"
+        description: "Take an immediate replicated snapshot of an overdue or stuck protection group; artifacts pgroup, snapshot_suffix, changed"
       - name: "FlashArray - preferred array"
         playbook: playbooks/preferred_array.yml
         description: "Point the hosts of a degraded stretched pod at the online array, or clear the preference on recovery"

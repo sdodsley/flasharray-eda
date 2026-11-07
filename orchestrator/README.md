@@ -152,6 +152,8 @@ with `set_stats` so the orchestrator sees them as
   `groups_snapshotted`, `groups_failed` and `eradication_delay_days`.
 - **FlashArray - identify LED** publishes `array`, `component`, `led_state`
   (`on` or `off`), `led_changed` and `led_error`.
+- **FlashArray - replicate now** publishes `array`, `pgroup`, `reason`,
+  `snapshot_suffix` and `changed`.
 - **FlashArray - DR promote** and **FlashArray - DR demote** publish
   `array`, `pod`, the pod's promotion status before and after, the replica
   link's status and `changed`; the failover test's notify nodes report
