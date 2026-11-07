@@ -81,7 +81,8 @@ snapshots.
 | QoS lift | raises thresholds so the same volume reads as normal | after two normal polls (`qos_lift_normal_polls`, set to 2 by the test; the example default is 5) the previous limit is restored and the tags removed |
 | anomaly | replays three signals for one array | the multi-event condition fires; snapshots are created on every protection group with members (empty groups report as failures); the enabled eradication delay is lengthened from one day to two (put back by the test); the snapshot in a SafeMode-protected group cannot be eradicated afterwards, as designed |
 
-### Push path and zero-code path (replayed input)
+### Push path and zero-code path (replayed input; the live syslog path is
+under "Exercised on a platform")
 
 | Area | Test | Result |
 | --- | --- | --- |
@@ -138,6 +139,27 @@ the array from the fleet credential and run against it. The webhook
 rulesets have no platform variant, so approvals and git pushes stay with
 the controller workflow and event streams.
 
+The syslog path runs live on the platform. Both arrays carry a syslog
+server with the URI `tcp://<platform host>:5140`, and all four controllers
+hold a TCP connection to the syslog activation, which the EDA controller
+runs with host networking so the listener's port is the host's. The
+arrays' own syslog test (`/syslog-servers/test`) arrives as a `purity.test`
+line and the test rule logs it. A local administrator created for the
+test creates, destroys and eradicates a scratch volume over REST: each
+command arrives as one `purity.audit` line in the command layout, the
+human-action rule fires on each and launches **FlashArray - notify** with
+the user, the array and the command in the subject and the parsed fields
+(command, subcommand, arguments, message id, UTC time) in the detail; the
+first notification lands about 26 seconds before the change-control
+activation's REST audit poll reports the same command. The session
+records around those commands (session request, operation request,
+session end) are parsed and skipped. Everything else the controllers
+forward (sshd, sudo, bash, kernel, hundreds of lines a minute) is dropped
+by program before any rule sees it; before that filter existed the
+catch-all rule fired about 1,200 times in five minutes. `run_job_template`
+holds the ruleset until the job ends, so three commands three seconds
+apart became three notifications about a minute apart.
+
 The EDA-to-orchestrator handoff is exercised end to end against a live
 orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md). On the same
 orchestrator, `orchestrator/day2_expand_volume.json` runs from its manual
@@ -176,10 +198,10 @@ event takes the same path as a live one.
 
 ## Not verified
 
-- A live `purity.audit` or `purity.alert` line from an array. The listener
-  and `syslog.yml` are exercised with replayed lines
-  (`tests/syslog_send.py`); the parser follows the layout published by
-  Pure's SIEM partners, and the first real line may need a regex adjustment.
+- A live `purity.alert` line. The audit and test lines are verified live
+  (above); no alert was raised during the test (a replica-link pause and
+  resume raised none), so alert lines are emitted whole with the severity
+  read from the text, and the first real one may still need an adjustment.
 - The Prometheus rules other than FlashArrayCapacityHigh firing for real:
   all eleven load and evaluate against live series, and the capacity rule
   is driven through Alertmanager to the rulebook; the hardware, drive,

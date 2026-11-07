@@ -130,6 +130,10 @@ The native exporter the Prometheus rules are written for, as served on
   not the repository: files outside `playbooks/` are absent, everything
   arrives as `extra_vars`, and relative includes under `playbooks/` resolve.
 - `localhost` must be in the inventory.
+- `run_job_template` waits for the job to finish before the ruleset takes
+  its next event. Three audit lines three seconds apart became three notify
+  jobs about a minute apart on the platform; a rule that must keep up with
+  a burst should launch something short.
 - The stock `ansible.eda` sources (webhook, generic, tick, alertmanager)
   resolve only from `ANSIBLE_COLLECTIONS_PATH`; `env.sh` puts
   `~/.ansible/collections` on it, with `./collections` in front when that

@@ -11,7 +11,8 @@ Prometheus/Alertmanager path exists for sites that already run one.
 
 Status: a prototype, not a supported product. The REST-pull rulebooks (the
 first eight rows of the table below) are verified against two Purity//FA
-6.10.6 arrays; the syslog listener is tested with replayed input; the
+6.10.6 arrays; the syslog listener receives both arrays' live syslog as a
+platform activation and its audit rule launches job templates; the
 Prometheus rules evaluate on a live Prometheus scraping both arrays'
 native exporters and the capacity rule drives the Alertmanager path end
 to end (a posted hardware alert also lights the identify LED); the
