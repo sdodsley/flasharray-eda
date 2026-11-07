@@ -35,6 +35,10 @@ arrays            optional mapping array name or syslog hostname -> inventory
                   and never echoed into an error or a log.
 automation_users  list or comma-separated string of user names counted as
                   automation (default: empty)
+system_users      list or comma-separated string of the array's own service
+                  accounts (default pure_datainsights); their audit lines
+                  count as automation, as do command records whose auth
+                  source is `system` (the array's `purity` account)
 allowed_sources   list or comma-separated string of IPv4/IPv6 addresses or
                   CIDR prefixes allowed to send; datagrams and connections
                   from any other address are dropped and logged at debug
@@ -83,7 +87,8 @@ fields         audit lines come in two layouts and both are parsed:
 user           fields.user when present
 action         fields.action when present
 result         fields.result when present
-by_automation  user in automation_users
+by_automation  user in automation_users or system_users, or the command's
+               auth source is `system`
 source         sender ip
 protocol       udp | tcp
 raw            the whole line
@@ -153,6 +158,14 @@ options:
     type: list
     elements: str
     default: []
+  system_users:
+    description:
+      - The array's own service accounts (list or comma-separated string);
+        their audit lines count as automation, as do command records whose
+        auth source is C(system).
+    type: list
+    elements: str
+    default: [pure_datainsights]
   allowed_sources:
     description:
       - IPv4/IPv6 addresses or CIDR prefixes allowed to send (list or
@@ -220,6 +233,9 @@ SEVERITY_WORDS = {
 # The three programs Purity itself writes; everything else a syslog target
 # receives is the controllers' system log.
 DEFAULT_PROGRAMS = ["purity.alert", "purity.audit", "purity.test"]
+# Local accounts the array's own services use; `purity` itself writes with
+# auth source `system` and needs no listing.
+DEFAULT_SYSTEM_USERS = ["pure_datainsights"]
 # [<PRI>]Mon DD HH:MM:SS host program[pid]: message      (RFC 3164 style; the
 # array sends no PRI and appends the pid to the program)
 RFC3164 = re.compile(
@@ -302,6 +318,13 @@ def _programs(value):
     return programs
 
 
+def _system_users(value):
+    """The system_users argument as a set; None (absent) gives the default."""
+    if value is None:
+        return set(DEFAULT_SYSTEM_USERS)
+    return set(_as_list(value))
+
+
 def _networks(spec):
     """allowed_sources -> list of ip_network objects; [] means accept any."""
     return [
@@ -367,7 +390,9 @@ def _command_fields(m):
     return fields
 
 
-def parse(line, arrays, automation):
+def parse(line, arrays, automation, system_users=None):
+    if system_users is None:
+        system_users = set(DEFAULT_SYSTEM_USERS)
     line = line.strip()
     event = dict.fromkeys(EVENT_KEYS)
     event.update(kind="other", message=line, fields={}, by_automation=False, raw=line)
@@ -426,12 +451,13 @@ def parse(line, arrays, automation):
         user=user,
         action=fields.get("action"),
         result=fields.get("result"),
-        by_automation=bool(user and user in automation),
+        by_automation=bool(user and (user in automation or user in system_users))
+        or fields.get("auth_source") == "system",
     )
     return event
 
 
-def _emitter(local, arrays, automation, networks, programs=None):
+def _emitter(local, arrays, automation, networks, programs=None, system_users=None):
     """Build the synchronous emit(line, source, protocol) callback: filter the
     sender, parse, keep only the wanted programs, and hand the event to the
     local queue (unbounded, so put_nowait never fails and the UDP callback
@@ -447,7 +473,7 @@ def _emitter(local, arrays, automation, networks, programs=None):
                 source,
             )
             return False
-        event = parse(line, arrays, automation)
+        event = parse(line, arrays, automation, system_users)
         program = event["program"] or "(no syslog header)"
         if wanted and program not in wanted:
             n = dropped[program] = dropped.get(program, 0) + 1
@@ -557,6 +583,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
             "hostname -> inventory name, not the purefa_events array list"
         )
     automation = set(_as_list(args.get("automation_users")))
+    system_users = _system_users(args.get("system_users"))
     networks = _networks(args.get("allowed_sources"))
     loop = asyncio.get_running_loop()
 
@@ -564,7 +591,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
     # order, there is one task instead of one per line, and ansible-rulebook's
     # own (one-slot) queue applies back-pressure to the forwarder only.
     local: asyncio.Queue = asyncio.Queue()
-    emit = _emitter(local, arrays, automation, networks, programs)
+    emit = _emitter(local, arrays, automation, networks, programs, system_users)
 
     async def forward():
         while True:

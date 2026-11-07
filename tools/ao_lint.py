@@ -17,9 +17,10 @@ to, a from_port on a node without ports, an expression that names a node
 that has not run yet or a trigger field the trigger does not expose, a
 condition the safe evaluator cannot parse), a parameter a type's schema
 does not have (the orchestrator refuses the import) and the published
-caps. An edge is {from, to, from_port?, to_port?}; how a loop node's body
-returns to it is not part of the checked contract, so no back edge is
-exempt from the cycle rule (orchestrator/README.md, "Checked against a
+caps. An edge is {from, to, from_port?, to_port?}; a loop node's body hangs
+off its `iterate` port and returns to it over an edge with `to_port:
+iterate`, the one back edge the cycle rule exempts, and `complete` carries
+on after the last iteration (orchestrator/README.md, "Checked against a
 live instance"). A shell that does not expand globs can pass them as-is.
 """
 
@@ -91,6 +92,8 @@ PARAMETER_KEYS = {
         "timezone",
         "missed_schedule_policy",
     ),
+    # for_each takes items, do_while takes condition; both take max_iterations
+    "loop": ("type", "items", "condition", "max_iterations"),
     "aap_job_template": (
         "credential_id",
         "integration_id",
@@ -181,6 +184,7 @@ RULES = (
     "switch_cases",
     "converge_inputs",
     "single_input",
+    "loop_ports",
     "cycle",
     "cap_nodes",
     "cap_edges",
@@ -364,6 +368,15 @@ def lint_definition(doc, allowed_templates=None, shown=""):
             continue
         outgoing[src].append(edge)
         incoming[dst].append(edge)
+        if _feedback_edge(edge, node_by_id):
+            continue  # a loop body's return: not a forward edge of the graph
+        if "to_port" in edge:
+            out.add(
+                label,
+                "loop_ports",
+                f"to_port {edge['to_port']!r} on the edge into {dst!r}; only a loop "
+                "node takes one, and only 'iterate' (the return of its body)",
+            )
         graph[src].add(dst)
 
     for trigger_id in sorted(trigger_ids):
@@ -378,11 +391,16 @@ def lint_definition(doc, allowed_templates=None, shown=""):
 
     ancestors = _ancestors(node_by_id, incoming)
     for node_id, node in node_by_id.items():
-        if not incoming[node_id]:
+        forward_in = [
+            edge for edge in incoming[node_id] if not _feedback_edge(edge, node_by_id)
+        ]
+        if not forward_in:
             out.add(node_id, "unreachable", "no edge leads to this node; it never runs")
         _check_node(
-            out, node_id, node, outgoing[node_id], incoming[node_id], allowed_templates
+            out, node_id, node, outgoing[node_id], forward_in, allowed_templates
         )
+        if node.get("type") == "loop":
+            _check_loop(out, node_id, node_by_id, outgoing, incoming)
         # ${trigger...} and ${<trigger id>...} read the same output
         _check_expressions(
             out,
@@ -396,6 +414,61 @@ def lint_definition(doc, allowed_templates=None, shown=""):
 
     _check_cycles(out, graph)
     return out.problems
+
+
+def _feedback_edge(edge, node_by_id):
+    """True for the edge that returns a loop body to its loop node: it ends
+    at a loop node with to_port 'iterate'."""
+    target = node_by_id.get(edge.get("to"))
+    return (
+        isinstance(target, dict)
+        and target.get("type") == "loop"
+        and edge.get("to_port") == "iterate"
+    )
+
+
+def _check_loop(out, loop_id, node_by_id, outgoing, incoming):
+    """A loop node's wiring: an edge leaves 'iterate' (the body) and one leaves
+    'complete' (what follows), no other port; the body returns over an edge
+    with to_port 'iterate', and every such edge comes from the body, which is
+    what the 'iterate' port reaches before it returns."""
+    ports = collections.defaultdict(list)
+    for edge in outgoing[loop_id]:
+        ports[edge.get("from_port")].append(edge.get("to"))
+    for port in ("iterate", "complete"):
+        if port not in ports:
+            out.add(loop_id, "loop_ports", f"no edge leaves port {port!r}")
+    for port in sorted(str(p) for p in ports if p not in ("iterate", "complete")):
+        out.add(
+            loop_id,
+            "loop_ports",
+            f"edge leaves unknown port {port}; a loop node has 'iterate' and 'complete'",
+        )
+    body = set()
+    queue = collections.deque(ports.get("iterate", []))
+    while queue:
+        node_id = queue.popleft()
+        if node_id in body or node_id == loop_id or node_id not in node_by_id:
+            continue
+        body.add(node_id)
+        for edge in outgoing[node_id]:
+            if not (edge.get("to") == loop_id and edge.get("to_port") == "iterate"):
+                queue.append(edge.get("to"))
+    returns = [edge for edge in incoming[loop_id] if _feedback_edge(edge, node_by_id)]
+    if "iterate" in ports and not returns:
+        out.add(
+            loop_id,
+            "loop_ports",
+            "no edge returns to the loop (an edge into it with to_port 'iterate')",
+        )
+    for edge in returns:
+        if edge.get("from") not in body:
+            out.add(
+                loop_id,
+                "loop_ports",
+                f"return edge from {edge.get('from')!r}, which the 'iterate' port does "
+                "not reach; only the body returns to the loop",
+            )
 
 
 def _ancestors(node_by_id, incoming):
@@ -827,8 +900,8 @@ def _check_cycles(out, graph):
             "cycle",
             "cycle through "
             + ", ".join(stuck)
-            + "; edges only run forward (a loop node's return wiring is not "
-            "part of the published model)",
+            + "; edges only run forward, except a loop body's return edge "
+            "(to_port 'iterate' into the loop node)",
         )
 
 

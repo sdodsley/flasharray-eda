@@ -142,6 +142,7 @@ playbooks/                             notify, remediate_*, reconcile, apply_bas
 orchestrator/                          workflow definitions for the automation orchestrator and job_templates.txt
                                        (orchestrator/README.md)
 tools/ao_lint.py                       offline linter for those definitions (`make lint-ao`)
+tools/ao_sync.py                       imports the definitions into an orchestrator (orchestrator/README.md, "Importing")
 aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects;
                                        execution and decision environment definitions (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
@@ -191,7 +192,8 @@ and both become `user`, `action`, `command`, `result` and the rest. An
 array forwards its controllers' whole system log to a syslog target, so
 the listener keeps the `purity.alert`, `purity.audit` and `purity.test`
 programs and drops everything else (`programs`; `all` passes it through as
-kind `other`). `allowed_sources` restricts the senders it accepts (empty =
+kind `other`). The array's own service accounts count as automation
+(`system_users`). `allowed_sources` restricts the senders it accepts (empty =
 any) and `arrays` maps an array's own name or its syslog hostname to the
 inventory name (the message's "Array name" field is tried first, then the
 syslog hostname, which is the controller's).

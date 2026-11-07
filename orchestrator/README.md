@@ -184,17 +184,46 @@ case (the `rejected` port or a failed node) is not verified.
 ## Importing
 
 The orchestrator stores a workflow as draft and published versions; webhook,
-EDA and scheduled runs use the published version, so an import is two
-calls: create or update the workflow from the JSON (`POST /api/v1/workflows`,
-which the `kenmoini.automation_orchestrator_config` collection's `workflow`
-module wraps), then publish the version
-(`POST /api/v1/workflows/{id}/versions/{version}/publish`). Publishing a
-scheduled trigger is what creates its schedule; unpublishing deletes it.
+EDA and scheduled runs use the published version, so an import is a create
+or update followed by a publish. `tools/ao_sync.py` does both for every
+definition in this directory (standard library only, Python 3.9+):
+
+```
+export AO_CLIENT_ID=nx_sa_... AO_CLIENT_SECRET=...
+python tools/ao_sync.py --url https://orchestrator.example.com \
+    --aap-credential "AAP controller" --aap-integration aap-example \
+    --service-account eda-bridge [--project default] [--dry-run] [--insecure] \
+    [--only FILE]... [orchestrator/*.json]
+```
+
+It authenticates as the service account in `AO_CLIENT_ID` and
+`AO_CLIENT_SECRET` (`POST /api/v1/auth/token`, `grant_type=client_credentials`,
+15 minute lifetime, not refreshable; read from the environment only, never
+from the command line, never printed or written to disk), resolves the
+project (`--project`, default `default`) and the names that fill the
+placeholders (`--aap-credential` and `--aap-integration` go on every
+`aap_job_template` and `aap_workflow_job_template` node whose `credential_id`
+is `REPLACE_AT_SYNC`, as `credential_id` and `integration_id`;
+`--service-account` fills the EDA trigger's `authorized_service_account_ids`),
+and stops before writing anything when the token, the project or a name does
+not resolve; a placeholder still left after substitution fails its
+definition. Each definition is then validated by the orchestrator
+(`POST /api/v1/workflows/validate`; an invalid one is reported with its
+findings and not imported), created when the project has no workflow of its
+name (`POST /api/v1/workflows`), updated in place when the exported current
+version differs (`PATCH /api/v1/workflows/{id}/versions/{version}`), left
+alone when it is equal, and published
+(`POST /api/v1/workflows/{id}/versions/{version}/publish`) after a create or
+an update, or when the current version has never been published. It prints
+one line per definition (`created`, `updated` or `unchanged`, and the
+published version) and `extra: <name>` for each workflow of the project that
+no file defines; `--dry-run` validates and reports the decisions without
+writing; `--only FILE` writes one definition without making the others
+extras; the exit status is 1 when anything failed. Publishing a scheduled
+trigger is what creates its schedule; unpublishing deletes it.
 `GET /api/v1/workflows/{id}/versions/{version}/export` and the UI's export
 button return the same JSON this directory holds, so a change made on the
-canvas can be exported and committed here. Authenticate with a service
-account token (`POST /api/v1/auth/token`, `grant_type=client_credentials`,
-15 minute lifetime, not refreshable; never written to disk).
+canvas can be exported and committed here.
 
 A sync from this directory **never deletes**: it creates the workflows
 that are missing, updates by name the ones that exist, substitutes the
@@ -222,8 +251,11 @@ or EDA trigger its `webhook_path` and `authorized_service_account_ids`; an
 approval node
 lists approvers and has `approved` and `rejected` edges to different nodes;
 a condition node has an expression and `true` and `false` edges; a switch
-has a `default_port` and complete cases; a converge node has at least two
-incoming edges and any other node at most one; no cycle; at most 200
+has a `default_port` and complete cases; a loop node has `iterate` and
+`complete` edges and its body returns to it over an edge with `to_port:
+iterate`, the one back edge allowed (`loop_ports`); a converge node has at
+least two incoming edges and any other node at most one, a loop's return
+aside; no other cycle; at most 200
 nodes, 500 edges and 1.5 MB; every
 `aap_job_template` or `aap_workflow_job_template` node has
 `organization_name`, a `credential_id` and its template
@@ -282,6 +314,9 @@ described; the condition takes its `true` port; the approval node pauses
 the execution for the `admins` group, and its `approved` port runs the
 reclaim with the request rebuilt from artifacts.
 
-Not verified: how a loop node's body is wired back to the node. The edge
-model is `{from, to, from_port?, to_port?}`, and the linter rejects every
-cycle, so a definition with a loop body does not pass `make lint-ao`.
+Loop wiring, read from the validator of the same code (no shipped
+definition uses a loop yet): the body hangs off the loop node's `iterate`
+port and returns to it over an edge with `to_port: iterate`, which the
+orchestrator treats as the feedback edge; `complete` continues after the
+last iteration. A `for_each` loop takes `items`, a `do_while` loop
+`condition`, both `max_iterations`.

@@ -525,33 +525,51 @@ def test_oversize_definition(tmp_path, ao_lint, allowed):
     assert rules == {"cap_size"}
 
 
-def test_every_back_edge_is_a_cycle(ao_lint):
-    """The edge model is {from, to, from_port?, to_port?}; how a loop node's
-    body returns to it is unconfirmed (orchestrator/README.md), so the linter
-    exempts no edge from the cycle rule, with or without a to_port."""
+def test_loop_body_returns_over_an_iterate_edge(ao_lint):
+    """A loop body hangs off the 'iterate' port and returns over an edge with
+    to_port 'iterate', the one back edge the orchestrator's validator treats as
+    feedback; 'complete' continues. Anything else is still a cycle."""
     doc = json.loads((ROOT / "orchestrator" / "dr_drill_schedule.json").read_text())
-    doc["nodes"].append(
+    doc["nodes"] += [
         {
             "id": "each",
             "type": "loop",
             "name": "Each",
-            "parameters": {"items": "${dr_drill.artifacts.failed}"},
-        }
-    )
-    doc["nodes"].append(
-        {"id": "body", "type": "wait", "name": "Body", "parameters": {"seconds": 1}}
-    )
+            "parameters": {"type": "for_each", "items": "${dr_drill.artifacts.drills}"},
+        },
+        {"id": "body", "type": "wait", "name": "Body", "parameters": {"seconds": 1}},
+        {"id": "done", "type": "wait", "name": "Done", "parameters": {"seconds": 1}},
+    ]
     doc["edges"] += [
         {"from": "notify_summary", "to": "each"},
-        {"from": "each", "to": "body"},
-        {"from": "body", "to": "each"},
+        {"from": "each", "to": "body", "from_port": "iterate"},
+        {"from": "body", "to": "each", "to_port": "iterate"},
+        {"from": "each", "to": "done", "from_port": "complete"},
     ]
-    # the back edge is a cycle and a second input into the loop node
-    rules = {p.rule for p in ao_lint.lint_definition(doc)}
-    assert rules == {"cycle", "single_input"}
-    doc["edges"][-1]["to_port"] = "iterate"
-    rules = {p.rule for p in ao_lint.lint_definition(doc)}
-    assert rules == {"cycle", "single_input"}
+    assert ao_lint.lint_definition(doc) == []
+    # without the to_port the return is a plain back edge: a cycle and a second input
+    plain = json.loads(json.dumps(doc))
+    del plain["edges"][-2]["to_port"]
+    rules = {p.rule for p in ao_lint.lint_definition(plain)}
+    assert rules == {"cycle", "single_input", "loop_ports"}
+    # a to_port on an edge into anything but a loop node
+    odd = json.loads(json.dumps(doc))
+    odd["edges"][-1]["to_port"] = "iterate"
+    assert {p.rule for p in ao_lint.lint_definition(odd)} == {"loop_ports"}
+    # no complete edge, a return from outside the body, an unknown port
+    broken = json.loads(json.dumps(doc))
+    broken["edges"][-1]["from_port"] = "finished"
+    broken["edges"].append({"from": "done", "to": "each", "to_port": "iterate"})
+    messages = [
+        p.message for p in ao_lint.lint_definition(broken) if p.rule == "loop_ports"
+    ]
+    assert len(messages) == 3 and any("'complete'" in m for m in messages)
+    assert any("unknown port finished" in m for m in messages)
+    assert any("'done'" in m for m in messages)
+    # the loop node's parameter keys follow the schema
+    odd_param = json.loads(json.dumps(doc))
+    odd_param["nodes"][-3]["parameters"]["overlap"] = "skip"
+    assert {p.rule for p in ao_lint.lint_definition(odd_param)} == {"parameter_keys"}
 
 
 def test_problem_line_format(ao_lint):

@@ -12,6 +12,21 @@
   whole system log, so only `purity.alert`, `purity.audit` and
   `purity.test` are emitted by default and the rest is dropped and
   counted. `syslog.yml` skips session records by `message_kind`.
+- `tools/ao_sync.py` imports the orchestrator definitions into an
+  orchestrator the way orchestrator/README.md ("Importing") describes:
+  creates the workflows the project lacks, updates the existing ones by
+  name, fills the `REPLACE_AT_SYNC` placeholders from `--aap-credential`,
+  `--aap-integration` and `--service-account`, validates first, publishes,
+  reports workflows no file defines and never deletes; `--dry-run` writes
+  nothing. Standard library only; `tests/unit/test_ao_sync.py` drives it
+  against an in-process mock of the API.
+- `tools/ao_lint.py` knows loop nodes: `iterate` and `complete` ports, the
+  body's return edge (`to_port: iterate`) as the one allowed back edge
+  (`loop_ports`), and the loop parameter keys.
+- `purefa_syslog` counts the array's own service accounts as automation
+  (`system_users`, default `pure_datainsights`; `purity` writes with auth
+  source `system`), so the human-action rule stays quiet for the array's
+  scheduled snapshots and tag housekeeping.
 
 ## 0.2.0 (2026-11-07)
 
