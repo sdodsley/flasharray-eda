@@ -117,8 +117,6 @@ aap_eda_de_pull_policy: missing
 # credential is attached; aap_organization is added for the
 # run_job_template actions.
 aap_eda_vars_file: "{{ lookup('env', 'FAEDA_VARS') | default(playbook_dir ~ '/../vars/example.yml', true) }}"
-# Activations are created disabled and the flag is enforced on every run;
-# set true to start them once the decision environment image is in place.
 # The platform user the activations launch job templates as (the EDA
 # credential of type "Red Hat Ansible Automation Platform" every activation
 # carries). Defaults to the seeding user; a dedicated user with execute on
@@ -128,6 +126,12 @@ aap_eda_vars_file: "{{ lookup('env', 'FAEDA_VARS') | default(playbook_dir ~ '/..
 aap_eda_platform_url: "{{ aap_hostname }}/api/controller/"
 aap_eda_platform_username: "{{ aap_username }}"
 aap_eda_platform_password: "{{ aap_password }}"
+# Whether the FlashArray activations are enabled. The seed enforces this
+# flag on every activation on every run (the platform cannot modify an
+# activation, so the flag is the one thing it can still set), which means a
+# run with false DISABLES activations that are running. Set true in the
+# site vars file once the decision environment image is in place, and
+# keep it there.
 aap_eda_activations_enabled: false
 aap_eda_restart_policy: on-failure
 aap_eda_log_level: error

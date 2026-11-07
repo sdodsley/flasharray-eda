@@ -255,11 +255,13 @@ fa_url already exists in extra_vars"); they serve a rulebook copy that
 polls one array only.
 
 The activations are created **disabled** (`aap_eda_activations_enabled:
-false`) and the flag is enforced on every run, because
-`ansible.eda.rulebook_activation` cannot modify an existing activation.
-Set it true once the decision environment image, with the
-`sdodsley.flasharray_eda` collection in it, is pullable by the activation
-workers.
+false`) and the flag is enforced on every activation on every run, because
+`ansible.eda.rulebook_activation` cannot modify an existing activation and
+the enable and disable endpoints are the one thing the seed can still set.
+Set it true in the site vars file once the decision environment image,
+with the `sdodsley.flasharray_eda` collection in it, is in the activation
+workers' store, and keep it there: a later run with the example default
+disables every running activation.
 
 ## Re-running safely
 
@@ -270,8 +272,11 @@ recreates the nodes, which always reports changed) and secrets, which the
 platform cannot read back: credentials are updated only with
 `-e aap_update_secrets=true` (controller) and EDA credentials report
 changed on every run. `ansible.eda.rulebook_activation` cannot modify an
-existing activation; to change one, delete it in the UI and re-run. The
-seed never deletes anything.
+existing activation; to change one (a new rulebook, a new variable in its
+extra vars), delete it in the UI or through the API and re-run, which
+recreates only that one. The run also sets `aap_eda_activations_enabled`
+on every FlashArray activation, so a site whose activations are running
+keeps the key true in its vars file. The seed never deletes anything.
 
 ## Verified on a platform
 
