@@ -147,7 +147,22 @@ and `changed`, notify) and `orchestrator/dr_drill_schedule.json`,
 published with its schedule and started by hand from its scheduled
 trigger, runs the DR drill job (one drill against the replicated
 protection group, `failed_count` 0), takes the condition's `false` port
-and notifies the summary.
+and notifies the summary. The three day-2 definitions run from their
+forms: identify LED lights and clears a controller's LED with no
+approval; QoS cap caps a scratch volume at the requested IOPS after its
+approval (`previous_iops` null, the volume destroyed afterwards); protect
+now snapshots every local protection group after its approval and
+reports the groups it could snapshot and the ones the array refused.
+The ActiveDR failover test (`orchestrator/dr_failover_test.json`) runs
+against the replica link's target pod on the second array: after the
+first approval `dr_promote.yml` promotes the pod (its replica link stays
+replicating, the source pod is untouched) and the notify carries the
+states before and after; after the second approval `dr_demote.yml`
+demotes it with quiesce, discarding the writes made during the test, and
+the pod is a replica-link target again. Both playbooks refuse a pod that
+is not the target of a replica link: Purity counts the sources linked to
+a pod in `link_source_count`, so a target pod has a source count above
+zero and an inbound link.
 
 ## Replayed only
 
@@ -177,10 +192,6 @@ event takes the same path as a live one.
 - A rulebook activation launching the controller-tier approval workflow
   (the platform capacity rulebook hands the event to the orchestrator or
   launches the request job; it does not launch the controller workflow).
-- The ActiveDR failover test (`playbooks/dr_promote.yml`,
-  `playbooks/dr_demote.yml`, `orchestrator/dr_failover_test.json`): both
-  playbooks pass the syntax check and the static tests; no pod is promoted
-  or demoted by them on an array.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the
