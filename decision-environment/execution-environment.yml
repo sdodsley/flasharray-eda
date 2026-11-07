@@ -21,6 +21,11 @@ images:
   base_image:
     name: quay.io/ansible/ansible-rulebook:v1.3.2
 dependencies:
+  # the base image's /usr/bin/python3 is 3.9 while ansible-rulebook and the
+  # PYTHONPATH it sets are 3.12; the build stages must use the same one
+  python_interpreter:
+    package_system: python3.12
+    python_path: /usr/bin/python3.12
   python: requirements.txt
   galaxy:
     collections:
@@ -56,8 +61,3 @@ additional_build_steps:
     - WORKDIR /opt/flasharray-eda
 options:
   user: "1001"
-  # the base image's /usr/bin/python3 is 3.9 while ansible-rulebook and the
-  # PYTHONPATH it sets are 3.12; the build stages must use the same one
-  python_interpreter:
-    package_system: python3.12
-    python_path: /usr/bin/python3.12
