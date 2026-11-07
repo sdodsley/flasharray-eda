@@ -6,7 +6,7 @@ orchestrator imports and exports (`schema_version` 2.0.0: `triggers`,
 `nodes`, `edges`). They do not replace the rulebooks: `ansible-rulebook`
 still decides what an array event means. What the orchestrator adds is the
 part a rulebook cannot do well, a human approval that pauses the run, a
-schedule with an overlap policy, and an audit record of who decided what.
+schedule with a missed-run policy, and an audit record of who decided what.
 Every node that touches an array is still one of this project's playbooks,
 launched as an AAP job template.
 
@@ -24,13 +24,13 @@ as a technology preview that may change (docs/ORCHESTRATOR.md).
 
 | File | Starts from | What it does |
 | --- | --- | --- |
-| `capacity_reclaim_approval.json` | `eda_trigger` on webhook path `fa_capacity` | A `purefa_capacity` event forwarded by the capacity rulebook runs **FlashArray - capacity request** (the request file and alert-log record of `playbooks/capacity_request.yml`). If the request lists reclaim candidates, **FlashArray - notify** announces it, an approval node waits up to 24 hours, and an approval runs **FlashArray - capacity reclaim** on exactly the candidates the request listed; a rejection or timeout runs a separate notify node. No candidates: a notify node says so. Nothing is freed without the approval. |
+| `capacity_reclaim_approval.json` | `eda_trigger` on webhook path `fa_capacity` | A `purefa_capacity` event forwarded by the capacity rulebook runs **FlashArray - capacity request** (the request file and alert-log record of `playbooks/capacity_request.yml`). If the request lists reclaim candidates, **FlashArray - notify** announces it, an approval node waits up to 24 hours, and an approval runs **FlashArray - capacity reclaim** on exactly the candidates the request listed; a rejection runs a separate notify node. No candidates: a notify node says so. Nothing is freed without the approval. |
 | `day2_expand_volume.json` | `manual_trigger` with an input form (array, volume, new size) | Notify, approval (24 hours), then **FlashArray - expand volume** with the three inputs and the requested array's credential, then notify with the AAP job URL. A rejection notifies and changes nothing. |
 | `day2_qos_cap.json` | `manual_trigger` with an input form (array, volume, IOPS limit) | Notify, approval (24 hours), then **FlashArray - QoS cap** in `cap` mode with the requested array's credential, then a warning notify with the applied and previous limits and the AAP job URL. The cap carries the `eda/qos_cap` tag, so the performance rulebook lifts it once the volume's latency is normal again. A rejection notifies and changes nothing. |
 | `day2_protect_now.json` | `manual_trigger` with an input form (array, seconds to add to the eradication delay) | Approval (24 hours), then **FlashArray - protect now** with the requested array's credential: an immediate snapshot of every local protection group and a longer enabled eradication delay (0 seconds snapshots only), then a warning notify with the snapshot suffix, the groups snapshotted or failed and the delay. A rejection notifies and changes nothing. |
 | `day2_identify_led.json` | `manual_trigger` with an input form (array, component, LED on or off) | No approval: **FlashArray - identify LED** with the requested array's credential sets the component's identify LED, then an info notify reports the state, whether it changed and any error (a component without an identify LED), with the AAP job URL. |
 | `dr_failover_test.json` | `manual_trigger` with an input form (target_array, pod) | A DR failover test on an ActiveDR replica link: notify, approval "promote" (24 hours), **FlashArray - DR promote** promotes the replica-link target pod on `target_array`, a notify with the promotion artifacts, then approval "revert" (its prompt says the writes made during the test are discarded), **FlashArray - DR demote** demotes the pod again and a notify reports the revert. Each rejection has its own notify; a rejected revert leaves the pod promoted and says so. |
-| `dr_drill_schedule.json` | `scheduled_trigger`, cron `0 2 * * *` (UTC), overlapping runs skipped | Every night **FlashArray - DR drill** copies a volume out of the latest completed replicated snapshot on each drill target, verifies and destroys it; a condition on `failed_count` sends a critical **FlashArray - notify** when any drill failed and a one-line summary otherwise. Publishing the definition creates the schedule. |
+| `dr_drill_schedule.json` | `scheduled_trigger`, cron `0 2 * * *` (UTC), missed runs skipped | Every night **FlashArray - DR drill** copies a volume out of the latest completed replicated snapshot on each drill target, verifies and destroys it; a condition on `failed_count` sends a critical **FlashArray - notify** when any drill failed and a one-line summary otherwise. Publishing the definition creates the schedule. |
 
 Approval nodes always have two distinct successors: `approved` and
 `rejected` never share a node (the linter enforces it), because a shared
@@ -175,7 +175,11 @@ elsewhere. Approvers are named, not identified: `approver_groups` (and
 `approver_users`) take group and user names, so they are not placeholders.
 The shipped definitions name `admins`, the built-in group every instance
 has; change it to the group that should decide. `decision_window` is 86400
-seconds (24 hours), after which a run takes the `rejected` port.
+seconds (24 hours); an approval nobody decides within it expires.
+`fallback_decision` (`approve` or `reject`) names the port an expired
+approval takes; the shipped definitions leave it unset, so an expired
+approval never takes the `approved` port. How the execution ends in that
+case (the `rejected` port or a failed node) is not verified.
 
 ## Importing
 

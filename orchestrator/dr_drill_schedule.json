@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "name": "FlashArray - nightly DR drill",
-  "description": "Every night at 02:00 run the DR drill job template (on each replication target, copy a volume out of the latest fully transferred snapshot of the replicated protection group, verify it, destroy it) and raise an incident when any drill failed; otherwise log a one-line summary. A run that overlaps the previous night's is skipped, not queued.",
+  "description": "Every night at 02:00 run the DR drill job template (on each replication target, copy a volume out of the latest fully transferred snapshot of the replicated protection group, verify it, destroy it) and raise an incident when any drill failed; otherwise log a one-line summary. A schedule missed while the orchestrator was down is skipped, not caught up.",
   "triggers": [
     {
       "id": "nightly",

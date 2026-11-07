@@ -1,24 +1,69 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-07)
+
+The project runs on Ansible Automation Platform 2.7 and drives the
+automation orchestrator: ten rulebook activations, eighteen job templates,
+the controller-tier approval workflow and seven orchestrator workflows,
+exercised against the two Purity//FA 6.10.6 arrays, a 2.7 installation and
+a live orchestrator; the Prometheus path is exercised against the arrays'
+native exporters. [docs/VERIFICATION.md](docs/VERIFICATION.md) has the
+ledger.
+
+### Collection and decision environment
+
+- The repository is the collection `sdodsley.flasharray_eda` (`galaxy.yml`,
+  `meta/runtime.yml`, `make collection`); the rulebooks name their sources
+  by FQCN (`sdodsley.flasharray_eda.purefa_events`,
+  `sdodsley.flasharray_eda.purefa_syslog`) and CI builds and installs the
+  collection before the unit tests.
+- The decision environment builds and installs the collection at image
+  build time, so activations resolve the sources without `--source-dir`;
+  `ANSIBLE_COLLECTIONS_PATH` in the image also names the base image's
+  `ansible.eda` directory ([docs/PACKAGING.md](docs/PACKAGING.md)).
+
+### Ansible Automation Platform
+
+- `FlashArray fleet` credential type: one credential carries every array as
+  a JSON list, injected as `purefa_fleet_json` (controller) and
+  `purefa_arrays` (EDA). `playbooks/tasks/resolve_array.yml` picks the
+  target array's URL and token in every array-facing playbook, and both
+  plugins accept `arrays` as a JSON or YAML string.
+- Platform rulebooks under `extensions/eda/rulebooks/platform/`, generated
+  by `tools/platform_rulebooks.py` and checked by a unit test: every
+  `run_playbook` becomes `run_job_template` in `aap_organization`; the
+  webhook rulesets are left out. The config sources fall back to the fleet
+  list when `config_arrays` is unset.
+- `aap/seed.yml`: seven more job templates (eighteen, one per playbook;
+  `FlashArray - post orchestrator event` is now `FlashArray - orchestrator
+  post`), the `Platform user - flasharray-eda` EDA credential (the built-in
+  Red Hat Ansible Automation Platform type) for the `run_job_template`
+  actions, one activation per platform rulebook with the fleet credential
+  and the site vars laid over the example file, enabled ten seconds apart
+  when `aap_eda_activations_enabled` is true; `aap_eda_de_pull_policy`.
+  [aap/README.md](aap/README.md) covers the image stores of a containerized
+  platform.
+
+### Orchestrator
+
+- Four more definitions: `day2_qos_cap.json`, `day2_protect_now.json`,
+  `day2_identify_led.json` and `dr_failover_test.json`, an ActiveDR
+  failover test behind two approvals (`playbooks/dr_promote.yml`,
+  `playbooks/dr_demote.yml`).
+- All seven definitions follow the contract of the 2026.8 release:
+  unwrapped trigger bodies (`${trigger.event...}`), `credential_names`,
+  `approver_groups`, `decision_window`, `schedule_type` with `cron` and
+  `missed_schedule_policy`. `tools/ao_lint.py` checks the parameter keys
+  of every trigger and node type (`parameter_keys`).
+
+### Monitoring
 
 - `prometheus/flasharray.rules.yml` follows the names and labels of the
-  array's native OpenMetrics exporter on Purity//FA 6.10.6 and evaluates on
-  a live Prometheus; `prometheus/prometheus.example.yml` and
-  `alertmanager.example.yml` are the scrape and routing configurations.
-- The repository is the collection `sdodsley.flasharray_eda` (`galaxy.yml`,
-  `make collection`); the rulebooks name their sources by FQCN and the
-  decision environment installs the collection, so activations resolve them.
-- `FlashArray fleet` credential type and `playbooks/tasks/resolve_array.yml`:
-  one credential carries every array; `purefa_events` accepts `arrays` as a
-  JSON string.
-- Platform rulebooks under `extensions/eda/rulebooks/platform/`, generated
-  by `tools/platform_rulebooks.py`, drive the seeded job templates with
-  `run_job_template`; `aap/seed.yml` creates one activation per platform
-  rulebook and seven more job templates.
-- Orchestrator definitions for QoS cap, protect now and identify LED (day 2)
-  and an ActiveDR failover test (`playbooks/dr_promote.yml`,
-  `playbooks/dr_demote.yml`).
+  array's native OpenMetrics exporter on Purity//FA 6.10.6
+  (`namespace=purefa`, status as a label, `array_name` as a target label);
+  `prometheus/prometheus.example.yml` and
+  `prometheus/alertmanager.example.yml` are the scrape and routing
+  configurations.
 
 ## 0.1.0 (2026-11-06)
 

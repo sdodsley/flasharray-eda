@@ -77,7 +77,7 @@ platform API from where it runs.
 | Execution environment | `FlashArray EDA EE` | image from `aap_ee_image` |
 | Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote` | one per playbook; the fleet credential attached; prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential |
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
-| EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the activation workers |
+| EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`, pulled with `aap_eda_de_pull_policy`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the store the activation workers use ("Images on a containerized platform") |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |
 | EDA rulebook activations | `FlashArray rulebook - <name>` | one per file in `extensions/eda/rulebooks/platform/`, with the fleet credential and, when it exists, the orchestrator credential attached; created disabled (see below) |
@@ -138,21 +138,26 @@ one-job-many-arrays property inside the credential store.
 ## Images on a containerized platform
 
 On a containerized Ansible Automation Platform the controller's task
-container and the Event-Driven Ansible activation workers each keep their
-own container image store, separate from the host user's. An image that
-exists only in the host store (for example `localhost/flasharray-eda-ee`
-built on the same machine) fails at job start with "pinging container
-registry localhost", because the job's podman looks for a registry called
+container keeps its own container image store, separate from the host
+user's, and the Event-Driven Ansible activation workers start activations
+through the host user's podman service (the workers' `CONTAINER_HOST` is
+that user's podman socket; the worker image carries no podman of its own),
+which the installer runs with a storage configuration of its own. An image
+that exists only in the host user's command-line store (for example
+`localhost/flasharray-eda-ee` built on the same machine) fails at job or
+activation start with "pinging container registry localhost", because a
+`localhost/` name that the store lacks is pulled from a registry called
 localhost. Either push the image to a registry the platform can pull from
 (the private automation hub counts) and reference it by that name, or load
 it into the stores that need it:
 
     podman save localhost/flasharray-eda-ee:latest \
       | podman exec -i automation-controller-task podman load
-    podman save localhost/flasharray-eda-de:latest \
-      | podman exec -i automation-eda-activation-worker-1 podman load
+    podman save localhost/flasharray-eda-de:latest | podman --remote load
 
-Repeat the second command for every activation worker.
+The second command loads through the socket the activation workers use.
+Set `aap_eda_de_pull_policy: never` for an image loaded that way, so that
+the worker never tries to pull the `localhost/` name.
 
 ## Paths inside the execution environment
 
@@ -275,8 +280,7 @@ Automation Platform 2.7, containerized growth topology on one RHEL 9.8
 host, seeded from empty by this playbook (a repeat run reports a change
 only for the EDA credentials, see "Re-running safely"), with the
 execution environment built from `aap/Containerfile.ee` and loaded into
-the controller's task container, against one FlashArray with a per-array
-`FlashArray API` credential on the templates:
+the controller's task container, against one FlashArray:
 
 - `FlashArray - notify`, launched with `subject`, `severity`,
   `target_array` and `detail`, succeeds and publishes the artifacts
@@ -298,13 +302,11 @@ The fleet credential is exercised by the activations: the change-control,
 config-drift and replication activations launch the remediate NTP,
 remediate DNS, notify and DR drill templates, whose playbooks resolve the
 array from `purefa_fleet_json` and run against it. The ten activations run
-from the decision-environment image (`localhost/flasharray-eda-de`, pull
-policy `never` on a containerized platform, where the activation worker
-uses the host's podman socket and the image must sit in that store; any
-other policy makes the worker pull a `localhost/` name from a registry
-called localhost). The seed enables the activations ten seconds apart:
-started in the same second they contend for the EDA websocket and some
-fail their first start.
+from the decision-environment image (`localhost/flasharray-eda-de`, loaded
+through the host user's podman socket with `aap_eda_de_pull_policy: never`,
+see "Images on a containerized platform"). The seed enables the activations
+ten seconds apart: started in the same second they contend for the EDA
+websocket and some fail their first start.
 
 ## What it cannot seed
 

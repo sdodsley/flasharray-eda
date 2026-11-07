@@ -28,6 +28,34 @@ unless stated.
 - Volume and array performance samples are not taken at the same instant;
   a volume's IOPS share of the array is clamped to 100 %.
 - Purity logs NTP changes as `purearray setattr --ntpserver`, not `purentp`.
+- A pod's `link_source_count` counts the replica links that feed it (the pod
+  is their target) and `link_target_count` the links it feeds. `dr_promote.yml`
+  and `dr_demote.yml` therefore accept a pod only with a source count above
+  zero and an inbound link. Demoting with quiesce discards the writes made
+  while the pod was promoted; the source pod is never touched.
+
+## OpenMetrics exporter (Purity//FA 6.7+)
+
+The native exporter the Prometheus rules are written for, as served on
+6.10.6:
+
+- Every endpoint needs the query parameter `namespace=purefa` and the array
+  API token as `Authorization: Bearer <token>`; `/metrics` serves everything,
+  `/metrics/array`, `/metrics/volumes`, `/metrics/hosts`, `/metrics/pods` and
+  `/metrics/directories` a subset. A full scrape is about 3,800 series per
+  array and completes in under a second.
+- Only `purefa_info` carries `array_name`; the scrape job sets `array_name`
+  as a target label so that every series and every alert carries it.
+- Status is a label with value 1
+  (`purefa_hw_component_status{component_status="ok"} 1`; drive status sits
+  on `purefa_drive_capacity_bytes`), so the rules select the label rather
+  than compare the value.
+- `purefa_array_space_utilization` is the used percentage; latency series
+  carry a `dimension` label (`usec_per_write_op` and the like); replica links
+  carry `local_pod`, `remote`, `remote_pod`, `status` and `direction` on
+  `purefa_pod_replica_links_lag_max_msec`.
+- There is no family for the array's open alerts and none for array
+  connections; those come through the REST plugin or syslog.
 
 ## py-pure-client SDK
 

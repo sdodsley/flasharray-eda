@@ -91,7 +91,7 @@ snapshots.
 
 ## Exercised through Prometheus and Alertmanager
 
-Prometheus 3.5 and Alertmanager 0.28 run as containers beside the arrays,
+Prometheus 3.5 and Alertmanager 0.28 run as containers on the platform host,
 with [prometheus.example.yml](../prometheus/prometheus.example.yml) and
 [alertmanager.example.yml](../prometheus/alertmanager.example.yml) filled in
 for two arrays: one scrape job per array against the array's native
@@ -184,11 +184,15 @@ event takes the same path as a live one.
   all eleven load and evaluate against live series, and the capacity rule
   is driven through Alertmanager to the rulebook; the hardware, drive,
   latency, replication and scrape rules wait for a real fault.
-- The decision environment image from the ansible-builder definition. The
-  Containerfile image is built and runs `alertmanager.yml` (above); CI runs
-  the static checks only. Both pin `quay.io/ansible/ansible-rulebook:v1.3.2`,
-  the tested ansible-rulebook; `latest` on that repository is not
-  guaranteed to be the newest release.
+- The images from the ansible-builder definitions
+  (`decision-environment/execution-environment.yml`,
+  `aap/decision-environment.yml`, `aap/execution-environment.yml`). The
+  images that ran are the ones `decision-environment/Containerfile` and
+  `aap/Containerfile.ee` build: the first runs `alertmanager.yml` and the
+  ten activations, the second the job templates; CI runs the static checks
+  only. The upstream-based definitions pin
+  `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
+  `latest` on that repository is not guaranteed to be the newest release.
 - A rulebook activation launching the controller-tier approval workflow
   (the platform capacity rulebook hands the event to the orchestrator or
   launches the request job; it does not launch the controller workflow).

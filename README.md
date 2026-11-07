@@ -16,8 +16,8 @@ Prometheus rules evaluate on a live Prometheus scraping both arrays'
 native exporters and the capacity rule drives the Alertmanager path end
 to end (a posted hardware alert also lights the identify LED); the
 Ansible Automation Platform seed, the controller-tier approval workflow
-and the day-2 and DR-drill orchestrator workflows are verified against a
-2.7 installation and a live orchestrator; the rulebooks run as activations
+and the capacity, day-2 and DR orchestrator workflows are verified against
+a 2.7 installation and a live orchestrator; the rulebooks run as activations
 on the platform from the decision-environment image and launch job
 templates. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
 exercised on hardware, [docs/DESIGN.md](docs/DESIGN.md) the design and
@@ -144,7 +144,8 @@ tools/ao_lint.py                       offline linter for those definitions (`ma
 aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects;
                                        execution and decision environment definitions (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
-prometheus/flasharray.rules.yml        alert rules for the native exporter (belongs on the Prometheus server)
+prometheus/                            flasharray.rules.yml (alert rules for the native exporter, for the Prometheus
+                                       server), prometheus.example.yml and alertmanager.example.yml (scrape and routing)
 decision-environment/                  Containerfile and ansible-builder definition on ansible-rulebook v1.3.2; both build and
                                        install the collection (see below)
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)
@@ -252,11 +253,12 @@ On the platform the rulebooks run as the generated variants under
 same rules, with `run_playbook` replaced by `run_job_template` against the
 seeded job templates and the webhook rulesets left out, because approvals
 and git pushes arrive through the controller workflow and event streams
-there. `aap/seed.yml` creates the organization, credential types (one
-per array and the `FlashArray fleet` type whose single credential carries
-every array), credentials, inventory, project, job templates, the
-controller-tier approval workflow and one rulebook activation per platform
-rulebook ([aap/README.md](aap/README.md)). The seed, the job templates and
+there. `aap/seed.yml` creates the organization, the credential types
+(`FlashArray API`, one credential per array; `FlashArray fleet`, whose
+single credential carries every array; `Orchestrator service account`),
+the credentials, inventory, project, job templates, the controller-tier
+approval workflow and one rulebook activation per platform rulebook
+([aap/README.md](aap/README.md)). The seed, the job templates and
 the controller-tier approval workflow (request, human approval, reclaim)
 and the activations (running, polling both arrays and launching job
 templates through `run_job_template`) are verified against an Ansible

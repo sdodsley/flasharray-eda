@@ -14,7 +14,7 @@
 # the artifact through build_ignore.
 namespace: sdodsley
 name: flasharray_eda
-version: 0.1.0
+version: 0.2.0
 readme: README.md
 authors:
   - sdodsley

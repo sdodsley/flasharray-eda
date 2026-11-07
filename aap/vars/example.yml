@@ -99,11 +99,15 @@ aap_rebuild_workflow_nodes: false
 aap_eda_project_name: FlashArray EDA
 aap_eda_de_name: FlashArray EDA DE
 # Image built by `make de` (decision-environment/Containerfile), pushed to a
-# registry the platform can pull from; no registry is baked in here. The
-# platform rulebooks name their sources by FQCN, so the image must carry
-# the sdodsley.flasharray_eda collection.
+# registry the platform can pull from or loaded into the store the activation
+# workers use; no registry is baked in here. The platform rulebooks name
+# their sources by FQCN, so the image must carry the sdodsley.flasharray_eda
+# collection.
 aap_eda_de_registry: ""
 aap_eda_de_image: "{{ (aap_eda_de_registry ~ '/') if aap_eda_de_registry else '' }}flasharray-eda-de:latest"
+# `missing` pulls the image when the workers' store lacks it; `never` for an
+# image loaded into that store by hand (aap/README.md, "Images on a
+# containerized platform"), because a `localhost/` name cannot be pulled.
 aap_eda_de_pull_policy: missing
 # The rulebook vars file every activation gets as its extra vars (FAEDA_VARS
 # when set, else the example file), laid over the example file so a key the
