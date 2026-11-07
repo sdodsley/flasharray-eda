@@ -24,8 +24,8 @@ CREDENTIAL_GUARD = (
 )
 POD_GUARDS = (
     "before.error is not defined",
-    "before.link_target_count | default(0) | int > 0",
-    "before.link_source_count | default(0) | int == 0",
+    "before.link_source_count | default(0) | int > 0",
+    "before.links | selectattr('direction', 'equalto', 'inbound') | list | length > 0",
     "before.promotion_status != 'quiescing'",
 )
 ARTIFACT_KEYS = {

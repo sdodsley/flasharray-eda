@@ -79,7 +79,7 @@ platform API from where it runs.
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
 | EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the activation workers |
 | EDA project | `FlashArray EDA` | same repository and branch |
-| EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`) |
+| EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |
 | EDA rulebook activations | `FlashArray rulebook - <name>` | one per file in `extensions/eda/rulebooks/platform/`, with the fleet credential and, when it exists, the orchestrator credential attached; created disabled (see below) |
 
 The names in the job template column are fixed: the orchestrator workflow

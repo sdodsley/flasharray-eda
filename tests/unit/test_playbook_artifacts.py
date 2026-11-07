@@ -271,7 +271,7 @@ def test_seed_variables_are_documented_and_hold_no_lab_specifics(repo_root):
         if any(k.endswith(".credential") for k in t)
     ]
     # per array, fleet and orchestrator, for the controller and for EDA
-    assert len(credential_tasks) == 6
+    assert len(credential_tasks) == 7
     for task in credential_tasks:
         assert task.get("no_log") is True, f"{task['name']}: credential without no_log"
 

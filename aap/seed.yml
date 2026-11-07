@@ -52,6 +52,7 @@
     array_credential_prefix: "FlashArray - "
     fleet_credential_name: "FlashArray fleet - {{ aap_organization }}"
     orchestrator_credential_name: "Orchestrator service account - flasharray-eda"
+    platform_credential_name: "Platform user - flasharray-eda"
     # the orchestrator credential, its EDA twin and the template that posts
     # to the orchestrator exist only when the service account's client id is
     # set in the environment
@@ -492,12 +493,32 @@
     # attached (the controller refuses a key that both the extra vars and a
     # credential define). aap_organization is added for the run_job_template
     # actions. The vars file holds no secrets, so the fact is logged.
+    # The EDA controller refuses an activation whose rulebook calls
+    # run_job_template unless a credential of its built-in type "Red Hat
+    # Ansible Automation Platform" is attached; ansible-rulebook launches the
+    # job templates with it. A dedicated platform user with execute on the
+    # FlashArray templates is the right owner of this credential.
+    - name: EDA platform credential for the run_job_template actions
+      ansible.eda.credential:
+        name: "{{ platform_credential_name }}"
+        description: "Platform user the platform rulebooks launch the FlashArray job templates as"
+        organization_name: "{{ aap_organization }}"
+        credential_type_name: Red Hat Ansible Automation Platform
+        inputs:
+          host: "{{ aap_eda_platform_url }}"
+          username: "{{ aap_eda_platform_username }}"
+          password: "{{ aap_eda_platform_password }}"
+          verify_ssl: "{{ aap_validate_certs | bool }}"
+        state: present
+      no_log: true
+
     - name: Credentials and extra vars every activation carries
       ansible.builtin.set_fact:
-        activation_credentials: "{{ [fleet_credential_name] + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}"
+        activation_credentials: "{{ [fleet_credential_name, platform_credential_name] + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}"
         activation_extra_vars: >-
-          {{ lookup('file', aap_eda_vars_file) | from_yaml | dict2items
-             | rejectattr('key', 'in', ['purefa_arrays'] + (['orchestrator_url'] if orchestrator_seeded | bool else []))
+          {{ (lookup('file', playbook_dir ~ '/../vars/example.yml') | from_yaml)
+             | combine(lookup('file', aap_eda_vars_file) | from_yaml) | dict2items
+             | rejectattr('key', 'in', ['purefa_arrays', 'config_arrays'] + (['orchestrator_url'] if orchestrator_seeded | bool else []))
              | items2dict | combine({'aap_organization': aap_organization})
              | to_nice_yaml(indent=2, width=1000) }}
 

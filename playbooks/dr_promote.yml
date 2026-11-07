@@ -96,16 +96,16 @@
           - before.error is not defined
           - not (before.destroyed | default(false) | bool)
           - before.array_count | default(1) | int == 1
-          - before.link_target_count | default(0) | int > 0
-          - before.link_source_count | default(0) | int == 0
+          - before.link_source_count | default(0) | int > 0
+          - before.links | selectattr('direction', 'equalto', 'inbound') | list | length > 0
           - before.promotion_status != 'quiescing'
         fail_msg: >-
           {{ before.error | default(pod ~ ' is '
              ~ ('destroyed' if before.destroyed | default(false) else
                 ('stretched' if before.array_count | default(1) | int != 1 else
                  ('quiescing' if before.promotion_status == 'quiescing' else
-                  'not the target of a pod replica link (source of ' ~ before.link_source_count | default(0)
-                  ~ ', target of ' ~ before.link_target_count | default(0) ~ ')')))) }}
+                  'not the target of a pod replica link (linked from ' ~ before.link_source_count | default(0)
+                  ~ ' source pod(s), to ' ~ before.link_target_count | default(0) ~ ' target pod(s))')))) }}
 
     - name: Promote the pod
       everpure.flasharray.purefa_pod:
