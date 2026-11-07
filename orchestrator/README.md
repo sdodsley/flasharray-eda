@@ -189,10 +189,12 @@ case (the `rejected` port or a failed node) is not verified.
 
 ## Importing
 
-The orchestrator stores a workflow as draft and published versions; webhook,
-EDA and scheduled runs use the published version, so an import is a create
-or update followed by a publish. `tools/ao_sync.py` does both for every
-definition in this directory (standard library only, Python 3.9+):
+The orchestrator stores a workflow as numbered versions; webhook, EDA and
+scheduled runs use the published one, so an import is a create followed by
+a publish, and a change is a publish that carries the new definition, which
+the orchestrator stores as the next version (a PATCH on a version changes
+only its name and description). `tools/ao_sync.py` does all of that for
+every definition in this directory (standard library only, Python 3.9+):
 
 ```
 export AO_CLIENT_ID=nx_sa_... AO_CLIENT_SECRET=...
@@ -307,6 +309,14 @@ sections above follow them:
   matching `cron` or `interval`, `timezone` (UTC when unset) and
   `missed_schedule_policy`; its output is `scheduled_at` and
   `triggered_at`.
+- A workflow's versions are numbered; `PATCH
+  /workflows/{id}/versions/{v}` changes a version's name and description
+  only, and `POST /workflows/{id}/versions/{v}/publish` with
+  `workflow_definition` (and `expected_version`) in the body stores that
+  definition as version v+1 and publishes it; with an empty body it
+  publishes version v as it stands. A node of a published definition that
+  reads `${<node>.artifacts.<key>}` fails at run time when the job did not
+  publish that key, which validation cannot see.
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,
   `artifacts` (the job's `set_stats`), `created`, `started` and `finished`.
 

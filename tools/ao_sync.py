@@ -19,10 +19,12 @@ aap_workflow_job_template node, as credential_id and integration_id; the
 id of the service account named by --service-account in a trigger's
 authorized_service_account_ids), has the orchestrator validate the result,
 creates the workflow when the project (--project, default "default") has
-none of that name, updates the current version when the exported
-definition differs from ours, leaves it alone when they are equal, and
-publishes after a create or an update, or when the current version has not
-been published. Workflows in the project that no file defines are reported
+none of that name, publishes ours as the next version when the exported
+definition differs (a PATCH on a version changes only its name and
+description; the publish call carries the new definition), leaves it alone
+when they are equal, and publishes after a create or when the current
+version has not been published. Workflows in the project that no file
+defines are reported
 as "extra: <name>" and left alone. Nothing is written before the token,
 the project and every name have resolved; a placeholder left after
 substitution fails its definition; --dry-run validates and reports the
@@ -300,10 +302,21 @@ def _identity(workflow, what):
     return workflow["id"], workflow["current_version"]
 
 
-def _publish(client, workflow_id, version):
-    client.request(
-        "POST", f"/api/v1/workflows/{workflow_id}/versions/{version}/publish", body={}
+def _publish(client, workflow_id, version, definition=None, change=None):
+    """Publish version `version` as it stands, or, with `definition`, publish
+    that definition as the next version (the orchestrator stores it under
+    the next number and publishes it). Returns the workflow object."""
+    body = {}
+    if definition is not None:
+        body = {
+            "workflow_definition": definition,
+            "change_description": change or "synced by tools/ao_sync.py",
+            "expected_version": version,
+        }
+    answer = client.request(
+        "POST", f"/api/v1/workflows/{workflow_id}/versions/{version}/publish", body=body
     )
+    return answer if isinstance(answer, dict) else {}
 
 
 def sync_definition(client, project_id, existing, doc, dry_run=False):
@@ -363,14 +376,14 @@ def sync_definition(client, project_id, existing, doc, dry_run=False):
         _publish(client, workflow_id, version)
         return f"unchanged, published v{version}", findings
     if dry_run:
-        return f"would update and publish v{version}", findings
-    client.request(
-        "PATCH",
-        f"/api/v1/workflows/{workflow_id}/versions/{version}",
-        body={"workflow_definition": doc},
+        return f"would update and publish v{version + 1}", findings
+    published = _publish(client, workflow_id, version, definition=doc)
+    new_version = (
+        published.get("published_version_number")
+        or published.get("current_version")
+        or version + 1
     )
-    _publish(client, workflow_id, version)
-    return f"updated, published v{version}", findings
+    return f"updated, published v{new_version}", findings
 
 
 def _format_finding(finding):

@@ -18,8 +18,10 @@
   name, fills the `REPLACE_AT_SYNC` placeholders from `--aap-credential`,
   `--aap-integration` and `--service-account`, validates first, publishes,
   reports workflows no file defines and never deletes; `--dry-run` writes
-  nothing. Standard library only; `tests/unit/test_ao_sync.py` drives it
-  against an in-process mock of the API.
+  nothing. A changed definition is published as the next version, the
+  live contract (a version's PATCH changes metadata only). Standard
+  library only; `tests/unit/test_ao_sync.py` drives it against an
+  in-process mock of the API.
 - `tools/ao_lint.py` knows loop nodes: `iterate` and `complete` ports, the
   body's return edge (`to_port: iterate`) as the one allowed back edge
   (`loop_ports`), and the loop parameter keys.

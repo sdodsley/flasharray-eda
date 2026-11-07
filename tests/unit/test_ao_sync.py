@@ -259,12 +259,21 @@ class Handler(BaseHTTPRequestHandler):
             if tail == ["export"] and method == "GET":
                 return 200, record["versions"][version]
             if tail == [] and method == "PATCH":
-                definition = self._json(raw).get("workflow_definition")
-                if not isinstance(definition, dict):
-                    raise Problem(422, "workflow_definition is required")
-                record["versions"][version] = definition
+                # the live contract: a version's PATCH changes name and
+                # change_description only; a definition here is ignored
+                self._json(raw)
                 return 200, store.public(record)
             if tail == ["publish"] and method == "POST":
+                body = self._json(raw) if raw else {}
+                definition = (
+                    body.get("workflow_definition") if isinstance(body, dict) else None
+                )
+                if isinstance(definition, dict):
+                    # a publish that carries a definition stores it as the
+                    # next version and publishes that one
+                    version = max(record["versions"]) + 1
+                    record["versions"][version] = definition
+                    record["current_version"] = version
                 record["published_version_number"] = version
                 return 200, store.public(record)
         raise Problem(404, f"no route for {method} {path}")
@@ -473,19 +482,20 @@ def test_changed_definition_is_updated_and_republished(
     expected = {
         str(copies / path.name): "unchanged, published v1" for path in DEFINITIONS
     }
-    expected[str(changed)] = "updated, published v1"
+    expected[str(changed)] = "updated, published v2"
     assert lines == [f"{path}: {text}" for path, text in expected.items()]
     later = store.calls[before:]
     (record,) = store.by_name(DRILL_NAME)
     wid = record["id"]
-    assert [c for c in later if c[0] == "PATCH"] == [
-        ("PATCH", f"/api/v1/workflows/{wid}/versions/1")
-    ]
+    # no PATCH: a changed definition travels in the publish call and lands as v2
+    assert [c for c in later if c[0] == "PATCH"] == []
     assert [c for c in later if c[1].endswith("/publish")] == [
         ("POST", f"/api/v1/workflows/{wid}/versions/1/publish")
     ]
-    assert record["versions"][1]["description"] == "Every night at 03:00 instead."
-    assert record["versions"][1]["nodes"][0]["parameters"]["credential_id"] == "cred-1"
+    assert record["current_version"] == 2 and record["published_version_number"] == 2
+    assert record["versions"][2]["description"] == "Every night at 03:00 instead."
+    assert record["versions"][1]["description"] != "Every night at 03:00 instead."
+    assert record["versions"][2]["nodes"][0]["parameters"]["credential_id"] == "cred-1"
     assert len(store.workflows) == len(DEFINITIONS)
 
 
@@ -524,7 +534,7 @@ def test_dry_run_writes_nothing(ao_sync, store, env, capsys, tmp_path):
     writes = len(store.writes())
     code, lines, err = run(ao_sync, capsys, store, "--dry-run", str(changed))
     assert code == 0, err
-    assert lines[0] == f"{changed}: would update and publish v1"
+    assert lines[0] == f"{changed}: would update and publish v2"
     assert len(store.writes()) == writes
     (record,) = store.by_name(DRILL_NAME)
     assert record["versions"][1]["description"] != "changed"
