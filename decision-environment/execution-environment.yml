@@ -7,7 +7,9 @@
 # The collection sdodsley.flasharray_eda is built from this checkout inside
 # the image build: additional_build_files copies the collection content
 # (galaxy.yml, meta/, extensions/, playbooks/, README.md, LICENSE) into the
-# build context as _build/flasharray_eda, and a galaxy requirement of type
+# build context as _build/flasharray_eda (a directory src lands as the
+# CONTENTS of dest, so each directory names its own dest), and a galaxy
+# requirement of type
 # `dir` pointing at that directory makes ansible-galaxy build and install it,
 # with its dependencies ansible.eda and everpure.flasharray (galaxy.yml), in
 # the galaxy stage (ansible-builder copies _build to /build and runs the
@@ -39,11 +41,11 @@ additional_build_files:
   - src: ../README.md
     dest: flasharray_eda
   - src: ../meta
-    dest: flasharray_eda
+    dest: flasharray_eda/meta
   - src: ../extensions
-    dest: flasharray_eda
+    dest: flasharray_eda/extensions
   - src: ../playbooks
-    dest: flasharray_eda
+    dest: flasharray_eda/playbooks
 additional_build_steps:
   # the base image keeps ansible.eda under /app/.ansible/collections and the
   # galaxy stage leaves an already-installed dependency alone, so the runtime

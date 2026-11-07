@@ -53,11 +53,11 @@ additional_build_files:
   - src: ../README.md
     dest: flasharray_eda
   - src: ../meta
-    dest: flasharray_eda
+    dest: flasharray_eda/meta
   - src: ../extensions
-    dest: flasharray_eda
+    dest: flasharray_eda/extensions
   - src: ../playbooks
-    dest: flasharray_eda
+    dest: flasharray_eda/playbooks
 
 options:
   package_manager_path: /usr/bin/microdnf
