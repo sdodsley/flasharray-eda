@@ -17,9 +17,9 @@ native exporters and the capacity rule drives the Alertmanager path end
 to end (a posted hardware alert also lights the identify LED); the
 Ansible Automation Platform seed, the controller-tier approval workflow
 and the day-2 and DR-drill orchestrator workflows are verified against a
-2.7 installation and a live orchestrator; the decision environment image
-is built and runs the Alertmanager rulebook. Not verified: the rulebook
-activations on the platform. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
+2.7 installation and a live orchestrator; the rulebooks run as activations
+on the platform from the decision-environment image and launch job
+templates. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
 exercised on hardware, [docs/DESIGN.md](docs/DESIGN.md) the design and
 scope, and [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and
 rulebook behaviour the rules are written around.
@@ -258,8 +258,9 @@ every array), credentials, inventory, project, job templates, the
 controller-tier approval workflow and one rulebook activation per platform
 rulebook ([aap/README.md](aap/README.md)). The seed, the job templates and
 the controller-tier approval workflow (request, human approval, reclaim)
-are verified against an Ansible Automation Platform 2.7 installation. Not
-verified: the activations running on the platform.
+and the activations (running, polling both arrays and launching job
+templates through `run_job_template`) are verified against an Ansible
+Automation Platform 2.7 installation.
 
 ### Orchestrator handoff
 

@@ -125,8 +125,18 @@ the workflow pauses at the approval node, a platform user approves, and the
 reclaim node rebuilds the request from the artifacts; the array refuses
 every candidate (members of a protection group snapshot) and the reclaim
 records each refusal; nothing is eradicated. The checks and their results
-are in [aap/README.md](../aap/README.md). The rulebook activations are
-created disabled and not started.
+are in [aap/README.md](../aap/README.md).
+
+The ten platform rulebooks run as activations on the EDA controller from
+the decision-environment image, with the fleet credential injecting the
+array list and the platform credential giving ansible-rulebook the
+controller API. They poll both arrays and act through `run_job_template`:
+within their first half hour the change-control, config-drift and
+replication activations fire rules and launch the remediate NTP,
+remediate DNS, notify and DR drill job templates, whose playbooks resolve
+the array from the fleet credential and run against it. The webhook
+rulesets have no platform variant, so approvals and git pushes stay with
+the controller workflow and event streams.
 
 The EDA-to-orchestrator handoff is exercised end to end against a live
 orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md). On the same
@@ -164,10 +174,9 @@ event takes the same path as a live one.
   the static checks only. Both pin `quay.io/ansible/ansible-rulebook:v1.3.2`,
   the tested ansible-rulebook; `latest` on that repository is not
   guaranteed to be the newest release.
-- A rulebook activation launching the platform workflow. The workflow is
-  launched by hand and pauses at its approval node (above); whether an
-  approval node pauses a workflow launched from a rulebook as a manual
-  launch does is unconfirmed, because the activations are not started.
+- A rulebook activation launching the controller-tier approval workflow
+  (the platform capacity rulebook hands the event to the orchestrator or
+  launches the request job; it does not launch the controller workflow).
 - The ActiveDR failover test (`playbooks/dr_promote.yml`,
   `playbooks/dr_demote.yml`, `orchestrator/dr_failover_test.json`): both
   playbooks pass the syntax check and the static tests; no pod is promoted

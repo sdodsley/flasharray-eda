@@ -294,9 +294,13 @@ the controller's task container, against one FlashArray with a per-array
   each refusal, eradicates nothing, ends with `result: refused`, and the
   workflow completes successfully.
 
-Not verified: a job template launched with the fleet credential; the
-rulebook activations running the platform rulebooks (created disabled);
-the decision environment image on the platform.
+The fleet credential is exercised by the activations: the change-control,
+config-drift and replication activations launch the remediate NTP,
+remediate DNS, notify and DR drill templates, whose playbooks resolve the
+array from `purefa_fleet_json` and run against it. The ten activations run
+from the decision-environment image (`localhost/flasharray-eda-de`, pull
+policy `never` on a containerized platform, where the activation worker
+uses the host's podman socket and the image must sit in that store).
 
 ## What it cannot seed
 
