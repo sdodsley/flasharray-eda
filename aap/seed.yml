@@ -575,6 +575,9 @@
       loop: "{{ all_activations.json.results }}"
       loop_control:
         label: "{{ item.name }}"
+        # ten activations starting in the same second contend for the EDA
+        # websocket and some fail their first start; a pause between them avoids it
+        pause: "{{ 10 if aap_eda_activations_enabled | bool else 0 }}"
       when: (item.is_enabled | bool) != (aap_eda_activations_enabled | bool)
       changed_when: true
       no_log: true

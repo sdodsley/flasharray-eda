@@ -300,7 +300,11 @@ remediate DNS, notify and DR drill templates, whose playbooks resolve the
 array from `purefa_fleet_json` and run against it. The ten activations run
 from the decision-environment image (`localhost/flasharray-eda-de`, pull
 policy `never` on a containerized platform, where the activation worker
-uses the host's podman socket and the image must sit in that store).
+uses the host's podman socket and the image must sit in that store; any
+other policy makes the worker pull a `localhost/` name from a registry
+called localhost). The seed enables the activations ten seconds apart:
+started in the same second they contend for the EDA websocket and some
+fail their first start.
 
 ## What it cannot seed
 

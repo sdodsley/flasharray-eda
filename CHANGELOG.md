@@ -15,7 +15,7 @@
 - Platform rulebooks under `extensions/eda/rulebooks/platform/`, generated
   by `tools/platform_rulebooks.py`, drive the seeded job templates with
   `run_job_template`; `aap/seed.yml` creates one activation per platform
-  rulebook and eight more job templates.
+  rulebook and seven more job templates.
 - Orchestrator definitions for QoS cap, protect now and identify LED (day 2)
   and an ActiveDR failover test (`playbooks/dr_promote.yml`,
   `playbooks/dr_demote.yml`).
