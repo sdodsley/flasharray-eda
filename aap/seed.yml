@@ -326,6 +326,23 @@
         wait: true
         state: present
 
+    # Job failures and the workflow's approval events go to Slack through
+    # the platform's own notification template (bot token, chat:write); it
+    # exists before the templates that name it.
+    - name: Slack notification template (when the bot token and channel are set)
+      when: slack_bot_seeded | bool
+      ansible.controller.notification_template:
+        name: "{{ slack_notification_name }}"
+        description: "FlashArray job failures and controller-tier approval events"
+        organization: "{{ aap_organization }}"
+        notification_type: slack
+        notification_configuration:
+          token: "{{ lookup('env', aap_slack_bot_token_env) }}"
+          channels: ["#{{ lookup('env', aap_slack_channel_env) | regex_replace('^#', '') }}"]
+          hex_color: ""
+        state: present
+      no_log: true
+
     # Every template prompts for extra vars (target_array and the rest come
     # from the launch), for credentials (the fleet credential is attached; a
     # launch may swap it for one array's FlashArray API credential) and for
@@ -356,22 +373,6 @@
       loop: "{{ job_templates }}"
       loop_control:
         label: "{{ item.name }}"
-
-    # Job failures and the workflow's approval events go to Slack through
-    # the platform's own notification template (bot token, chat:write).
-    - name: Slack notification template (when the bot token and channel are set)
-      when: slack_bot_seeded | bool
-      ansible.controller.notification_template:
-        name: "{{ slack_notification_name }}"
-        description: "FlashArray job failures and controller-tier approval events"
-        organization: "{{ aap_organization }}"
-        notification_type: slack
-        notification_configuration:
-          token: "{{ lookup('env', aap_slack_bot_token_env) }}"
-          channels: ["#{{ lookup('env', aap_slack_channel_env) | regex_replace('^#', '') }}"]
-          hex_color: ""
-        state: present
-      no_log: true
 
     # The request node's artifacts (request_id, at_risk_array, ...) reach
     # the reclaim node as extra vars, which is how the two playbooks hand
