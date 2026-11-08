@@ -13,7 +13,9 @@ launched as an AAP job template.
 The capacity definition is verified on the upstream orchestrator code at
 the tag Red Hat ships as the 2026.8 release (API 1.3.1): it validates,
 imports, publishes and runs from the EDA trigger through the approval to
-the reclaim ("Checked against a live instance" below). Every definition
+the reclaim, and the replication definition runs the same way through its
+approval to the replicate-now job ("Checked against a live instance"
+below). Every definition
 follows the node schemas of that release and `tools/ao_lint.py` checks them
 offline. The product add-on is generally available for
 OpenShift-based Ansible Automation Platform 2.7 only; no timeline is
@@ -183,9 +185,13 @@ has; change it to the group that should decide. `decision_window` is 86400
 seconds (24 hours), 3600 for the overdue-replication route; an approval
 nobody decides within it expires.
 `fallback_decision` (`approve` or `reject`) names the port an expired
-approval takes; the shipped definitions leave it unset, so an expired
-approval never takes the `approved` port. How the execution ends in that
-case (the `rejected` port or a failed node) is not verified.
+approval takes; the shipped definitions leave it unset, so an approval
+nobody decides within the window is recorded as expired (decided by the
+orchestrator's worker, note "Approval decision window expired") and the
+execution fails at the approval node with neither port taken, which is
+the loud outcome wanted for an action nobody asked for. Set
+`fallback_decision: reject` to run the rejected branch instead (not
+exercised).
 
 ## Importing
 
@@ -319,6 +325,13 @@ sections above follow them:
   publish that key, which validation cannot see.
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,
   `artifacts` (the job's `set_stats`), `created`, `started` and `finished`.
+- `GET /api/v1/approvals?status=pending` lists the approvals waiting
+  (`id`, `execution_id`, `node_name`, `prompt`); `PATCH
+  /api/v1/approvals/{id}` with `status` (`approved` or `rejected`) and
+  `decision_notes` decides one as the caller's identity and keeps the
+  notes, which is how `slack/approval_bot.py` carries a Slack click back.
+  An approval nobody decides within `decision_window` is recorded as
+  expired by the worker service and fails the execution at that node.
 
 Verified with a run of the capacity workflow (docs/ORCHESTRATOR.md,
 "Verified against a live orchestrator"): a full-span `${...}` expression

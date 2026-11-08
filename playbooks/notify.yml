@@ -45,6 +45,17 @@
         slack_webhook: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
       no_log: true
 
+    # A literal block scalar carries the line break between the subject line
+    # and the detail: inside a Jinja expression Ansible doubles backslashes,
+    # so a '\n' written there is two characters, not a newline. Slack wants
+    # &, < and > escaped in message text; carriage returns are dropped.
+    - name: Format the Slack message
+      when: slack_webhook | length > 0
+      ansible.builtin.set_fact:
+        slack_text: |-
+          {{ slack_icons[alert_record.severity] | default(':information_source:') }} *{{ alert_record.severity | upper }}* {{ alert_record.subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array and alert_record.array not in alert_record.subject else '' }}
+          {{ alert_record.detail | regex_replace('\r', '') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
+
     - name: Post the alert to Slack
       when: slack_webhook | length > 0
       ansible.builtin.uri:
@@ -52,9 +63,7 @@
         method: POST
         body_format: json
         body:
-          text: >-
-            {{ slack_icons[alert_record.severity] | default(':information_source:') }}
-            *{{ alert_record.severity | upper }}* {{ alert_record.subject }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array else '' }}{{ ('\n' ~ alert_record.detail) if alert_record.detail else '' }}
+          text: "{{ slack_text }}"
         status_code: [200]
         timeout: 15
       register: slack_post

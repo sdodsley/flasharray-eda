@@ -149,6 +149,38 @@ The native exporter the Prometheus rules are written for, as served on
   `~/.ansible/collections` on it, with `./collections` in front when that
   directory exists.
 
+## Containerized Ansible Automation Platform
+
+Facts about the 2.7 containerized topology the seed and the activations
+are written around; [aap/README.md](../aap/README.md) has the longer form.
+
+- A job's execution environment reaches a service on the platform host
+  only as `host.containers.internal`; the host's own address and loopback
+  point back at the container. The orchestrator credential carries that
+  name when the orchestrator runs on the platform host.
+- Activations run with host networking: a listener inside a rulebook
+  activation (the syslog and Alertmanager sources) listens on the host's
+  port, so the arrays and Alertmanager address the platform host itself.
+- The controller's task container and the activation workers keep image
+  stores of their own, separate from the host user's command line; an
+  image built on the host is loaded into them or pulled from a registry.
+- `ansible.eda.rulebook_activation` cannot modify an activation; the
+  enabled flag is the one thing a seed can still set, so the seed enforces
+  it on every run and a site keeps it true once the activations run.
+- A rootless container's non-root user cannot read a 600-mode file
+  bind-mounted from the host (the host user maps to the container's root,
+  not to the image's user); a podman secret is mounted readable under
+  `/run/secrets`, which is how the approval bot gets its tokens.
+
+## Ansible templating
+
+- Inside a Jinja expression Ansible doubles backslashes before Jinja parses
+  the string, so `'\n'` written in `{{ }}` is a backslash and an `n`, not a
+  line break; a real one belongs to the YAML (a block scalar, or `"\n"` in
+  a double-quoted scalar). Regex arguments are the exception: the doubling
+  is what carries `'\r'` to the regex engine as a carriage return. A unit
+  test refuses such literals outside `regex_*` filters.
+
 ## State
 
 - State that must survive a rulebook restart lives on the array or in a

@@ -128,9 +128,9 @@
             severity: warning
             subject: "Admin authentication settings drift on {{ event.purefa_config.array }}"
             detail: >-
-              max_login_attempts={{ event.purefa_config.max_login_attempts }}
-              lockout_duration_ms={{ event.purefa_config.lockout_duration_ms }}
-              min_password_length={{ event.purefa_config.min_password_length }}
-              sso_enabled={{ event.purefa_config.sso_enabled }}
+              max_login_attempts={{ event.purefa_config.max_login_attempts }} (baseline {{ baseline_max_login_attempts }})
+              lockout_duration_ms={{ event.purefa_config.lockout_duration_ms }} (baseline {{ baseline_lockout_duration_ms }})
+              min_password_length={{ event.purefa_config.min_password_length }} (baseline at least {{ baseline_min_password_length }})
+              sso_enabled={{ event.purefa_config.sso_enabled }} (baseline {{ baseline_sso_enabled }})
             target_array: "{{ event.purefa_config.array }}"
             alert_log: "{{ alert_log }}"

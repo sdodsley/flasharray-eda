@@ -6,7 +6,7 @@ reach ansible-rulebook, and the ideas each rulebook implements.
 Versions this design assumes: py-pure-client 1.94.1 (REST 2.57 API ceiling;
 the arrays it was verified against speak REST 2.46), ansible-rulebook 1.3.x,
 ansible.eda 2.13, and the Ansible Automation Platform 2.5 automation
-decisions documentation.
+decisions documentation; the platform work is verified on 2.7.
 
 ## 1. Why the array is the event source
 
@@ -51,7 +51,7 @@ Forward both into tickets.
 | Transport | How | Latency | Customer needs |
 | --- | --- | --- | --- |
 | Pull | `purefa_events`: one asyncio source plugin, N arrays (verified with two), six signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
-| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 and 5424 headers with or without a priority, the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array forwards too) dropped, audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes; `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
+| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 and 5424 headers with or without a priority, the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array forwards too) dropped, the array's own service accounts counted as automation (`system_users`), audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes; `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
 | Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
 The Prometheus rules cover hardware and drive status, capacity and
@@ -142,6 +142,10 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
 - A replicating protection group that is overdue, or whose transfer is stuck
   (progress unchanged over N polls): replicate now (`replicate_now.yml`,
   `purefa_pgsnap` with `remote: true`, the immediate replicated snapshot).
+  With `orchestrator_enabled` the event goes to the automation orchestrator
+  instead and an approval with a one-hour window gates the snapshot
+  (`orchestrator/replication_overdue_approval.json`); the group's schedule
+  is never touched, one extra snapshot is sent.
 - Array connection `partially_connected`: the replication signal reads
   `/array-connections/path` and the failed paths are notified; paused or
   unhealthy links likewise.
@@ -177,7 +181,9 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   webhook ruleset gives way to a workflow whose first node is a manual
   approval (`run_workflow_template`; `aap/seed.yml` creates it), and
   `orchestrator_enabled` hands the event to the automation orchestrator
-  instead ([ORCHESTRATOR.md](ORCHESTRATOR.md)). Both platform paths are
+  instead ([ORCHESTRATOR.md](ORCHESTRATOR.md); `orchestrator_fallback_local`
+  raises the local request when a handoff produced no execution). Both
+  platform paths are
   exercised, the workflow by a launch through its approval node and the
   handoff end to end against a live orchestrator, from a running rulebook
   activation as well ([VERIFICATION.md](VERIFICATION.md)).
@@ -218,6 +224,25 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
 - Poll failures arrive as `purefa_poll_error` and polling continues; a
   management VIP `url_check` to tell a dead network from a dead array is
   design intent.
+
+### 4.9 The record, the pager and the approver
+
+- The alert log is the record: every playbook appends one JSON line with
+  `time`, `kind`, `severity` and `array`, whatever else happens.
+- Slack is the pager. `notify.yml` posts the same record to an incoming
+  webhook when `SLACK_WEBHOOK_URL` is set (the env file standalone, the
+  `Slack webhook` credential on the platform), and a failed post never
+  fails the notification. On the platform the seed also creates a Slack
+  notification template that reports job failures and the controller-tier
+  workflow's approval events with their links into the platform.
+- A pager is not an approver. The two approval queues (the orchestrator's
+  approvals and the controller's workflow approvals) are decided in their
+  UIs or from the channel through `slack/approval_bot.py`: a Socket Mode
+  bot that posts every pending approval as a card with Approve and Reject
+  buttons and carries the click back under its own orchestrator or
+  controller identity, with the Slack user in the decision notes and an
+  allow-list of who may click ([SECURITY.md](../SECURITY.md)). Mail and
+  ServiceNow are design intent; the notify playbook is where they go.
 
 ## 5. Gates
 
@@ -266,6 +291,9 @@ resolve custom event sources from the collections in the image, so the
 rulebooks name theirs by FQCN; on the platform they run as the generated
 variants under `extensions/eda/rulebooks/platform/`, where `run_playbook`
 becomes `run_job_template` (`aap/README.md`, [PACKAGING.md](PACKAGING.md)).
+The Slack approval bot runs as one more container beside the listeners
+(`slack/README.md`); Socket Mode means it opens an outbound websocket and
+needs no inbound port.
 
 ## 8. References
 

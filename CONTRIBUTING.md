@@ -14,8 +14,11 @@ make deps      # Python requirements and the two collections
 make check     # black, pyflakes, yamllint, ao_lint, unit tests, playbook syntax
 ```
 
-`make check` is what CI runs. The unit tests need no array: the plugins are
-exercised with a fake SDK client, and the rulebook tests validate every
+`make check` is what CI runs; black and pyflakes cover the plugins,
+`tools/`, `slack/` and the tests. The unit tests need no array: the
+plugins are exercised with a fake SDK client, the orchestrator sync tool
+and the Slack bot run against in-process fakes, and the rulebook tests
+validate every
 rulebook against ansible-rulebook's own schema, check that every lowercase
 variable a rulebook references is documented in `vars/example.yml`
 (uppercase names such as `APPROVAL_TOKEN` are environment variables passed

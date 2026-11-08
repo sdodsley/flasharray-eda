@@ -49,16 +49,20 @@ Standalone:
     AAP_HOST=https://aap.example.com AAP_TOKEN_FILE=/path/to/token \
     python slack/approval_bot.py
 
-As a container beside the other listeners, with the secrets mounted as
-files rather than carried in the environment (every `*_FILE` variable reads
-its value from a file):
+As a container beside the other listeners, with the two passwords handed
+over as podman secrets rather than carried in the environment (every
+`*_FILE` variable reads its value from a file; a secret is mounted
+readable under `/run/secrets/<name>`, where a 600-mode file bind-mounted
+from the host would be unreadable to the image's non-root user under
+rootless uid mapping):
 
+    podman secret create ao-admin /path/to/ao-admin-password
+    podman secret create aap-token /path/to/aap-token
     podman run -d --name eda-approval-bot --restart=unless-stopped --network host \
       --env-file ~/.config/slack/flasharray-eda.env \
       -e AO_URL=https://orchestrator.example.com -e AO_USERNAME=admin -e AO_PASSWORD_FILE=/run/secrets/ao-admin \
       -e AAP_HOST=https://aap.example.com -e AAP_TOKEN_FILE=/run/secrets/aap-token \
-      -v /path/to/ao-admin-password:/run/secrets/ao-admin:ro,Z \
-      -v /path/to/aap-token:/run/secrets/aap-token:ro,Z \
+      --secret ao-admin --secret aap-token \
       -v $PWD/slack/approval_bot.py:/app/approval_bot.py:ro,Z \
       registry.access.redhat.com/ubi9/python-312 \
       sh -c 'pip install -q slack_sdk && python /app/approval_bot.py'
@@ -67,6 +71,13 @@ its value from a file):
 A card is posted once per approval; when the approval is decided in a UI
 or expires, the card loses its buttons on the next poll. Nothing secret is
 logged.
+
+Verified against a workspace: the bot connects over Socket Mode, posts the
+card for a pending orchestrator approval within one poll, and a click on
+Approve decides it (the orchestrator records the approval under the bot's
+identity with the Slack user in the decision notes) and the execution
+resumes. The controller queue is polled the same way; a pending controller
+approval has not been exercised.
 
 ## Variables
 

@@ -2,16 +2,17 @@
 
 How a rulebook hands an event to Red Hat's automation orchestrator (the
 AAP 2.7 add-on; upstream code: Syntara) instead of acting on it locally:
-the bridge playbook, its mock and its tests. The workflow definition that
-consumes the event is orchestrator/capacity_reclaim_approval.json
-(orchestrator/README.md).
+the bridge playbook, its mock and its tests. The workflow definitions that
+consume the events are orchestrator/capacity_reclaim_approval.json and
+orchestrator/replication_overdue_approval.json (orchestrator/README.md).
 
 Verified: the bridge runs against `tests/mock_orchestrator.py` from the
 unit test and from ansible-rulebook 1.3.2 replaying one event through the
 real capacity rules (`tests/replay_capacity.yml`), and end to end against
 the upstream orchestrator code at the tag Red Hat ships as the 2026.8
 release (API 1.3.1): token, post, 202, workflow execution, approval and
-reclaim ("Verified against a live orchestrator" below). The contract
+reclaim, and the replication route through its approval to the replicated
+snapshot ("Verified against a live orchestrator" below). The contract
 comes from the upstream Syntara documentation and the 1.3.1 API; what no
 run has exercised is listed under "Limitations".
 
@@ -48,11 +49,19 @@ The switch is a literal in the rule's condition (`vars.orchestrator_enabled
 defaults; a `vars/local-<site>.yml` must carry the key, as
 `vars/example.yml` does.
 
-The rule has a 24 hour per-array throttle. A handoff that fails (the
+The capacity rule has a 24 hour per-array throttle, the replication rule
+one hour per array and protection group. A handoff that fails (the
 orchestrator is down, the token is refused, the service account is not
 bound) is recorded as a warning and is not retried until the throttle
-window has passed; nothing is written locally in that case. Watch the alert
-log for `orchestrator_post` records with `severity: warning`.
+window has passed; nothing is written locally in that case unless
+`orchestrator_fallback_local` is on. Watch the alert log for
+`orchestrator_post` records with `severity: warning`. An approval the
+orchestrator is waiting for is decided in its UI, or from Slack through
+`slack/approval_bot.py`, which lists the pending approvals
+(`GET /api/v1/approvals?status=pending`) and decides one with
+`PATCH /api/v1/approvals/{id}` (`status`, and `decision_notes` naming the
+Slack user); the decision is recorded under the bot's own orchestrator
+identity (slack/README.md).
 
 ## The contract
 
@@ -133,6 +142,15 @@ measures `to_json` output and refuses anything over 1000000 bytes without
 a request (`stage: size_check`, `status: null`). A capacity event is a few
 hundred bytes; the limit matters only if a future route forwards large
 lists.
+
+The replication route sends the same envelope with `event_type`
+`purefa_pg_replication` and the replication signal's fields in `data`:
+`pgroup`, `targets`, `schedule_enabled`, `frequency_ms`, `last_completed`,
+`since_last_completed_s`, `overdue`, `stuck` and `in_progress` (the
+transfer under way, or null). The definition reads `${trigger.event.array}`
+and `${trigger.event.data.pgroup}` for its notifications and the approval
+prompt, and passes `pgroup`, `since_last_completed_s`, `frequency_ms` and
+`in_progress` to the replicate-now job.
 
 ### 4. The trigger on the workflow side
 
@@ -328,6 +346,22 @@ at-risk array and a second in `others`:
   eradicated (`result: refused`); the rejected-branch notify is skipped and
   the execution completes. This is the outcome the controller-tier
   workflow of aap/README.md reaches through its own approval node.
+- **The replication route.** `orchestrator/replication_overdue_approval.json`
+  imported and published the same way; the bridge posts an overdue event
+  for the protection group replicating between the two arrays (202, an
+  execution); the execution notifies, pauses at its one-hour approval, and
+  on approval **FlashArray - replicate now** runs with the event array's
+  credential, creates the immediate replicated snapshot and publishes
+  `pgroup`, `snapshot_suffix` and `changed`, which the closing notify
+  reads. A definition that reads an artifact the job did not publish fails
+  at that node at run time, not at validation, which is why the unit tests
+  cross-check artifacts against `set_stats` and why a corrected definition
+  is published as the next version with the definition in the publish body.
+  One execution's approval was given from Slack through
+  `slack/approval_bot.py` and is recorded with the Slack user in its
+  decision notes; another, which nobody decided within the hour, expired
+  and failed the execution at the approval node (orchestrator/README.md,
+  "Placeholders").
 
 ### Running the upstream compose beside a containerized platform
 

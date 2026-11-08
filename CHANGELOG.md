@@ -48,6 +48,28 @@
   (`system_users`, default `pure_datainsights`; `purity` writes with auth
   source `system`), so the human-action rule stays quiet for the array's
   scheduled snapshots and tag housekeeping.
+- The ansible-builder definitions build: `python_interpreter` under
+  `dependencies` pins the base image's Python 3.12, and each collection
+  directory names its own `dest` under `additional_build_files`. The
+  decision environment from `decision-environment/execution-environment.yml`
+  is built and started on a `vfs` image store (PACKAGING.md has the
+  rootless-overlay caveat).
+- The Slack text of `notify.yml` carries a real line break between the
+  subject line and the detail (a `'\n'` literal inside a Jinja expression
+  is two characters under Ansible's backslash doubling), names the array
+  once, drops carriage returns and escapes `&`, `<` and `>`; a unit test
+  refuses escape literals inside Jinja expressions outside `regex_*`
+  filters. The admin-authentication drift notice names the baseline values
+  beside the observed ones.
+- Verified since 0.2.0 (VERIFICATION.md): the syslog path live on the
+  platform from both arrays; the Alertmanager chain into the platform's
+  activation, with the capacity rule under a lab override and the
+  replica-link rule on a real pause; the DR drill schedule firing on its
+  own; the capacity handoff from a running activation through approval to
+  the reclaim; the overdue-replication route through its approval to the
+  replicated snapshot, once approved from Slack through the bot; the
+  notify template posting to Slack from the platform; an approval nobody
+  decided expiring and failing its execution at the approval node.
 
 ## 0.2.0 (2026-11-07)
 

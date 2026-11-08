@@ -18,10 +18,13 @@ native exporters and the capacity and replica-link rules drive the
 Alertmanager path end to end into the platform's activation (a posted
 hardware alert also lights the identify LED); the
 Ansible Automation Platform seed, the controller-tier approval workflow
-and the capacity, day-2 and DR orchestrator workflows are verified against
-a 2.7 installation and a live orchestrator; the rulebooks run as activations
-on the platform from the decision-environment image and launch job
-templates. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
+and the capacity, overdue-replication, day-2 and DR orchestrator workflows
+are verified against a 2.7 installation and a live orchestrator; the
+rulebooks run as activations on the platform from the decision-environment
+image and launch job templates, and the capacity activation hands a live
+event to the orchestrator; notifications reach a Slack channel beside the
+alert log, and an orchestrator approval has been decided from that channel
+through the bot. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
 exercised on hardware, [docs/DESIGN.md](docs/DESIGN.md) the design and
 scope, and [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and
 rulebook behaviour the rules are written around.
@@ -60,7 +63,7 @@ Tested against Purity//FA 6.10.6 (REST 2.46).
 ```
 python3 -m venv venv && . venv/bin/activate
 make deps                                   # pip install -r requirements.txt; ansible-galaxy collection install -r requirements.yml; make collection
-cp env.example ~/.flasharray-eda.env        # URLs and tokens for both arrays, APPROVAL_TOKEN, GIT_WEBHOOK_SECRET; chmod 600
+cp env.example ~/.flasharray-eda.env        # URLs and tokens for both arrays, APPROVAL_TOKEN, GIT_WEBHOOK_SECRET; optional AO_CLIENT_*, SLACK_WEBHOOK_URL; chmod 600
 cp vars/example.yml vars/local-lab.yml      # edit: arrays, absolute paths (alert_log, request_dir, baseline_dir), baselines, thresholds, switches
 cp inventory/example.yml inventory/local-lab.yml
 ./run.sh extensions/eda/rulebooks/alerts.yml -v
@@ -116,7 +119,7 @@ Three things to get right on the first run:
 | `change_control.yml` | audits, webhook | a governed setting changed by anyone but the automation account; a destructive command by a human; a signed git push | reconcile from the git baseline (NTP, DNS) and report who; notify; apply the baseline forward |
 | `config_drift.yml` | config | NTP, DNS, LDAP, SafeMode/eradication, admin auth settings vs baseline (poll-based fallback) | NTP and DNS reapplied; the rest notify |
 | `health.yml` | health | hardware component not ok; drive not healthy; controller failover; maintenance window; remote assist | hardware component not ok: identify LED + notify, logged only inside a maintenance window; drive not healthy, controller failover: notify; maintenance window, remote assist: logged |
-| `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a schedule | notify; move host preferred arrays to the online side and back; replicate now; DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
+| `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a schedule | notify; move host preferred arrays to the online side and back; replicate now (with `orchestrator_enabled`, an approval in the orchestrator first); DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
 | `capacity.yml` | telemetry, webhook | used % over threshold; days-to-full from the array's 7-day history; an approval (bearer token) | approval request with request id; reclaim pending-eradication objects only when approved |
 | `performance.yml` | telemetry | noisy neighbour on a hot array; capped volume back to normal; array write latency vs the same half hour last week | temporary IOPS cap with an `eda/qos_cap` tag on the array; cap lifted; notify |
 | `anomaly.yml` | telemetry + audits | data reduction drop + snapshot or write surge + a human destroying snapshots, all on one array inside 15 minutes | snapshot every local protection group now, lengthen the eradication delay, page |
@@ -127,8 +130,11 @@ Every remediation is gated: `maintenance_active` on the event (one cached
 `/maintenance-windows` read per array), an `automation_users` list so the
 automation never reacts to itself, and per-site switches
 (`qos_auto_cap`, `activecluster_auto_prefer`, `replication_auto_replicate_now`)
-that fall back to notify. Every record a playbook writes to the alert log
-carries `time`, `kind`, `severity` and `array`.
+that fall back to notify; `orchestrator_enabled` moves the capacity and
+overdue-replication decisions into the automation orchestrator. Every
+record a playbook writes to the alert log carries `time`, `kind`,
+`severity` and `array`, and every notification also reaches Slack when a
+webhook is configured ("Notifications" below).
 
 ## Layout
 
@@ -250,9 +256,10 @@ Every rule that notifies runs `playbooks/notify.yml`, which appends a
 record to the alert log and, when `SLACK_WEBHOOK_URL` is set (env file;
 on the platform the `Slack webhook` credential on the notify template),
 posts the same record to a Slack incoming webhook: an icon for the
-severity, the subject, the array and the detail. A failed post is
-reported in the job and never fails the notification; the alert log is
-the record, Slack is the pager. On the platform `aap/seed.yml` also
+severity, the severity, the subject with the array named once, and the
+detail on the next line, escaped for Slack. A failed post is reported in
+the job and never fails the notification; the alert log is the record,
+Slack is the pager. On the platform `aap/seed.yml` also
 creates a Slack notification template (bot token, `chat:write`) that posts
 job failures and the controller-tier workflow's approval events, each
 with its link into the platform ([aap/README.md](aap/README.md)).
@@ -269,7 +276,8 @@ the same tree: the collection `sdodsley.flasharray_eda`, built from the
 checkout at image build time and installed with `everpure.flasharray` and
 `ansible.eda`, py-pure-client, and the rulebooks and playbooks as plain
 files under `/opt/flasharray-eda` for runs that name them by path
-([docs/PACKAGING.md](docs/PACKAGING.md)). CI does not build the image. The
+([docs/PACKAGING.md](docs/PACKAGING.md), including the two ansible-builder
+facts the definition is written around). CI does not build the image. The
 image is self-contained for standalone `ansible-rulebook` runs, with no
 `--source-dir`: the Containerfile header has the `podman run` line, which
 mounts `vars/`, `inventory/` and the baseline checkout and passes the
@@ -299,19 +307,24 @@ Automation Platform 2.7 installation.
 
 ### Orchestrator handoff
 
-With `orchestrator_enabled: true` in the vars file, the capacity-at-risk
-rule (and the overdue-replication rule, whose approval gates an immediate
-replicated snapshot) hands its event to Red Hat's automation orchestrator instead of
-writing a local request: `playbooks/orchestrator_post.yml` obtains a
-client-credentials token (`AO_CLIENT_ID` / `AO_CLIENT_SECRET` from the
-environment, forwarded by `run.sh`) and posts a `flasharray-eda/1`
-envelope to the workflow's EDA trigger; the approval and the reclaim then
-run in the orchestrator. Every attempt is recorded in the alert log and a
-refusal never fails the rule. [docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md)
-has the contract, the vars and the mock (`tests/mock_orchestrator.py`)
-the unit test and `tests/replay_capacity.yml` run against. The handoff is
-verified against a live orchestrator (the upstream code of the 2026.8
-release): the post, the approval and the reclaim run through.
+With `orchestrator_enabled: true` in the vars file, two rules hand their
+events to Red Hat's automation orchestrator instead of acting locally: the
+capacity-at-risk rule, whose approval gates the reclaim, and the
+overdue-replication rule, whose approval gates the immediate replicated
+snapshot. `playbooks/orchestrator_post.yml` obtains a client-credentials
+token (`AO_CLIENT_ID` / `AO_CLIENT_SECRET` from the environment, forwarded
+by `run.sh`) and posts a `flasharray-eda/1` envelope to the route's EDA
+trigger (`orchestrator_paths`); the approval and the action then run in
+the orchestrator. Every attempt is recorded in the alert log and a refusal
+never fails the rule; with `orchestrator_fallback_local: true` a capacity
+handoff that produced no execution raises the local request instead.
+[docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md) has the contract, the vars
+and the mock (`tests/mock_orchestrator.py`) the unit test and
+`tests/replay_capacity.yml` run against; `tools/ao_sync.py` imports the
+definitions. Both routes are verified against a live orchestrator (the
+upstream code of the 2026.8 release): the post, the approval and the
+reclaim or the replicated snapshot run through, the capacity route from a
+running activation as well.
 
 ## Array and rulebook behaviour
 
@@ -335,20 +348,27 @@ Facts the rules are written around;
 
 ## Testing
 
-`make check` needs no array: black, pyflakes and yamllint; `make lint-ao`
-(the orchestrator definitions through `tools/ao_lint.py`); the unit tests
+`make check` needs no array: black, pyflakes and yamllint over the
+plugins, `tools/`, `slack/` and the tests; `make lint-ao` (the
+orchestrator definitions through `tools/ao_lint.py`); the unit tests
 (`python -m pytest tests/unit`: a fake SDK client drives the alert diff and
-the audit cursor, the syslog parser gets representative lines, static
-checks validate every rulebook against ansible-rulebook's own schema,
-require every lowercase variable a rulebook references to be documented in
-`vars/example.yml` and every playbook a rule runs to exist, plus the
-orchestrator bridge against its mock, the linter and its fixtures, and the
-job artifacts every playbook publishes); and a playbook syntax check.
+the audit cursor, the syslog parser gets the real lines of both layouts,
+static checks validate every rulebook against ansible-rulebook's own
+schema, require every lowercase variable a rulebook references to be
+documented in `vars/example.yml` and every playbook a rule runs to exist,
+plus the orchestrator bridge against its mock, the linter and its
+fixtures, the sync tool against an in-process mock of the orchestrator
+API, the Slack bot with a fake HTTP function and a fake Slack client, and
+the job artifacts every playbook publishes); and a playbook syntax check.
 `tests/unit/test_orchestrator_bridge.py` runs `orchestrator_post.yml`
 against the mock (skipped without `ansible-playbook`), `test_ao_lint.py`
-covers every linter rule with a fixture, `test_playbook_artifacts.py`
-checks the `set_stats` artifacts, the credential guard and the seed. GitHub
-Actions runs the same on every push.
+covers every linter rule with a fixture and checks that every
+`${node.artifacts.key}` a definition reads is published by that
+template's playbook, `test_ao_sync.py` drives the create, update, publish
+and dry-run paths, `test_approval_bot.py` the cards, the decision routing
+and both approval APIs, `test_playbook_artifacts.py` the `set_stats`
+artifacts, the credential guard and the seed. GitHub Actions runs the same
+on every push.
 
 `tests/replay_*.yml` are copies of the live rules driven by
 `ansible.eda.generic` from the fixtures under `tests/fixtures/`

@@ -516,3 +516,35 @@ def test_every_rulebook_gets_an_activation_name(repo_root):
     for path in sorted((repo_root / "extensions" / "eda" / "rulebooks").glob("*.yml")):
         assert re.fullmatch(r"[a-z_]+\.yml", path.name), path.name
     assert pathlib.Path(repo_root / "aap" / "requirements.yml").exists()
+
+
+# Inside a Jinja expression Ansible doubles backslashes before Jinja parses
+# the string, so a '\n' written there is a backslash and an n, never a line
+# break (a real one belongs to the YAML: a block scalar, or "\n" in a
+# double-quoted scalar). Regex arguments are the exception: the doubling is
+# what carries '\r' to the regex engine as a carriage-return class.
+ESCAPE_LITERAL = re.compile(r"""(['"])(?:\\.|(?!\1).)*\\[nrt](?:\\.|(?!\1).)*\1""")
+REGEX_FILTER = re.compile(r"regex_(?:replace|search|findall|escape)\(\s*$")
+JINJA_EXPRESSION = re.compile(r"\{\{.*?\}\}", re.S)
+
+
+def test_no_escape_literals_inside_jinja_expressions(repo_root):
+    files = (
+        list((repo_root / "playbooks").rglob("*.yml"))
+        + list((repo_root / "extensions" / "eda" / "rulebooks").rglob("*.yml"))
+        + list((repo_root / "aap").glob("*.yml"))
+        + list((repo_root / "tests").glob("*.yml"))
+    )
+    offenders = []
+    for path in sorted(files):
+        text = path.read_text()
+        for expression in JINJA_EXPRESSION.finditer(text):
+            body = expression.group(0)
+            for literal in ESCAPE_LITERAL.finditer(body):
+                if REGEX_FILTER.search(body[: literal.start()]):
+                    continue
+                line = text.count("\n", 0, expression.start()) + 1
+                offenders.append(
+                    f"{path.relative_to(repo_root)}:{line}: {literal.group(0)}"
+                )
+    assert offenders == [], "\n".join(offenders)

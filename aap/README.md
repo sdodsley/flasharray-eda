@@ -59,6 +59,8 @@ It creates nothing on an array and nothing in the automation orchestrator
     cp aap/vars/example.yml vars/local-aap.yml      # gitignored with the other local files; edit
     export AAP_HOST=https://<gateway> AAP_TOKEN=<token>
     export ARRAY_A_URL=... ARRAY_A_TOKEN=... ARRAY_B_URL=... ARRAY_B_TOKEN=...
+    export AO_URL=... AO_CLIENT_ID=... AO_CLIENT_SECRET=...              # optional: the orchestrator credential
+    export SLACK_WEBHOOK_URL=... SLACK_BOT_TOKEN=... SLACK_CHANNEL=...   # optional: Slack
     ansible-playbook -i aap/inventory/example.yml aap/seed.yml -e @vars/local-aap.yml
 
 `aap/vars/example.yml` is loaded as the defaults; the `-e @file` overrides
@@ -83,7 +85,7 @@ platform API from where it runs.
 | Execution environment | `FlashArray EDA EE` | image from `aap_ee_image` |
 | Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote` | one per playbook; the fleet credential attached; prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential |
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
-| Notification template | `Slack - flasharray-eda` | only when `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are set: type Slack, posts every job template's failures and the workflow's start, success, failure and approval events (pending, approved, denied, timed out) to the channel |
+| Notification template | `Slack - flasharray-eda` | only when `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are set: type Slack, posts every job template's failures and the workflow's success, failure and approval events (pending, approved, denied, timed out) to the channel, each with its link into the platform |
 | EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`, pulled with `aap_eda_de_pull_policy`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the store the activation workers use ("Images on a containerized platform") |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |
@@ -310,6 +312,12 @@ the controller's task container, against one FlashArray:
   each refusal, eradicates nothing, ends with `result: refused`, and the
   workflow completes successfully.
 
+Slack: `FlashArray - notify` with the `Slack webhook` credential attached
+posts the record to the channel (the post task returns 200, the failure
+report is skipped). The `Slack - flasharray-eda` notification template is
+attached as described; no job has failed and no workflow has run since,
+so its own posts are not exercised.
+
 The fleet credential is exercised by the activations: the change-control,
 config-drift and replication activations launch the remediate NTP,
 remediate DNS, notify and DR drill templates, whose playbooks resolve the
@@ -342,3 +350,8 @@ websocket and some fail their first start.
   platform's own subscription.
 - **Approvers.** The workflow approval accepts any user with the approve
   permission on the workflow; granting that role is a platform RBAC step.
+- **The Slack app.** The incoming webhook, the bot token and the Socket
+  Mode token are created at api.slack.com for the channel
+  ([slack/README.md](../slack/README.md)); the seed stores the webhook and
+  the bot token once they exist, and the approval bot runs beside the
+  platform, not on it.

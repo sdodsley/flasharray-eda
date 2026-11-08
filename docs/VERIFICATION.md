@@ -158,7 +158,11 @@ the user, the array and the command in the subject and the parsed fields
 first notification lands about 26 seconds before the change-control
 activation's REST audit poll reports the same command. The session
 records around those commands (session request, operation request,
-session end) are parsed and skipped. Everything else the controllers
+session end) are parsed and skipped, and so are the audit lines the
+array's own services write every few minutes (`purity` with auth source
+`system` for the scheduled protection group snapshots, `pure_datainsights`
+for its tag housekeeping), which fired the human-action rule until the
+listener counted them as automation. Everything else the controllers
 forward (sshd, sudo, bash, kernel, hundreds of lines a minute) is dropped
 by program before any rule sees it; before that filter existed the
 catch-all rule fired about 1,200 times in five minutes. `run_job_template`
@@ -203,6 +207,39 @@ is not the target of a replica link: Purity counts the sources linked to
 a pod in `link_source_count`, so a target pod has a source count above
 zero and an inbound link.
 
+The overdue-replication route runs on the same orchestrator.
+`orchestrator/replication_overdue_approval.json` is imported and
+published, and the bridge playbook posts an overdue event for the
+protection group that replicates from array A to array B, shaped as the
+replication signal emits it; the execution notifies, pauses at its
+one-hour approval, and on approval **FlashArray - replicate now** creates
+the immediate replicated snapshot on array A and publishes `pgroup`,
+`snapshot_suffix` and `changed`, which the closing notify reads, verified
+on three executions. The first version of the definition read artifact
+keys the playbook did not publish and failed at the closing notify, which
+validation cannot see, so the playbook publishes them, a unit test
+cross-checks every artifact a definition reads against its playbook's
+`set_stats`, and the corrected definition went live as the next version
+through the publish call that carries a definition. One execution's
+approval nobody decided within the hour expired: the orchestrator's worker
+records the decision as expired ("Approval decision window expired") and
+the execution fails at the approval node with neither port taken. The
+latest execution's approval was given from Slack through
+`slack/approval_bot.py` (below).
+
+Slack is exercised from the platform. **FlashArray - notify** with the
+`Slack webhook` credential attached posts the record to the channel (the
+post returns 200 and the failure report is skipped); the text is the
+severity icon, the severity, the subject with the array named once and the
+detail on its own line, and rendered against a capture server it carries a
+real line break, drops a carriage return and escapes `&`, `<` and `>`. The
+approval bot runs as a container on the platform host with its two
+secrets as podman secrets, connects over Socket Mode, posts the card for a
+new orchestrator approval within one poll, and a click on Approve decides
+it: the orchestrator records the approval under the bot's identity with
+`via Slack by <user> (<id>)` in the decision notes and the execution
+resumes into the replicate-now job.
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on an array:
@@ -244,6 +281,17 @@ event takes the same path as a live one.
   the platform capacity rulebook hands the event to the orchestrator
   (verified above) or launches the request job; it does not launch the
   controller workflow.
+- `tools/ao_sync.py` against a live orchestrator end to end: it is
+  exercised against its in-process mock, and the live imports were made
+  with the same calls (validate, create, publish with the definition in
+  the body) under an administrator login, because the service account the
+  tool authenticates as cannot list the project it needs.
+- The platform's Slack notification template posting: it is attached to
+  the job templates' error events and the controller-tier workflow's
+  approval, error and success events, and no job has failed and no
+  workflow has run since. The bot deciding a controller workflow approval:
+  the controller queue is polled, no approval was pending. An approval
+  with `fallback_decision` set.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

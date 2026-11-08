@@ -59,8 +59,8 @@ matters.
 - **The approval bot decides on behalf of its identity.** `slack/approval_bot.py`
   approves or rejects with the orchestrator and controller identities it
   holds; restrict who may click with `SLACK_APPROVERS` (Slack user ids), or
-  anyone in the channel can decide. Its tokens are read from files mounted
-  into its container, and it logs no secret.
+  anyone in the channel can decide. Its tokens reach it as podman secrets
+  or files, never on the command line, and it logs no secret.
 - **TLS verification is off by default** in the plugins and the playbooks
   (`verify_ssl: false`, `disable_warnings: true`) because arrays in a lab
   usually carry self-signed certificates. Turn it on where the arrays have

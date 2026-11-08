@@ -21,7 +21,7 @@ EDA controller need to resolve the event sources and run the playbooks:
 
 Everything else in the tree (tests, docs, the platform seed under `aap/`,
 the orchestrator definitions, the Prometheus rules, the baseline schema,
-the local launcher and the environment files, `tools/`, `venv/`,
+the local launcher and the environment files, `tools/`, `slack/`, `venv/`,
 `collections/` and `build/`) is development material and is listed in
 `build_ignore`, so the built artifact carries the collection content only.
 
