@@ -188,16 +188,21 @@ A live `purity.alert` line is verified by making the array raise an alert
 the way the QA suite's history shows it happens: stretching an empty
 scratch pod from array A to array B raises alert 152 (info, "<pod> is now
 online") on both arrays and alert 120 (critical, "offline on peer") on
-array A, which opens and closes within milliseconds. Each array sent one
-syslog line for the 152 alert, the alert rule fired on each and launched
-**FlashArray - notify**; no line arrived for the 120 alert. The layout
-(a level word, the subject, the code in brackets, the description, the
-support-case sentence, `Severity: <Word>`, UTC and array time, array name,
-domain, knowledge base link and suggested action) is what the listener now
-parses into fields, and the rule grades the notification by the severity
-word and names the code. Array B's open NTP alert (code 13, "Time sync
+array A, which opens and closes within milliseconds. Each array sends one
+syslog line for the 152 alert, and array A one for the 120 alert (not
+within the two minutes watched on every run); the alert rule fires on each
+and launches **FlashArray - notify**. The layout (a level word, the
+subject, the code in brackets, the description, the support-case sentence,
+`Severity: <Word>`, UTC and array time, array name, domain, knowledge base
+link and suggested action) is what the listener parses into fields, and
+with the rebuilt decision environment in the activation the notifications
+read "alert 152: <pod> is now online" at info and "alert 120: Pod offline
+on peer" at critical, each with the description and the knowledge base
+link. Array B's open NTP alert (code 13, "Time sync
 failure") had produced a line as well, which arrived 36 minutes after the
-alert's own UTC time. The pod is unstretched, its default protection
+alert's own UTC time. While the listener was absent for 80 minutes the
+arrays queued their lines and replayed them within two minutes of its
+return. The pod is unstretched, its default protection
 group taken off the pod's default-protection list, destroyed and
 eradicated, then the pod ([HARDWARE_NOTES.md](HARDWARE_NOTES.md)).
 
@@ -288,11 +293,10 @@ event takes the same path as a live one.
 
 ## Not verified
 
-- A critical `purity.alert` line: the info alert's line is verified
-  (above); the one critical alert the test raised closed within
-  milliseconds and produced no line, and 26 minutes without a reachable
-  NTP server raised nothing within the test window (array B raised its
-  NTP alert hours later).
+- An alert line from a hardware or capacity fault: the info, warning and
+  critical lines verified above came from a pod stretch and an NTP
+  failure; 26 minutes without a reachable NTP server raised nothing within
+  the test window (array B raised its NTP alert hours later).
 - The hardware, drive, latency, data-reduction and mediator rules firing
   for real: all eleven load and evaluate against live series, the capacity
   rule (lab override), the replica-link rule (a real pause) and the scrape

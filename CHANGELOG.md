@@ -87,8 +87,10 @@
   notify template posting to Slack from the platform; an approval nobody
   decided expiring and failing its execution at the approval node, with
   `fallback_decision` making no difference; live `purity.alert` lines from
-  both arrays (a scratch pod stretched between them) and the array's test
-  line over UDP; the scrape-failure rule through Alertmanager to the
+  both arrays (a scratch pod stretched between them: an info line from
+  each and a critical one, parsed into fields and graded by the rebuilt
+  decision environment) and the array's test line over UDP, with the
+  arrays replaying queued lines after an 80-minute listener outage; the scrape-failure rule through Alertmanager to the
   platform's activation, firing and resolved; the platform's Slack
   notification on a controller-tier approval and the bot's card for it;
   the alerts signal against a Purity//FA 6.12.4 array.

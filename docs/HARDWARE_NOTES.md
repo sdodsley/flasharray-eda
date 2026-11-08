@@ -19,7 +19,7 @@ unless stated.
 - Stretching an empty pod to a second array raises alert 152 (info, "pod
   is now online") on both arrays and alert 120 (critical, "offline on
   peer") on the source, which opens and closes within milliseconds: a safe
-  way to make a lab array raise real alerts.
+  way to make a lab array raise real alerts of two severities.
 - `POST /pods?with_default_protection=false` still receives the array's
   default protection group (retention lock `ratcheted`) at REST 2.46, and
   a pod cannot be destroyed while that group is in its default-protection
@@ -86,12 +86,17 @@ sends a `purity.test` line):
   UTC Time: <Mon DD HH:MM:SS> Array Time: <local> Array Name: <array>
   Domain: <domain> Knowledge Base Article: <url> Suggested Action: <text>`,
   one line per alert; the line for an open alert arrived 36 minutes after
-  the alert's own UTC time, and an alert that closed within milliseconds
-  produced none. The listener parses the layout into fields and grades the
-  event by the `Severity` word.
+  the alert's own UTC time, and the line for an alert that closed within
+  milliseconds (pod offline on peer, critical) arrived in one run and not
+  within the two minutes watched in another. The listener parses the
+  layout into fields and grades the event by the `Severity` word.
 - A PATCH of a syslog server's URI from `tcp://` to `udp://` leaves the
   controllers' TCP connections up; delete and recreate the server to make
   the array switch transport.
+- The array queues syslog messages while a TCP target is down and replays
+  them when the connection is back: alert lines from an 80-minute listener
+  outage arrived within two minutes of the listener's return, in order,
+  with their original `UTC Time` fields.
 - The header timestamp is the array's local time without a year; the
   message's `UTC Time` is the one to record.
 
@@ -192,10 +197,10 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
 - `ansible.eda.rulebook_activation` cannot modify an activation; the
   enabled flag is the one thing a seed can still set, so the seed enforces
   it on every run and a site keeps it true once the activations run. An
-  activation keeps the rulebook it was created with, and a project is
-  synced when it is created, not on later seed runs: a changed playbook
-  reaches a job template after a project sync, a changed rule reaches an
-  activation after it is recreated.
+  activation keeps the rulebook and the extra vars it was created with,
+  and a project is synced when it is created, not on later seed runs: a
+  changed playbook reaches a job template after a project sync, a changed
+  rule or a new vars key reaches an activation after it is recreated.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under

@@ -284,8 +284,13 @@ platform cannot read back: credentials are updated only with
 changed on every run. `ansible.eda.rulebook_activation` cannot modify an
 existing activation; to change one (a new rulebook, a new variable in its
 extra vars), delete it in the UI or through the API and re-run, which
-recreates only that one; an activation keeps the rulebook it was created
-with, so a changed rule reaches it the same way. The run also sets
+recreates only that one; an activation keeps the rulebook and the extra
+vars it was created with, so a changed rule or a new vars key reaches it
+the same way (a rule that reads a key the activation's copy of the vars
+file lacks fails at source start with "is undefined"). A change to an
+event source plugin travels further still: the collection is built into
+the decision environment, so the image is rebuilt, loaded into the store
+the activation workers use, and the activation recreated. The run also sets
 `aap_eda_activations_enabled` on every FlashArray activation, so a site
 whose activations are running keeps the key true in its vars file. The
 two projects are synced when the seed creates them and not on later runs,
