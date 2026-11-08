@@ -54,7 +54,7 @@ class FakeWeb:
 
     def chat_postMessage(self, **kw):
         self.posted.append(kw)
-        return {"ts": f"{len(self.posted)}.000"}
+        return {"ts": f"{len(self.posted)}.000", "channel": "C1"}
 
     def chat_update(self, **kw):
         self.updated.append(kw)
@@ -307,6 +307,40 @@ def test_bot_posts_new_approvals_once_and_carries_a_click_back(bot):
         "orchestrator:ap-2" not in b.posted
         and "decided outside Slack" in web.updated[-1]["blocks"][0]["text"]["text"]
     )
+    # the update names the channel id the post returned, not the configured name
+    assert web.updated[-1]["channel"] == "C1"
+
+
+class FailingUpdateWeb(FakeWeb):
+    def chat_update(self, **kw):
+        raise RuntimeError("channel_not_found")
+
+
+def test_a_failed_card_update_does_not_stop_the_poll(bot):
+    http = FakeHttp(
+        {
+            ("POST", "/api/v1/auth/login"): (200, {"access_token": "u-tok"}),
+            ("GET", "/api/v1/approvals"): (
+                200,
+                {"resources": [{"id": "ap-1", "prompt": "x", "node_name": "n"}]},
+            ),
+            ("GET", "/api/controller/v2/workflow_approvals/"): (200, {"results": []}),
+        }
+    )
+    web = FailingUpdateWeb()
+    b = bot.Bot(
+        web,
+        "#test",
+        [
+            bot.Orchestrator("https://ao", username="a", password="p", http=http),
+            bot.Controller("https://aap", "tok", http=http),
+        ],
+    )
+    b.poll_once()
+    http.answers[("GET", "/api/v1/approvals")] = (200, {"resources": []})
+    b.poll_once()  # the orchestrator card is stale and its update fails
+    assert "orchestrator:ap-1" not in b.posted
+    assert sum(1 for c in http.calls if "workflow_approvals" in c[1]) == 2
 
 
 def test_bot_reports_a_refused_decision(bot):

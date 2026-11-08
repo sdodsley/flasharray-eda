@@ -429,30 +429,41 @@ class Bot:
                         text=f"Approval needed: {approval.title}",
                         blocks=build_card(approval),
                     )
-                    self.posted[approval.key] = (response["ts"], approval)
+                    # chat.update wants the channel id, which the post returns
+                    self.posted[approval.key] = (
+                        response["ts"],
+                        approval,
+                        response.get("channel") or self.channel,
+                    )
                     logger.info("posted %s", approval.key)
             # approvals decided elsewhere (the UI, a timeout) lose their buttons
             with self.lock:
-                for key in [
+                stale = [
                     k
                     for k in self.posted
                     if k.startswith(system.name + ":") and k not in seen
-                ]:
-                    ts, approval = self.posted.pop(key)
-                    self.web.chat_update(
-                        channel=self.channel,
-                        ts=ts,
-                        text=f"Decided elsewhere: {approval.title}",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*{approval.title}* ({approval.system}) was decided outside Slack or expired.",
+                ]
+                for key in stale:
+                    ts, approval, channel = self.posted.pop(key)
+                    try:
+                        self.web.chat_update(
+                            channel=channel,
+                            ts=ts,
+                            text=f"Decided elsewhere: {approval.title}",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": f"*{approval.title}* ({approval.system}) was decided outside Slack or expired.",
+                                    },
                                 },
-                            },
-                        ],
-                    )
+                            ],
+                        )
+                    except (
+                        Exception
+                    ) as exc:  # the card keeps its buttons; a click is refused by the system
+                        logger.warning("could not update the card for %s: %s", key, exc)
 
     def handle_action(self, payload):
         parsed = parse_action(payload)
@@ -486,7 +497,7 @@ class Bot:
             logger.warning("decision failed for %s: %s", key, exc)
             return "failed"
         self.web.chat_update(
-            channel=channel or self.channel,
+            channel=channel or (entry[2] if entry else self.channel),
             ts=ts or (entry[0] if entry else None),
             text=f"{decision} {approval.title} by {user_name}",
             blocks=decided_card(approval, decision, user_name, "Slack"),

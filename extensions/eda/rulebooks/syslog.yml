@@ -38,9 +38,18 @@
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
-            severity: "{{ 'critical' if event.purefa_syslog.severity in ['emerg', 'alert', 'crit', 'err'] else 'warning' }}"
-            subject: "{{ event.purefa_syslog.array }} alert (syslog): {{ event.purefa_syslog.message }}"
-            detail: "syslog {{ event.purefa_syslog.severity }} from {{ event.purefa_syslog.source }} at {{ event.purefa_syslog.time }}"
+            severity: >-
+              {{ 'critical' if event.purefa_syslog.severity in ['emerg', 'alert', 'crit', 'err']
+              else ('info' if event.purefa_syslog.severity in ['notice', 'info', 'debug'] else 'warning') }}
+            subject: >-
+              {{ event.purefa_syslog.array }} alert{{ (' ' ~ event.purefa_syslog.fields.code) if event.purefa_syslog.fields.code is defined else '' }}:
+              {{ event.purefa_syslog.fields.subject | default(event.purefa_syslog.message) }}
+            detail: >-
+              {{ event.purefa_syslog.fields.description | default('') }}
+              {{ ('KB ' ~ event.purefa_syslog.fields.knowledge_base_url) if event.purefa_syslog.fields.knowledge_base_url is defined else '' }}
+              (syslog {{ event.purefa_syslog.severity }} from {{ event.purefa_syslog.source }},
+              {{ event.purefa_syslog.fields.utc_time | default(event.purefa_syslog.time) }} UTC)
+            alert_code: "{{ event.purefa_syslog.fields.code | default('') }}"
             target_array: "{{ event.purefa_syslog.array }}"
             alert_log: "{{ alert_log }}"
 

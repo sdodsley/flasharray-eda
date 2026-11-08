@@ -84,6 +84,14 @@ fields         audit lines come in two layouts and both are parsed:
                  (`operation` and others as the prefix says).
                Every audit line carries message_kind (`other` when neither
                layout matched); test lines carry utc_time and array_name.
+               Alert lines (`<LEVEL> <subject> [<code>]<description>  A Pure
+               Storage Support case has|has not been created ...  Severity:
+               <Word>  UTC Time: ... Array Time: ... Array Name: x Domain: d
+               Knowledge Base Article: <url> Suggested Action: ...`) give
+               code, subject, description, severity_word (which also sets
+               `severity`), support_case, knowledge_base_url,
+               suggested_action, domain, array_time, utc_time, array_name
+               and message_kind `alert`.
 user           fields.user when present
 action         fields.action when present
 result         fields.result when present
@@ -262,9 +270,24 @@ MSGID = re.compile(r"\((?P<what>[^)]*?)\s*message ID:\s*(?P<id>\d+)\)")
 # Unquoted trailers the array appends to command and test messages
 MSGID_TRAILER = re.compile(r"\bMessage ID:\s*(\d+)")
 UTC_TRAILER = re.compile(
-    r"\bUTC Time:\s*(.+?)(?=\s+(?:Array Name|Message ID|User|Location):|\s*$)"
+    r"\bUTC Time:\s*(.+?)(?=\s+(?:Array Name|Array Time|Message ID|User|Location):|\s*$)"
 )
 ARRAY_TRAILER = re.compile(r"\bArray [Nn]ame:\s*'?([^'\s]+)'?")
+# purity.alert as Purity//FA 6.10.6 sends it: "<LEVEL> <subject> [<code>]
+# <description>  A Pure Storage Support case has|has not been created ...
+# Severity: <Word>  UTC Time: ... Array Time: ... Array Name: ... Domain: ...
+# Knowledge Base Article: <url> Suggested Action: <text>"
+ALERT = re.compile(
+    r"^(?P<level>[A-Z]{4,13})\s+(?P<subject>.+?)\s*\[(?P<code>\d+)\]\s*(?P<description>.*?)"
+    r"(?:\s+A Pure Storage Support case (?P<case>has not|has) been created[^.]*\."
+    r"(?:\s*Please contact[^.]*\.)?)?"
+    r"\s+Severity:\s*(?P<severity>[A-Za-z]+)\s+UTC Time:",
+    re.S,
+)
+ALERT_KB = re.compile(r"\bKnowledge Base Article:\s*(\S+)")
+ALERT_ACTION = re.compile(r"\bSuggested Action:\s*(.+?)\s*$", re.S)
+ALERT_DOMAIN = re.compile(r"\bDomain:\s*(\S+)")
+ARRAY_TIME = re.compile(r"\bArray Time:\s*(.+?)(?=\s+Array Name:|\s*$)")
 SEVERITY_IN_TEXT = re.compile(
     r"^(?P<lead>[A-Z]{4,13})\b|\bseverity[:=\s]+'?(?P<word>[A-Za-z]+)'?", re.I
 )
@@ -390,6 +413,29 @@ def _command_fields(m):
     return fields
 
 
+def _alert_fields(m, msg):
+    """Fields of the alert layout from its regex match and the whole text."""
+    fields = {
+        "code": m.group("code"),
+        "subject": m.group("subject").strip(),
+        "description": " ".join(m.group("description").split()),
+        "severity_word": m.group("severity").lower(),
+        "message_kind": "alert",
+    }
+    if m.group("case") is not None:
+        fields["support_case"] = m.group("case") == "has"
+    for key, rx in (
+        ("knowledge_base_url", ALERT_KB),
+        ("suggested_action", ALERT_ACTION),
+        ("domain", ALERT_DOMAIN),
+        ("array_time", ARRAY_TIME),
+    ):
+        t = rx.search(msg)
+        if t:
+            fields[key] = " ".join(t.group(1).split())
+    return fields
+
+
 def parse(line, arrays, automation, system_users=None):
     if system_users is None:
         system_users = set(DEFAULT_SYSTEM_USERS)
@@ -404,9 +450,13 @@ def parse(line, arrays, automation, system_users=None):
     msg = m.group("msg")
     kind = (prog.split(".", 1)[1] if prog.startswith("purity.") else "") or "other"
     cmd = COMMAND.match(msg)
+    alert = ALERT.match(msg) if kind == "alert" else None
     if cmd:
         fields = _command_fields(cmd)
         trailer = cmd.group("rest")
+    elif alert:
+        fields = _alert_fields(alert, msg)
+        trailer = msg
     else:
         r = RESULT.search(msg)
         # take "Result: Success" out before pairing keys, or the next key
@@ -441,7 +491,10 @@ def parse(line, arrays, automation, system_users=None):
         array=_array_name(fields, host, arrays),
         host=host,
         severity=(
-            SEVERITIES[int(pri) % 8] if pri is not None else _severity_from_text(msg)
+            SEVERITIES[int(pri) % 8]
+            if pri is not None
+            else SEVERITY_WORDS.get(fields.get("severity_word", ""))
+            or _severity_from_text(msg)
         ),
         facility=int(pri) // 8 if pri is not None else None,
         time=m.group("time"),

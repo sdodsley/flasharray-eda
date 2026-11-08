@@ -522,10 +522,38 @@ def test_every_rulebook_gets_an_activation_name(repo_root):
 # the string, so a '\n' written there is a backslash and an n, never a line
 # break (a real one belongs to the YAML: a block scalar, or "\n" in a
 # double-quoted scalar). Regex arguments are the exception: the doubling is
-# what carries '\r' to the regex engine as a carriage-return class.
+# what carries '\r' to the regex engine as a carriage-return class. The scan
+# runs over the loaded YAML, where a YAML escape is already a newline and only
+# a Jinja literal is still two characters.
 ESCAPE_LITERAL = re.compile(r"""(['"])(?:\\.|(?!\1).)*\\[nrt](?:\\.|(?!\1).)*\1""")
 REGEX_FILTER = re.compile(r"regex_(?:replace|search|findall|escape)\(\s*$")
 JINJA_EXPRESSION = re.compile(r"\{\{.*?\}\}", re.S)
+
+
+class _TolerantLoader(yaml.SafeLoader):
+    """SafeLoader that passes any local tag (!unsafe, !vault) through."""
+
+
+def _any_tag(loader, suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    return loader.construct_mapping(node)
+
+
+_TolerantLoader.add_multi_constructor("!", _any_tag)
+
+
+def _strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _strings(value)
 
 
 def test_no_escape_literals_inside_jinja_expressions(repo_root):
@@ -537,14 +565,14 @@ def test_no_escape_literals_inside_jinja_expressions(repo_root):
     )
     offenders = []
     for path in sorted(files):
-        text = path.read_text()
-        for expression in JINJA_EXPRESSION.finditer(text):
-            body = expression.group(0)
-            for literal in ESCAPE_LITERAL.finditer(body):
-                if REGEX_FILTER.search(body[: literal.start()]):
-                    continue
-                line = text.count("\n", 0, expression.start()) + 1
-                offenders.append(
-                    f"{path.relative_to(repo_root)}:{line}: {literal.group(0)}"
-                )
+        documents = list(yaml.load_all(path.read_text(), Loader=_TolerantLoader))
+        for text in _strings(documents):
+            for expression in JINJA_EXPRESSION.finditer(text):
+                body = expression.group(0)
+                for literal in ESCAPE_LITERAL.finditer(body):
+                    if REGEX_FILTER.search(body[: literal.start()]):
+                        continue
+                    offenders.append(
+                        f"{path.relative_to(repo_root)}: {literal.group(0)} in {body[:70]!r}"
+                    )
     assert offenders == [], "\n".join(offenders)

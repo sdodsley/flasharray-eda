@@ -26,8 +26,8 @@
           array: "{{ target_array | default('') }}"
           subject: "{{ subject }}"
           detail: "{{ detail | default('') | trim }}"
-          alert_id: "{{ alert_id | default(omit) }}"
-          alert_code: "{{ alert_code | default(omit) }}"
+          alert_id: "{{ (alert_id | default('')) or omit }}"
+          alert_code: "{{ (alert_code | default('')) or omit }}"
 
     - name: Append to the alert log
       ansible.builtin.lineinfile:
