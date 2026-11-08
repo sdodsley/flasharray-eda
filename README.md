@@ -126,15 +126,21 @@ Three things to get right on the first run:
 | `syslog.yml` | purefa_syslog | `purity.audit` / `purity.alert` / `purity.test` lines pushed by the array | fast notification seconds after the fact |
 | `alertmanager.yml` | ansible.eda.alertmanager | alerts from `prometheus/flasharray.rules.yml` on the native OpenMetrics exporter | the same playbooks, no custom code on the array side |
 
-Every remediation is gated: `maintenance_active` on the event (one cached
-`/maintenance-windows` read per array), an `automation_users` list so the
-automation never reacts to itself, and per-site switches
-(`qos_auto_cap`, `activecluster_auto_prefer`, `replication_auto_replicate_now`)
-that fall back to notify; `orchestrator_enabled` moves the capacity and
-overdue-replication decisions into the automation orchestrator. Every
-record a playbook writes to the alert log carries `time`, `kind`,
-`severity` and `array`, and every notification also reaches Slack when a
-webhook is configured ("Notifications" below).
+The gates are what each event allows. `maintenance_active` (one cached
+`/maintenance-windows` read per array) travels on alert, audit, hardware
+and replication events and holds back the alert runbooks, the reconcile,
+the identify LED, the preferred-array move and replicate-now; the config
+and telemetry events carry no such flag, so the NTP and DNS reapply and
+the QoS cap run inside a window too. `automation_users` keeps the
+audit-driven rules (reconcile, protect-now) from reacting to the
+automation's own changes. Three per-site switches fall back to notify:
+`qos_auto_cap`, `activecluster_auto_prefer` and
+`replication_auto_replicate_now`; the reapply, the reconcile, the identify
+LED, protect-now and the DR drill have none, and `orchestrator_enabled`
+moves the capacity and overdue-replication decisions into the automation
+orchestrator. Every record a playbook writes to the alert log carries
+`time`, `kind`, `severity` and `array`, and every notification also
+reaches Slack when a webhook is configured ("Notifications" below).
 
 ## Layout
 
@@ -252,7 +258,9 @@ differently (see also [SECURITY.md](SECURITY.md)):
 
 ## Notifications
 
-Every rule that notifies runs `playbooks/notify.yml`, which appends a
+Every rule that notifies runs `playbooks/notify.yml` (the alert runbook
+map is the exception: `alert_runbook.yml` writes its own ticket or notify
+record and posts nothing), which appends a
 record to the alert log and, when `SLACK_WEBHOOK_URL` is set (env file;
 on the platform the `Slack webhook` credential on the notify template),
 posts the same record to a Slack incoming webhook: an icon for the
@@ -261,8 +269,9 @@ detail on the next line, escaped for Slack. A failed post is reported in
 the job and never fails the notification; the alert log is the record,
 Slack is the pager. On the platform `aap/seed.yml` also
 creates a Slack notification template (bot token, `chat:write`) that posts
-job failures and the controller-tier workflow's approval events, each
-with its link into the platform ([aap/README.md](aap/README.md)).
+job failures and the controller-tier workflow's approval, success and
+failure events, each with its link into the platform
+([aap/README.md](aap/README.md)).
 Deciding from the channel is `slack/approval_bot.py`: a Socket Mode bot
 that posts every pending orchestrator and controller approval as a card
 with Approve and Reject buttons and carries the click back with the Slack
@@ -296,7 +305,8 @@ seeded job templates and the webhook rulesets left out, because approvals
 and git pushes arrive through the controller workflow and event streams
 there. `aap/seed.yml` creates the organization, the credential types
 (`FlashArray API`, one credential per array; `FlashArray fleet`, whose
-single credential carries every array; `Orchestrator service account`),
+single credential carries every array; `Orchestrator service account`;
+`Slack webhook`),
 the credentials, inventory, project, job templates, the controller-tier
 approval workflow and one rulebook activation per platform rulebook
 ([aap/README.md](aap/README.md)). The seed, the job templates and
@@ -360,7 +370,8 @@ documented in `vars/example.yml` and every playbook a rule runs to exist,
 plus the orchestrator bridge against its mock, the linter and its
 fixtures, the sync tool against an in-process mock of the orchestrator
 API, the Slack bot with a fake HTTP function and a fake Slack client, and
-the job artifacts every playbook publishes); and a playbook syntax check.
+the job artifacts every playbook a workflow node may follow publishes);
+and a playbook syntax check.
 `tests/unit/test_orchestrator_bridge.py` runs `orchestrator_post.yml`
 against the mock (skipped without `ansible-playbook`), `test_ao_lint.py`
 covers every linter rule with a fixture and checks that every
@@ -372,8 +383,9 @@ artifacts, the credential guard and the seed. GitHub Actions runs the same
 on every push.
 
 `tests/replay_*.yml` are copies of the live rules driven by
-`ansible.eda.generic` from the fixtures under `tests/fixtures/`
-(ansible-rulebook has no include). They must stay rule-for-rule identical
+`ansible.eda.generic` from the fixtures under `tests/fixtures/`, or from
+an inline payload (`replay_capacity.yml`); ansible-rulebook has no
+include. They must stay rule-for-rule identical
 to the real rulebooks, throttles included; the unit test fails when they
 drift.
 

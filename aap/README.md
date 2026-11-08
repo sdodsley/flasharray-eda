@@ -90,11 +90,13 @@ platform API from where it runs.
 | EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`, pulled with `aap_eda_de_pull_policy`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the store the activation workers use ("Images on a containerized platform") |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |
-| EDA rulebook activations | `FlashArray rulebook - <name>` | one per file in `extensions/eda/rulebooks/platform/`, with the fleet credential and, when it exists, the orchestrator credential attached; created disabled (see below) |
+| EDA rulebook activations | `FlashArray rulebook - <name>` | one per file in `extensions/eda/rulebooks/platform/`, with the fleet credential, the `Platform user - flasharray-eda` credential (the one the `run_job_template` actions launch as) and, when it exists, the orchestrator credential attached; disabled unless the site vars say otherwise (see below) |
 
 The names in the job template column are fixed: the orchestrator workflow
 definitions and the platform rulebooks' `run_job_template` actions refer
-to them, `orchestrator/job_templates.txt` lists them, and
+to them, `orchestrator/job_templates.txt` lists the seventeen a definition
+or a platform rulebook launches (`FlashArray - apply baseline` is launched
+by people and the git-push ruleset only), and
 `tests/unit/test_playbook_artifacts.py` checks that `seed.yml` carries
 them. `FlashArray - orchestrator post` runs
 `playbooks/orchestrator_post.yml`; it is created only when the orchestrator
@@ -193,11 +195,12 @@ nodes have it, and point the three variables there.
 ## The controller-tier workflow
 
 `FlashArray - capacity reclaim (controller tier)` is the approval gate the
-standalone webhook ruleset stands in for. Launch it with the variables the
-capacity rule passes to `capacity_request.yml` (`at_risk_array`,
-`used_pct`, `days_to_full`, ... and `target_array` set to the same array
-so the notify records carry it), from the capacity rulebook with
-`run_workflow_template` or by hand. The variables must have the event's
+standalone webhook ruleset stands in for. Launch it by hand with the
+variables the capacity rule passes to `capacity_request.yml`
+(`at_risk_array`, `used_pct`, `days_to_full`, ... and `target_array` set to
+the same array so the notify records carry it); the platform capacity
+rulebook does not launch it (it runs `FlashArray - capacity request` on
+its own, or hands the event to the orchestrator). The variables must have the event's
 shape: `candidate_targets` is a list of `{array, used_pct}` records, not a
 list of names. The request node's artifacts (`request_id`, `at_risk_array`,
 `candidate_count`, `candidates`) are passed to the following nodes as extra
@@ -246,9 +249,11 @@ rulebook (`rulebook_name` is the file's path relative to
 lists a rulebook in a subdirectory). Each activation gets:
 
 - as extra vars, the rulebook vars file (`FAEDA_VARS`, else
-  `vars/example.yml`) minus `purefa_arrays`, plus `aap_organization`;
-  minus `orchestrator_url` as well when the orchestrator credential is
-  attached. The controller refuses an activation whose extra vars and
+  `vars/example.yml`) laid over `vars/example.yml`, so a key the site file
+  lacks keeps its default, minus `purefa_arrays` and `config_arrays` (the
+  config and change-control sources fall back to the fleet list), plus
+  `aap_organization`; minus `orchestrator_url` as well when the
+  orchestrator credential is attached. The controller refuses an activation whose extra vars and
   credentials define the same key, so what a credential injects is removed
   from the file's content;
 - the `FlashArray fleet - <organization>` EDA credential, whose type
@@ -264,10 +269,11 @@ refuses two credentials of one injecting type on an activation ("Key:
 fa_url already exists in extra_vars"); they serve a rulebook copy that
 polls one array only.
 
-The activations are created **disabled** (`aap_eda_activations_enabled:
-false`) and the flag is enforced on every activation on every run, because
-`ansible.eda.rulebook_activation` cannot modify an existing activation and
-the enable and disable endpoints are the one thing the seed can still set.
+The activations end up **disabled** by default (`aap_eda_activations_enabled:
+false`): `ansible.eda.rulebook_activation` creates an activation enabled
+whatever it is told and cannot modify one afterwards, so the seed sets the
+flag through the enable and disable endpoints on every activation on every
+run, the one thing it can still change.
 Set it true in the site vars file once the decision environment image,
 with the `sdodsley.flasharray_eda` collection in it, is in the activation
 workers' store, and keep it there: a later run with the example default

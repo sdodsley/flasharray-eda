@@ -211,7 +211,10 @@ design.
   Every alert-log record carries time, kind, severity and array;
   `identify_led.yml` accepts a `severity` extra var.
 - `expand_volume.yml` grows a volume (day-2) behind size and name guards.
-- Every action playbook ends with an `ansible.builtin.set_stats` task that
+- Every playbook a workflow or orchestrator node may follow ends with an
+  `ansible.builtin.set_stats` task (`remediate_ntp.yml`,
+  `remediate_dns.yml` and `preferred_array.yml` record their work in the
+  alert log only) that
   publishes job artifacts for workflow and orchestrator nodes (`request_id`
   / `candidate_count` / `candidates`, `failed_count` / `drills`, `old_size`
   / `new_size`, ...; the keys are listed in
@@ -277,7 +280,7 @@ design.
   through `ansible.eda.alertmanager`.
 - A decision environment on `quay.io/ansible/ansible-rulebook:v1.3.2`: the
   Containerfile and the ansible-builder definition produce the same tree
-  and share the root `requirements.yml`. CI does not build the image.
+  and both build the collection from the checkout. CI does not build the image.
 - [docs/PACKAGING.md](docs/PACKAGING.md) lists the steps to move the
   content into the `everpure.flasharray` collection.
 

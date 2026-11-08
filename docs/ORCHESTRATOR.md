@@ -40,9 +40,12 @@ actions.
 - `true`: the rule runs `playbooks/orchestrator_post.yml`, which posts the
   whole event to the EDA trigger named by `orchestrator_paths.capacity`.
   No request file is written and the approvals webhook is idle for that
-  rule. Approve or reject, and the reclaim that follows, happen in the
-  orchestrator workflow (an `approval` node, then an `aap_job_template`
-  node that runs the reclaim with the event's fields as `extra_vars`).
+  rule. The request, the approval and the reclaim happen in the
+  orchestrator workflow: an `aap_job_template` node raises the capacity
+  request with the event's fields as `extra_vars`, an `approval` node
+  waits, and an `aap_job_template` node runs the reclaim with the request
+  job's artifacts (`request_id`, `candidates`), the event's `array` and the
+  constants `rebuild_from_artifacts`, `reclaim_action` and `approver`.
 
 The switch is a literal in the rule's condition (`vars.orchestrator_enabled
 == true` / `== false`), because rulebook conditions take no filters or

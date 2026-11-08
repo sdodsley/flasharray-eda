@@ -451,9 +451,10 @@ def _poll_error(signal, array, error):
 def _maintenance(arr, state, max_age=20.0):
     """Active maintenance windows on the array, cached briefly across signals.
 
-    Every signal stamps `maintenance_active` on its events so a rule can
-    suppress remediation while someone has declared work on the array,
-    without cross-signal facts in the rulebook.
+    The alert, audit, health and replication signals stamp
+    `maintenance_active` on their events so a rule can suppress remediation
+    while someone has declared work on the array, without cross-signal
+    facts in the rulebook; the telemetry and config events carry no flag.
     """
     cache = state.setdefault("maintenance", {}).setdefault(
         arr.name, {"at": 0, "windows": []}

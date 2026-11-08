@@ -130,9 +130,12 @@ own array, and the day-2 job nodes to `FlashArray - ${trigger.array}`, the
 array the form asked for (the node resolves the names in the organization
 at launch): a per-array credential on the launch takes precedence over the
 fleet, and the playbooks refuse to run when `credential_array` is not the
-array they were asked to act on. The DR-drill and DR failover test nodes
-use what their templates carry; pick a specific array's credential on a
-node the same way.
+array they were asked to act on. The DR failover test nodes set
+`credential_names` to `FlashArray - ${trigger.target_array}`, the DR-side
+array the form asked for, and the replicate-now node to
+`FlashArray - ${trigger.event.array}`; only the DR-drill node, which acts
+on every replication target, uses what its template carries. Pick a
+specific array's credential on a node the same way.
 
 The condition nodes route on job artifacts, which the playbooks publish
 with `set_stats` so the orchestrator sees them as
@@ -226,11 +229,12 @@ not resolve; a placeholder still left after substitution fails its
 definition. Each definition is then validated by the orchestrator
 (`POST /api/v1/workflows/validate`; an invalid one is reported with its
 findings and not imported), created when the project has no workflow of its
-name (`POST /api/v1/workflows`), updated in place when the exported current
-version differs (`PATCH /api/v1/workflows/{id}/versions/{version}`), left
-alone when it is equal, and published
-(`POST /api/v1/workflows/{id}/versions/{version}/publish`) after a create or
-an update, or when the current version has never been published. It prints
+name (`POST /api/v1/workflows`), updated when the exported current version
+differs (`POST /api/v1/workflows/{id}/versions/{version}/publish` with the
+new definition and `expected_version` in the body, which the orchestrator
+stores and publishes as the next version; no PATCH is sent), left alone
+when it is equal, and published (the same call with an empty body) after a
+create or when the current version has never been published. It prints
 one line per definition (`created`, `updated` or `unchanged`, and the
 published version) and `extra: <name>` for each workflow of the project that
 no file defines; `--dry-run` validates and reports the decisions without

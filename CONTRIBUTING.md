@@ -38,9 +38,13 @@ rulebooks, throttles included.
   untemplated file; `localhost` must be in the inventory; `run_playbook`
   copies the playbook's whole directory, so relative includes within
   `playbooks/` work and files outside it do not.
-- Every action that changes an array is gated: `maintenance_active` on the
-  event, `automation_users` so the automation never reacts to itself, and a
-  per-site switch that falls back to notify.
+- An action that changes an array is gated by what its event carries:
+  `maintenance_active` where the event has it (alert, audit, hardware and
+  replication events; config and telemetry events do not), `automation_users`
+  on audit events so the automation never reacts to itself, and a per-site
+  switch that falls back to notify on the QoS cap, the preferred-array move
+  and replicate-now. A new action states which of the three it has, and
+  README.md's gating paragraph says so.
 - Every record a playbook appends to the alert log carries `time`, `kind`,
   `severity` and `array`.
 - State that must survive a rulebook restart lives on the array (tags in the

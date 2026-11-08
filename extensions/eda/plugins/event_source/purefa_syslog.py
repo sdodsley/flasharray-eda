@@ -109,8 +109,10 @@ Format verification: the layouts above are the ones Purity//FA 6.10.6 sends
 over TCP (no PRI, `purity.audit[pid]:`, the command layout for every CLI,
 GUI and REST command and the `Key: 'value'` layout for session records);
 the `Key: 'value'` layout is also what Pure's SIEM partners publish. The
-purity.alert text has not been seen from a live array; alert lines are
-emitted whole with the severity read from the text when present.
+purity.alert layout above is the one a stretched scratch pod and an NTP
+failure produced on 6.10.6 (an info, a warning and a critical line); a
+line the ALERT regex does not match is emitted whole with the severity read
+from the text when present.
 """
 
 DOCUMENTATION = r"""

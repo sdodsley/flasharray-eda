@@ -52,17 +52,19 @@ Forward both into tickets.
 | Transport | How | Latency | Customer needs |
 | --- | --- | --- | --- |
 | Pull | `purefa_events`: one asyncio source plugin, N arrays (verified with two), six signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
-| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 and 5424 headers with or without a priority, the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array forwards too) dropped, the array's own service accounts counted as automation (`system_users`), audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes; `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
+| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 headers with or without a priority (the array sends none) and RFC 5424 headers, the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array forwards too) dropped, the array's own service accounts counted as automation (`system_users`), audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes; `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
 | Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
 The Prometheus rules cover hardware and drive status, capacity and
 days-to-full, data reduction drop, read and write latency against last
 week, replica link lag and state, stretched-pod mediator state and scrape
 failure; each carries a `domain`
-label. `alertmanager.yml` maps them to the same playbooks: hardware alerts
-drive the identify-LED playbook, capacity alerts raise the approval request,
-the rest notify, resolved alerts are logged. No code from this project runs
-on the array side of that path.
+label. `alertmanager.yml` maps them to the same playbooks by alert name:
+`FlashArrayHardwareComponentNotOk` drives the identify-LED playbook,
+`FlashArrayCapacityHigh` raises the approval request, every other firing
+alert (drive health and days-to-full among them) notifies with the
+`domain` label in the detail, resolved alerts are logged. No code from this
+project runs on the array side of that path.
 
 `ansible.eda` ships alertmanager, webhook, kafka, journald, file_watch,
 url_check, tick, generic, pg_listener and cloud queue sources. There is no
@@ -179,9 +181,10 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   approved request whose action was proposed runs, and `eradicate_pending`
   (`capacity_reclaim.yml`) eradicates destroyed volumes and snapshots,
   reporting anything the array refuses. On Ansible Automation Platform the
-  webhook ruleset gives way to a workflow whose first node is a manual
-  approval (`run_workflow_template`; `aap/seed.yml` creates it), and
-  `orchestrator_enabled` hands the event to the automation orchestrator
+  webhook ruleset gives way to a controller workflow that `aap/seed.yml`
+  creates (request job, manual approval node, reclaim), launched by hand
+  while the platform capacity rulebook runs the request job template on its
+  own, and `orchestrator_enabled` hands the event to the automation orchestrator
   instead ([ORCHESTRATOR.md](ORCHESTRATOR.md); `orchestrator_fallback_local`
   raises the local request when a handoff produced no execution). Both
   platform paths are
@@ -241,21 +244,28 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
   UIs or from the channel through `slack/approval_bot.py`: a Socket Mode
   bot that posts every pending approval as a card with Approve and Reject
   buttons and carries the click back under its own orchestrator or
-  controller identity, with the Slack user in the decision notes and an
-  allow-list of who may click ([SECURITY.md](../SECURITY.md)). Mail and
+  controller identity, with the Slack user in the orchestrator's decision
+  notes (the controller's approval call has no notes field; the bot's log
+  records the user) and an allow-list of who may click
+  ([SECURITY.md](../SECURITY.md)). Mail and
   ServiceNow are design intent; the notify playbook is where they go.
 
 ## 5. Gates
 
-Every remediation passes the same gates; the table in
+Each remediation passes the gates its event allows; the table in
 [What it does](../README.md#what-it-does) shows them per rulebook.
 
 - `maintenance_active` on the event, from one cached `/maintenance-windows`
-  read per array.
-- `automation_users`, so the automation never reacts to itself.
-- Per-site switches `qos_auto_cap`, `activecluster_auto_prefer`,
-  `replication_auto_replicate_now` and `orchestrator_enabled` that fall back
-  to notify.
+  read per array: carried by alert, audit, hardware and replication events,
+  not by config or telemetry events, so the NTP and DNS reapply and the QoS
+  cap run inside a window.
+- `automation_users`, so the audit-driven rules never react to the
+  automation's own changes.
+- Per-site switches `qos_auto_cap`, `activecluster_auto_prefer` and
+  `replication_auto_replicate_now` that fall back to notify, and
+  `orchestrator_enabled` that moves a decision into the orchestrator. The
+  reapply, the reconcile, the identify LED, protect-now and the DR drill
+  have no switch.
 - State that must survive a restart lives on the array or in a file, never
   in a rulebook fact.
 

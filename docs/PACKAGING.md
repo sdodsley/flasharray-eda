@@ -26,8 +26,9 @@ the local launcher and the environment files, `tools/`, `slack/`, `venv/`,
 `build_ignore`, so the built artifact carries the collection content only.
 
 The event sources are `sdodsley.flasharray_eda.purefa_events` and
-`sdodsley.flasharray_eda.purefa_syslog`, and the nine standalone rulebooks
-declare them under those names. ansible-rulebook resolves a FQCN source
+`sdodsley.flasharray_eda.purefa_syslog`, and nine of the ten standalone
+rulebooks declare them under those names (`alertmanager.yml` uses the stock
+`ansible.eda.alertmanager` source alone). ansible-rulebook resolves a FQCN source
 from `ANSIBLE_COLLECTIONS_PATH`, which is why the collection has to be
 installed before a rulebook starts; `run.sh` still passes `--source-dir`,
 which ansible-rulebook consults first for bare names and which is harmless
@@ -123,9 +124,12 @@ the collection's own review steps:
 1. **Source names.** `sdodsley.flasharray_eda.purefa_events` and
    `sdodsley.flasharray_eda.purefa_syslog` become
    `everpure.flasharray.purefa_events` and
-   `everpure.flasharray.purefa_syslog` in the nine standalone rulebooks,
-   in the platform rulebooks generated from them, in the plugins'
-   `EXAMPLES` blocks and in `aap/seed.yml`'s activations. The
+   `everpure.flasharray.purefa_syslog` in the nine standalone rulebooks
+   that name them, in the `SOURCE_FQCN` table of
+   `tools/platform_rulebooks.py` (then regenerate the platform rulebooks),
+   in the plugins' `EXAMPLES` blocks, in the two unit tests that assert the
+   names, and in the decision-environment description in `aap/seed.yml`
+   (the activations name rulebooks by path and carry no source name). The
    `ansible.eda` dependency moves into the collection's `galaxy.yml`.
 2. **Playbook references.** `run_playbook: name: playbooks/notify.yml`
    becomes the collection playbook FQCN (`everpure.flasharray.notify`),
