@@ -13,7 +13,8 @@ decisions documentation; the platform work is verified on 2.7.
 A standalone FlashArray is a complete event source on its own; no control
 plane, cloud service or monitoring stack is needed. The array already has:
 
-- a cursorable alert event log (`/alerts/events`, REST 2.50+),
+- an alert log (`/alerts`: every alert with its code, severity, component,
+  action text and knowledge base link),
 - an attributable change log (`/audits`: user, interface, command,
   subcommand, arguments),
 - its own time series (`/arrays/performance` and `/arrays/space` accept a
@@ -34,7 +35,7 @@ The leverage is not drift polling. It is three ideas:
 
 | Signal | Endpoint(s) | Event fields | Min REST |
 | --- | --- | --- | --- |
-| Alerts | `/alerts/events` (cursor on `time`, REST 2.50+); on older Purity the plugin diffs `/alerts` with `state != closed` and derives opened / updated / closing / closed itself | code, severity, state, component_type/name, actual, expected, issue, summary, action, knowledge_base_url | 2.50 / 2.0 |
+| Alerts | `/alerts` with `state != closed`, diffed locally on every Purity version (`/alerts/events` wants alert ids on REST 2.46 and 2.59 alike), the opened / updated / closing / closed transitions derived by the plugin | code, severity, state, component_type/name, actual, expected, issue, summary, action, knowledge_base_url | 2.0 |
 | Config changes | `/audits` (cursor on `time`) | user, user_interface, origin, command, subcommand, arguments, system_event | 2.0 |
 | Hardware | `/hardware`, `/drives`, `/controllers` | status != ok, temperature, voltage, speed, identify_enabled, controller mode/mode_since | 2.0 |
 | Capacity | `/arrays/space` (history), `/volumes/space` | used, data_reduction, snapshot space, per-volume delta | 2.0 |
@@ -265,9 +266,10 @@ Every remediation passes the same gates; the table in
   untemplated `--vars` file, `run_playbook` copying only the playbook's
   directory, `localhost` in the inventory) are listed in
   [HARDWARE_NOTES.md](HARDWARE_NOTES.md).
-- `/alerts/events` needs REST 2.50; on older Purity the alerts signal diffs
-  `/alerts` with `state != closed` and derives the opened / updated / closing
-  / closed transitions itself.
+- `/alerts/events` is not an event log on any tested Purity (REST 2.46 and
+  2.59 both want alert ids): the alerts signal diffs `/alerts` with `state
+  != closed` and derives the opened / updated / closing / closed
+  transitions itself.
 - Per-array tokens: a read-only role for the source plugin, a write role only
   for the remediation credential, both in the platform's credential store
   ([SECURITY.md](../SECURITY.md)).

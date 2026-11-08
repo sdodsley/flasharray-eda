@@ -54,6 +54,19 @@
   decision environment from `decision-environment/execution-environment.yml`
   is built and started on a `vfs` image store (PACKAGING.md has the
   rootless-overlay caveat).
+- Links people can open: `aap/seed.yml` sets the platform's base URL for
+  notification links (`TOWER_URL_BASE`, from `aap_url_base`, the gateway
+  URL by default), and the bot's controller cards link to `AAP_UI_URL`
+  when set.
+- `purefa_syslog` parses the `purity.alert` layout Purity//FA 6.10.6 sends
+  (level word, subject, `[code]`, description, support-case sentence,
+  `Severity:`, UTC and array time, array name, domain, knowledge base link,
+  suggested action) into fields, grades the event by the severity word and
+  stops the UTC trailer at `Array Time:`; the syslog alert rule grades an
+  info alert as info, names the code in the subject and passes
+  `alert_code`. The bot keeps the channel id Slack returns (chat.update
+  refuses the channel name) and a failed card update no longer stops the
+  poll.
 - The Slack text of `notify.yml` carries a real line break between the
   subject line and the detail (a `'\n'` literal inside a Jinja expression
   is two characters under Ansible's backslash doubling), names the array
@@ -69,7 +82,13 @@
   the reclaim; the overdue-replication route through its approval to the
   replicated snapshot, once approved from Slack through the bot; the
   notify template posting to Slack from the platform; an approval nobody
-  decided expiring and failing its execution at the approval node.
+  decided expiring and failing its execution at the approval node, with
+  `fallback_decision` making no difference; live `purity.alert` lines from
+  both arrays (a scratch pod stretched between them) and the array's test
+  line over UDP; the scrape-failure rule through Alertmanager to the
+  platform's activation, firing and resolved; the platform's Slack
+  notification on a controller-tier approval and the bot's card for it;
+  the alerts signal against a Purity//FA 6.12.4 array.
 
 ## 0.2.0 (2026-11-07)
 

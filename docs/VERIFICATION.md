@@ -13,7 +13,11 @@ pod and one protection group replicating hourly from one array to the other.
 Tooling: ansible-rulebook 1.3.2, ansible-core 2.17, py-pure-client 1.94.1,
 ansible.eda 2.13.0. Array A below is the replication source (change control,
 capacity and QoS tests run there); array B is the target (the DR drill runs
-there). This is a prototype; it is not a supported product.
+there). The alerts signal also ran read-only against a third array on
+Purity//FA 6.12.4 (REST 2.59): the poll succeeds there, and `/alerts/events`
+still demands alert ids on that version, so the plugin's diff of `/alerts`
+is the path on every Purity it has met. This is a prototype; it is not a
+supported product.
 
 ## How the tests run
 
@@ -119,8 +123,14 @@ Removing the override resolves the alert. FlashArrayReplicaLinkNotReplicating
 fires for real: pausing the pod replica link for eight minutes takes the
 rule through pending to firing on both arrays, Alertmanager delivers both,
 and the activation launches **FlashArray - notify** for each; resuming the
-link resolves them. The same chain ran earlier into `alertmanager.yml` as a
-standalone container from the decision-environment image.
+link resolves them. FlashArrayScrapeFailed fires for real too: pointing
+array B's scrape target at a closed port takes the rule through its
+five-minute `for` to firing, Alertmanager delivers it to the platform
+activation, whose scrape rule launches **FlashArray - notify** (critical,
+the instance and the array in the text), and restoring the target resolves
+the alert and the resolved notification follows (info). The same chain ran
+earlier into `alertmanager.yml` as a standalone container from the
+decision-environment image.
 
 ## Exercised on a platform
 
@@ -168,9 +178,28 @@ by program before any rule sees it; before that filter existed the
 catch-all rule fired about 1,200 times in five minutes. `run_job_template`
 holds the ruleset until the job ends, so three commands three seconds
 apart became three notifications about a minute apart. A `purity.test`
-line sent over UDP from the platform host is accepted the same way; the
-arrays kept their TCP connections after their server URI was switched to
-`udp://`, so UDP from an array itself is not exercised.
+line sent over UDP from the platform host is accepted the same way, and so
+is one from the array itself: a PATCH of the server's URI to `udp://` left
+the TCP connection up, but deleting the syslog server and recreating it with
+the `udp://` URI made the array's next test line arrive over UDP
+(`protocol: udp` on the event); the `tcp://` server was then put back.
+
+A live `purity.alert` line is verified by making the array raise an alert
+the way the QA suite's history shows it happens: stretching an empty
+scratch pod from array A to array B raises alert 152 (info, "<pod> is now
+online") on both arrays and alert 120 (critical, "offline on peer") on
+array A, which opens and closes within milliseconds. Each array sent one
+syslog line for the 152 alert, the alert rule fired on each and launched
+**FlashArray - notify**; no line arrived for the 120 alert. The layout
+(a level word, the subject, the code in brackets, the description, the
+support-case sentence, `Severity: <Word>`, UTC and array time, array name,
+domain, knowledge base link and suggested action) is what the listener now
+parses into fields, and the rule grades the notification by the severity
+word and names the code. Array B's open NTP alert (code 13, "Time sync
+failure") had produced a line as well, which arrived 36 minutes after the
+alert's own UTC time. The pod is unstretched, its default protection
+group taken off the pod's default-protection list, destroyed and
+eradicated, then the pod ([HARDWARE_NOTES.md](HARDWARE_NOTES.md)).
 
 The EDA-to-orchestrator handoff is exercised end to end against a live
 orchestrator; see [ORCHESTRATOR.md](ORCHESTRATOR.md). It also runs from
@@ -225,7 +254,11 @@ approval nobody decided within the hour expired: the orchestrator's worker
 records the decision as expired ("Approval decision window expired") and
 the execution fails at the approval node with neither port taken. The
 latest execution's approval was given from Slack through
-`slack/approval_bot.py` (below).
+`slack/approval_bot.py` (below). `fallback_decision` changes nothing: a
+throwaway copy of the definition with `fallback_decision: reject` and a
+one-minute window expired the same way, the execution failed at the node
+and the rejected branch was skipped; the engine of this release never reads
+the field (orchestrator/README.md).
 
 Slack is exercised from the platform. **FlashArray - notify** with the
 `Slack webhook` credential attached posts the record to the channel (the
@@ -238,7 +271,10 @@ secrets as podman secrets, connects over Socket Mode, posts the card for a
 new orchestrator approval within one poll, and a click on Approve decides
 it: the orchestrator records the approval under the bot's identity with
 `via Slack by <user> (<id>)` in the decision notes and the execution
-resumes into the replicate-now job.
+resumes into the replicate-now job. The controller's queue is watched the
+same way: launching the controller-tier workflow by hand puts its approval
+card in the channel, and the platform's own Slack notification template
+posts that the approval node needs review.
 
 ## Replayed only
 
@@ -252,16 +288,16 @@ event takes the same path as a live one.
 
 ## Not verified
 
-- A live `purity.alert` line. The audit and test lines are verified live
-  (above); no alert was raised during the tests (a replica-link pause and
-  resume raised none, and 26 minutes without a reachable NTP server raised
-  none), so alert lines are emitted whole with the severity
-  read from the text, and the first real one may still need an adjustment.
-- The hardware, drive, latency, data-reduction, mediator and scrape rules
-  firing for real: all eleven load and evaluate against live series, the
-  capacity rule (lab override) and the replica-link rule (a real pause)
-  are driven through Alertmanager to the platform activation; the rest
-  wait for a real fault.
+- A critical `purity.alert` line: the info alert's line is verified
+  (above); the one critical alert the test raised closed within
+  milliseconds and produced no line, and 26 minutes without a reachable
+  NTP server raised nothing within the test window (array B raised its
+  NTP alert hours later).
+- The hardware, drive, latency, data-reduction and mediator rules firing
+  for real: all eleven load and evaluate against live series, the capacity
+  rule (lab override), the replica-link rule (a real pause) and the scrape
+  rule (a closed port) are driven through Alertmanager to the platform
+  activation; the rest wait for a real fault.
 - The images from the ansible-builder definitions running anything. The
   decision environment from `decision-environment/execution-environment.yml`
   builds with ansible-builder 3.2 and carries the three collections at the
@@ -286,12 +322,10 @@ event takes the same path as a live one.
   with the same calls (validate, create, publish with the definition in
   the body) under an administrator login, because the service account the
   tool authenticates as cannot list the project it needs.
-- The platform's Slack notification template posting: it is attached to
-  the job templates' error events and the controller-tier workflow's
-  approval, error and success events, and no job has failed and no
-  workflow has run since. The bot deciding a controller workflow approval:
-  the controller queue is polled, no approval was pending. An approval
-  with `fallback_decision` set.
+- The platform's Slack notification template on a job failure: its
+  approval-pending post is verified (above); no job has failed since it
+  was attached. The bot deciding a controller workflow approval: the card
+  is posted; the click is a person's.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

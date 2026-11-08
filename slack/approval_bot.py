@@ -28,6 +28,7 @@ AO_CLIENT_ID / AO_CLIENT_SECRET   a service account with the approval:decide
 AO_USERNAME / AO_PASSWORD_FILE    a user login (the password read from a file)
 AAP_HOST             platform gateway, e.g. https://aap.example.com; unset =
                      controller approvals are not watched
+AAP_UI_URL           where the controller "open" link points (default AAP_HOST)
 AAP_TOKEN / AAP_TOKEN_FILE        a controller token with approve rights on
                      the workflows
 AAP_VERIFY_CERTS     true (default) or false
@@ -228,11 +229,12 @@ class Orchestrator:
 class Controller:
     """Pending workflow approvals of automation controller and the decision call."""
 
-    def __init__(self, base, token, verify=True, http=http_json):
+    def __init__(self, base, token, verify=True, http=http_json, ui_url=""):
         self.base = base.rstrip("/")
         self.token = token
         self.verify = verify
         self.http = http
+        self.ui_url = (ui_url or base).rstrip("/")
 
     name = "controller"
 
@@ -258,9 +260,9 @@ class Controller:
                     a.get("name") or "Workflow approval",
                     a.get("description") or "",
                     link=(
-                        f"{self.base}/execution/jobs/workflow/{wj.get('id')}/output"
+                        f"{self.ui_url}/execution/jobs/workflow/{wj.get('id')}/output"
                         if wj.get("id")
-                        else f"{self.base}/execution/jobs"
+                        else f"{self.ui_url}/execution/jobs"
                     ),
                     expires=a.get("approval_expiration") or "",
                     workflow=wj.get("name") or "",
@@ -538,6 +540,7 @@ def systems_from_env():
                 aap,
                 _read("AAP_TOKEN", "AAP_TOKEN_FILE"),
                 verify=_truthy(os.environ.get("AAP_VERIFY_CERTS")),
+                ui_url=os.environ.get("AAP_UI_URL", ""),
             )
         )
     return systems

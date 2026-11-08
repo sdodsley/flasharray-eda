@@ -69,15 +69,19 @@ rootless uid mapping):
 
 `POLL_SECONDS` (default 30) is how often the two approval queues are read.
 A card is posted once per approval; when the approval is decided in a UI
-or expires, the card loses its buttons on the next poll. Nothing secret is
-logged.
+or expires, the card loses its buttons on the next poll. The record of
+posted cards lives in the bot's memory, so a restart posts a fresh card
+for every approval still pending and the earlier card keeps its buttons
+(a click on either decides the same approval). Nothing secret is logged.
 
 Verified against a workspace: the bot connects over Socket Mode, posts the
 card for a pending orchestrator approval within one poll, and a click on
 Approve decides it (the orchestrator records the approval under the bot's
 identity with the Slack user in the decision notes) and the execution
-resumes. The controller queue is polled the same way; a pending controller
-approval has not been exercised.
+resumes. A pending controller approval is posted the same way (the
+controller-tier workflow launched by hand); its click is a person's.
+`SLACK_CHANNEL` may be a name: Slack accepts it for the post and the bot
+keeps the channel id the post returns for the card's later updates.
 
 ## Variables
 
@@ -88,6 +92,7 @@ approval has not been exercised.
 | `AO_URL`, `AO_UI_URL`, `AO_VERIFY_CERTS` | orchestrator API base, the UI the card links to (default the API base), TLS verification (default true); unset `AO_URL` = not watched |
 | `AO_CLIENT_ID` + `AO_CLIENT_SECRET`, or `AO_USERNAME` + `AO_PASSWORD_FILE` | the orchestrator identity |
 | `AAP_HOST`, `AAP_TOKEN` or `AAP_TOKEN_FILE`, `AAP_VERIFY_CERTS` | the platform gateway and a controller token; unset `AAP_HOST` = not watched |
+| `AAP_UI_URL` | the platform address the card links to (default `AAP_HOST`); the platform's own notification links come from its `TOWER_URL_BASE` setting, which the seed sets from `aap_url_base` |
 | `POLL_SECONDS` | poll interval, default 30 |
 
 `tests/unit/test_approval_bot.py` drives the cards, the decision routing,

@@ -180,6 +180,13 @@
         state: present
 
     # --- automation controller -----------------------------------------------
+    # The platform writes this base URL into the links of its notifications
+    # (jobs, workflow approvals); the installer leaves a placeholder there.
+    - name: Base URL for the links in notifications
+      ansible.controller.settings:
+        name: TOWER_URL_BASE
+        value: "{{ aap_url_base }}"
+
     - name: Credential type for one array (fa_url, api_token and credential_array as extra_vars)
       ansible.controller.credential_type:
         name: FlashArray API

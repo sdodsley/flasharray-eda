@@ -17,6 +17,10 @@ aap_token: "{{ lookup('env', 'AAP_TOKEN') }}"
 aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
 aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
 aap_validate_certs: true
+# Base URL the platform writes into the links of its notifications (Slack
+# messages about jobs and approvals). The gateway URL by default; a lab whose
+# name does not resolve where people read the messages puts its address here.
+aap_url_base: "{{ aap_hostname }}"
 # Seconds each API call may take; a platform that is still finishing its
 # install or running jobs can need more than the modules' 10-second default.
 aap_request_timeout: 60

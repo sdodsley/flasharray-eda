@@ -12,10 +12,10 @@ Prometheus/Alertmanager path exists for sites that already run one.
 Status: a prototype, not a supported product. The REST-pull rulebooks (the
 first eight rows of the table below) are verified against two Purity//FA
 6.10.6 arrays; the syslog listener receives both arrays' live syslog as a
-platform activation and its audit rule launches job templates; the
+platform activation and its audit and alert rules launch job templates; the
 Prometheus rules evaluate on a live Prometheus scraping both arrays'
-native exporters and the capacity and replica-link rules drive the
-Alertmanager path end to end into the platform's activation (a posted
+native exporters and the capacity, replica-link and scrape-failure rules
+drive the Alertmanager path end to end into the platform's activation (a posted
 hardware alert also lights the identify LED); the
 Ansible Automation Platform seed, the controller-tier approval workflow
 and the capacity, overdue-replication, day-2 and DR orchestrator workflows
@@ -331,7 +331,8 @@ running activation as well.
 Facts the rules are written around;
 [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) has the longer list.
 
-- `/audits` rejects a filter on `time`; `/alerts/events` needs REST 2.50;
+- `/audits` rejects a filter on `time`; `/alerts/events` wants alert ids on
+  every tested Purity, so the alerts signal diffs `/alerts`;
   history resolutions are fixed (30 s, 5 min, 30 min, 2 h, 8 h, 1 day);
   maintenance windows take 3600 to 172800 seconds; the alert watcher test
   needs watcher names.

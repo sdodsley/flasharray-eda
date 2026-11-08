@@ -72,6 +72,7 @@ platform API from where it runs.
 | Object | Name | Notes |
 | --- | --- | --- |
 | Organization | `FlashArray` | gateway object (`ansible.platform.organization`) |
+| Setting | `TOWER_URL_BASE` | the base URL the platform writes into the links of its notifications; `aap_url_base`, by default the gateway URL (a lab reachable by address only puts the address there) |
 | Credential type | `FlashArray fleet` | one input, `arrays`: a JSON list of `{name, fa_url, api_token}`, one entry per array, name as in the inventory; injected as the extra_var `purefa_fleet_json`, from which `playbooks/tasks/resolve_array.yml` picks the array a launch names |
 | Credential type | `FlashArray API` | inputs `fa_url`, `api_token` (secret), `array_name`; injected as the extra_vars `fa_url`, `api_token` and `credential_array`; the playbooks refuse to act on an array other than `credential_array` |
 | Credential type | `Orchestrator service account` | inputs `orchestrator_url`, `client_id`, `client_secret` (secret); injected as the environment variables `AO_CLIENT_ID`, `AO_CLIENT_SECRET` and the extra_var `orchestrator_url` |
@@ -322,9 +323,11 @@ the controller's task container, against one FlashArray:
 
 Slack: `FlashArray - notify` with the `Slack webhook` credential attached
 posts the record to the channel (the post task returns 200, the failure
-report is skipped). The `Slack - flasharray-eda` notification template is
-attached as described; no job has failed and no workflow has run since,
-so its own posts are not exercised.
+report is skipped). The `Slack - flasharray-eda` notification template
+posts through the platform itself: the controller-tier workflow's approval
+node, launched by hand, produced a successful "approval node needs review"
+notification in the channel, and the approval bot posted its card beside
+it. Its job-failure posts wait for a failed job.
 
 The fleet credential is exercised by the activations: the change-control,
 config-drift and replication activations launch the remediate NTP,

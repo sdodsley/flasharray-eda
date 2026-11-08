@@ -189,9 +189,11 @@ approval takes; the shipped definitions leave it unset, so an approval
 nobody decides within the window is recorded as expired (decided by the
 orchestrator's worker, note "Approval decision window expired") and the
 execution fails at the approval node with neither port taken, which is
-the loud outcome wanted for an action nobody asked for. Set
-`fallback_decision: reject` to run the rejected branch instead (not
-exercised).
+the loud outcome wanted for an action nobody asked for. `fallback_decision`
+is accepted by the schema and ignored by the engine of this release: with
+`reject` set and a one-minute window, a throwaway copy expired the same
+way and its rejected branch was skipped, so the field stays out of the
+shipped definitions.
 
 ## Importing
 
@@ -331,7 +333,8 @@ sections above follow them:
   `decision_notes` decides one as the caller's identity and keeps the
   notes, which is how `slack/approval_bot.py` carries a Slack click back.
   An approval nobody decides within `decision_window` is recorded as
-  expired by the worker service and fails the execution at that node.
+  expired by the worker service and fails the execution at that node,
+  whatever `fallback_decision` says.
 
 Verified with a run of the capacity workflow (docs/ORCHESTRATOR.md,
 "Verified against a live orchestrator"): a full-span `${...}` expression

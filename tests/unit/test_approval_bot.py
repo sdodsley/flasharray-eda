@@ -173,6 +173,11 @@ def test_controller_lists_and_decides(bot):
         "capacity reclaim (controller tier)",
     )
     assert a.link == "https://aap.example.com/execution/jobs/workflow/12/output"
+    # a UI address people can resolve, when the gateway name is not one
+    (b,) = bot.Controller(
+        "https://aap.example.com", "tok", http=http, ui_url="https://192.0.2.10/"
+    ).pending()
+    assert b.link == "https://192.0.2.10/execution/jobs/workflow/12/output"
     c.decide("14", False, "via Slack by jane (U1)")
     assert http.calls[-1][0:2] == (
         "POST",
