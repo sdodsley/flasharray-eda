@@ -283,9 +283,17 @@ platform cannot read back: credentials are updated only with
 changed on every run. `ansible.eda.rulebook_activation` cannot modify an
 existing activation; to change one (a new rulebook, a new variable in its
 extra vars), delete it in the UI or through the API and re-run, which
-recreates only that one. The run also sets `aap_eda_activations_enabled`
-on every FlashArray activation, so a site whose activations are running
-keeps the key true in its vars file. The seed never deletes anything.
+recreates only that one; an activation keeps the rulebook it was created
+with, so a changed rule reaches it the same way. The run also sets
+`aap_eda_activations_enabled` on every FlashArray activation, so a site
+whose activations are running keeps the key true in its vars file. The
+two projects are synced when the seed creates them and not on later runs,
+and the job templates do not update the project on launch, so after a
+push sync the controller project (and the EDA project, before recreating
+an activation) or a job runs the revision the project last fetched. A
+gateway answering 503 or 504 while the platform is busy fails the one
+task that hit it; the seed is idempotent, so the next run finishes the
+rest. The seed never deletes anything.
 
 ## Verified on a platform
 

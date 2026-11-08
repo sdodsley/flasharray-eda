@@ -166,7 +166,11 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
   image built on the host is loaded into them or pulled from a registry.
 - `ansible.eda.rulebook_activation` cannot modify an activation; the
   enabled flag is the one thing a seed can still set, so the seed enforces
-  it on every run and a site keeps it true once the activations run.
+  it on every run and a site keeps it true once the activations run. An
+  activation keeps the rulebook it was created with, and a project is
+  synced when it is created, not on later seed runs: a changed playbook
+  reaches a job template after a project sync, a changed rule reaches an
+  activation after it is recreated.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under
