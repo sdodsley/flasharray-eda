@@ -98,7 +98,11 @@ Two things about ansible-builder 3 that the definitions are written around:
 `flasharray_eda/meta`) or the three merge into one; and the base image's
 `/usr/bin/python3` is 3.9 while ansible-rulebook and the `PYTHONPATH` it
 sets are 3.12, so `python_interpreter` pins `/usr/bin/python3.12` for the
-build stages. On a rootless host with native overlay, buildah can fail
+build stages. A third, for the supported base: `ansible.eda`'s requirements
+name `systemd-python`, which has no wheel and needs Python headers, systemd
+headers and a compiler the supported images lack, so
+`aap/decision-environment.yml` excludes it (`dependencies.exclude.python`;
+nothing in this project reads the journal). On a rootless host with native overlay, buildah can fail
 every multi-stage `COPY --from` with "copier: stat ... no such file or
 directory" although the stage image holds the path; a separate image
 store with the `vfs` driver (`podman --root <dir> --storage-driver vfs`,

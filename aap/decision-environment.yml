@@ -40,6 +40,12 @@ dependencies:
     python_path: /usr/bin/python3.12
   python:
     - py-pure-client>=1.94.1
+  # ansible.eda's requirements name systemd-python (its journald source),
+  # which has no wheel and needs Python.h, systemd headers and a compiler the
+  # supported base does not carry; nothing here reads the journal.
+  exclude:
+    python:
+      - systemd-python
   galaxy:
     collections:
       - name: /build/flasharray_eda

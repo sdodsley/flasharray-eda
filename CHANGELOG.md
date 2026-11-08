@@ -54,6 +54,9 @@
   decision environment from `decision-environment/execution-environment.yml`
   is built and started on a `vfs` image store (PACKAGING.md has the
   rootless-overlay caveat).
+- `aap/decision-environment.yml` excludes `systemd-python` from the pip
+  stage: `ansible.eda`'s requirements name it, it has no wheel, and the
+  supported base carries no Python headers or compiler to build it.
 - Links people can open: `aap/seed.yml` sets the platform's base URL for
   notification links (`TOWER_URL_BASE`, from `aap_url_base`, the gateway
   URL by default), and the bot's controller cards link to `AAP_UI_URL`
