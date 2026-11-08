@@ -302,21 +302,24 @@ event takes the same path as a live one.
   rule (lab override), the replica-link rule (a real pause) and the scrape
   rule (a closed port) are driven through Alertmanager to the platform
   activation; the rest wait for a real fault.
-- The images from the ansible-builder definitions running anything. The
-  decision environment from `decision-environment/execution-environment.yml`
-  builds with ansible-builder 3.2 and carries the three collections at the
-  right paths, ansible-rulebook 1.3.2 and the plain-file tree, but only on a
-  `vfs` image store: rootless podman with native overlay on the lab host
-  fails every multi-stage `COPY --from` with "copier: stat ... no such file"
-  although the stage image holds the path
-  ([PACKAGING.md](PACKAGING.md)). `aap/decision-environment.yml` and
-  `aap/execution-environment.yml` are not built. The images that ran are
-  the ones `decision-environment/Containerfile` and `aap/Containerfile.ee`
-  build: the first runs `alertmanager.yml` and the ten activations, the
-  second the job templates; CI runs the static checks only. The
-  upstream-based definitions pin `quay.io/ansible/ansible-rulebook:v1.3.2`,
-  the tested ansible-rulebook; `latest` on that repository is not
-  guaranteed to be the newest release.
+- The ansible-builder images on the platform. All three definitions build
+  with ansible-builder 3.2 on a `vfs` image store (rootless podman with
+  native overlay on the lab host fails every multi-stage `COPY --from`
+  with "copier: stat ... no such file" although the stage image holds the
+  path, [PACKAGING.md](PACKAGING.md)): the decision environment from
+  `decision-environment/execution-environment.yml` carries the three
+  collections, ansible-rulebook 1.3.2 and the plain-file tree, and runs
+  `alertmanager.yml` as a standalone listener that takes a posted alert
+  through its rule to a notify record; `aap/execution-environment.yml` on
+  the supported base carries `everpure.flasharray` and py-pure-client on
+  the Python 3.12 Ansible runs on; `aap/decision-environment.yml` on the
+  supported base carries the three collections and py-pure-client, with
+  `systemd-python` excluded. Neither supported-base image has run a job or
+  an activation on the platform; the images that run there are the ones
+  `decision-environment/Containerfile` and `aap/Containerfile.ee` build.
+  CI runs the static checks only. The upstream-based definitions pin
+  `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
+  `latest` on that repository is not guaranteed to be the newest release.
 - A rulebook activation launching the controller-tier approval workflow:
   the platform capacity rulebook hands the event to the orchestrator
   (verified above) or launches the request job; it does not launch the

@@ -107,7 +107,11 @@ nothing in this project reads the journal). On a rootless host with native overl
 every multi-stage `COPY --from` with "copier: stat ... no such file or
 directory" although the stage image holds the path; a separate image
 store with the `vfs` driver (`podman --root <dir> --storage-driver vfs`,
-put first on the PATH as `podman` for the build) builds the image.
+put first on the PATH as `podman` for the build) builds the image. A
+container from a builder image names its rulebook, inventory and vars by
+absolute path or sets `-w /opt/flasharray-eda`: the final stage keeps that
+working directory, but a relative path is the first thing to check when a
+run says a file does not exist.
 
 Because the sources resolve from the installed collection, the image serves
 two uses with one tree: a standalone `podman run ... ansible-rulebook

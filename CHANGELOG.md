@@ -52,8 +52,9 @@
   `dependencies` pins the base image's Python 3.12, and each collection
   directory names its own `dest` under `additional_build_files`. The
   decision environment from `decision-environment/execution-environment.yml`
-  is built and started on a `vfs` image store (PACKAGING.md has the
-  rootless-overlay caveat).
+  is built on a `vfs` image store and runs `alertmanager.yml` through a
+  posted alert to a notify record; the two supported-base definitions build
+  there as well (PACKAGING.md has the rootless-overlay caveat).
 - `aap/decision-environment.yml` excludes `systemd-python` from the pip
   stage: `ansible.eda`'s requirements name it, it has no wheel, and the
   supported base carries no Python headers or compiler to build it.
