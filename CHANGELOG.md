@@ -31,6 +31,16 @@
   replicated snapshot behind an approval (`orchestrator_paths.replication`).
 - `orchestrator_fallback_local` (default false): a capacity handoff that
   produced no execution raises the local request anyway.
+- Slack: `notify.yml` posts every notification to an incoming webhook when
+  `SLACK_WEBHOOK_URL` is set (env file, or the new `Slack webhook`
+  credential the seed attaches to the notify template); the seed also
+  creates a Slack notification template for job failures and the
+  controller-tier workflow's approval events when a bot token and channel
+  are set.
+- `slack/approval_bot.py`: a Slack Socket Mode bot that posts pending
+  orchestrator and controller approvals as cards with Approve and Reject
+  buttons and carries the decision back with the Slack user's name
+  (`SLACK_APPROVERS` limits who may click). Unit-tested with fakes.
 - `replicate_now.yml` publishes job artifacts (`pgroup`, `snapshot_suffix`,
   `changed`, ...), and a unit test checks that every `${node.artifacts.key}`
   a definition reads is published by that template's playbook.

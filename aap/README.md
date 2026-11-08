@@ -27,7 +27,11 @@ It creates nothing on an array and nothing in the automation orchestrator
   (the same names `env.example` uses), and, if the orchestrator credential
   is wanted, `AO_URL`, `AO_CLIENT_ID` and `AO_CLIENT_SECRET`. The seed
   refuses to run with an array's pair empty and skips the orchestrator
-  credentials when `AO_CLIENT_ID` is empty.
+  credentials when `AO_CLIENT_ID` is empty. For Slack, optionally
+  `SLACK_WEBHOOK_URL` (an incoming webhook, stored as a credential on the
+  notify template) and `SLACK_BOT_TOKEN` with `SLACK_CHANNEL` (a bot token
+  with `chat:write`, invited to the channel, for the platform's own Slack
+  notification template).
 - The certified collections `ansible.platform`, `ansible.controller` and
   `ansible.eda` on the machine that runs the seed. The first two are
   published on Red Hat Automation Hub only, so they live in
@@ -72,11 +76,14 @@ platform API from where it runs.
 | Credential | `FlashArray fleet - <organization>` | every entry of `aap_arrays`, values from the named environment variables; attached to every job template |
 | Credentials | `FlashArray - <array>` | one per entry in `aap_arrays`; for launches that pin one array (`credential_names` on an orchestrator node, or the credential prompt) |
 | Credential | `Orchestrator service account - flasharray-eda` | only when `AO_CLIENT_ID` is set |
+| Credential type | `Slack webhook` | one secret input, `webhook_url`; injected as the environment variable `SLACK_WEBHOOK_URL`, which `playbooks/notify.yml` posts to |
+| Credential | `Slack webhook - flasharray-eda` | only when `SLACK_WEBHOOK_URL` is set; attached to `FlashArray - notify` |
 | Inventory | `FlashArrays` | `localhost` plus one host per array, named as in `purefa_arrays`; `ansible_connection: local` |
 | Project | `FlashArray EDA` | git, `aap_project_url` on `aap_project_branch`; synced once by the seed |
 | Execution environment | `FlashArray EDA EE` | image from `aap_ee_image` |
 | Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote` | one per playbook; the fleet credential attached; prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential |
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
+| Notification template | `Slack - flasharray-eda` | only when `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are set: type Slack, posts every job template's failures and the workflow's start, success, failure and approval events (pending, approved, denied, timed out) to the channel |
 | EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`, pulled with `aap_eda_de_pull_policy`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the store the activation workers use ("Images on a containerized platform") |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |

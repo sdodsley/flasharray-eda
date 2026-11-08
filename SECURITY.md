@@ -51,6 +51,16 @@ matters.
   `syslog_allowed_sources` (empty accepts any sender). UDP source addresses
   can be forged, so syslog events are a fast hint: `syslog.yml` only
   notifies, and the REST plugin owns every action that changes an array.
+- **The Slack webhook URL is a secret.** Anyone holding it can post to the
+  channel. It lives in the env file or the `Slack webhook` credential,
+  never in a vars file or a definition, and the notify playbook posts
+  with `no_log`. The bot token behind the platform's notification template
+  needs `chat:write` only.
+- **The approval bot decides on behalf of its identity.** `slack/approval_bot.py`
+  approves or rejects with the orchestrator and controller identities it
+  holds; restrict who may click with `SLACK_APPROVERS` (Slack user ids), or
+  anyone in the channel can decide. Its tokens are read from files mounted
+  into its container, and it logs no secret.
 - **TLS verification is off by default** in the plugins and the playbooks
   (`verify_ssl: false`, `disable_warnings: true`) because arrays in a lab
   usually carry self-signed certificates. Turn it on where the arrays have

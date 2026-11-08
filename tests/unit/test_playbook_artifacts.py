@@ -271,15 +271,16 @@ def test_seed_variables_are_documented_and_hold_no_lab_specifics(repo_root):
         for t in _seed(repo_root)[0]["tasks"]
         if any(k.endswith(".credential") for k in t)
     ]
-    # per array, fleet and orchestrator, for the controller and for EDA
-    assert len(credential_tasks) == 7
+    # controller: per array, fleet, orchestrator, Slack webhook; EDA: per
+    # array, fleet, orchestrator, platform user
+    assert len(credential_tasks) == 8
     for task in credential_tasks:
         assert task.get("no_log") is True, f"{task['name']}: credential without no_log"
 
 
 def test_seed_credential_type_files_parse_and_match(repo_root):
     files = repo_root / "aap" / "files"
-    for kind in ("flasharray_api", "orchestrator_sa"):
+    for kind in ("flasharray_api", "orchestrator_sa", "slack_webhook"):
         inputs = json.loads((files / f"credential_type_{kind}_inputs.json").read_text())
         injectors = json.loads(
             (files / f"credential_type_{kind}_injectors.json").read_text()

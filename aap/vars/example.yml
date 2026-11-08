@@ -68,6 +68,17 @@ aap_orchestrator_client_secret_env: AO_CLIENT_SECRET
 # (playbooks/orchestrator_post.yml) must exist in the project.
 aap_seed_orchestrator_template: true
 
+# --- Slack (optional) -------------------------------------------------------
+# With the webhook variable set, a "Slack webhook" credential is created
+# and attached to the notify template, so every notification the rules
+# raise is also posted to the channel the webhook is bound to. With the
+# bot token and channel set, a Slack notification template posts job
+# failures and the controller-tier workflow's approval events (pending,
+# approved, denied, timed out) with links into the platform.
+aap_slack_webhook_env: SLACK_WEBHOOK_URL
+aap_slack_bot_token_env: SLACK_BOT_TOKEN
+aap_slack_channel_env: SLACK_CHANNEL
+
 # --- variables every job template carries ----------------------------------
 # Paths are inside the execution environment: /tmp exists and is writable,
 # and disappears with the job. The durable record of a job in the platform

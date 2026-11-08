@@ -53,6 +53,13 @@
     fleet_credential_name: "FlashArray fleet - {{ aap_organization }}"
     orchestrator_credential_name: "Orchestrator service account - flasharray-eda"
     platform_credential_name: "Platform user - flasharray-eda"
+    slack_credential_name: "Slack webhook - flasharray-eda"
+    slack_notification_name: "Slack - flasharray-eda"
+    # the Slack webhook credential exists, and sits on the notify template,
+    # only when the webhook URL is set; the notification template only when
+    # the bot token and the channel are
+    slack_seeded: "{{ lookup('env', aap_slack_webhook_env) | length > 0 }}"
+    slack_bot_seeded: "{{ lookup('env', aap_slack_bot_token_env) | length > 0 and lookup('env', aap_slack_channel_env) | length > 0 }}"
     # the orchestrator credential, its EDA twin and the template that posts
     # to the orchestrator exist only when the service account's client id is
     # set in the environment
@@ -77,7 +84,8 @@
         description: "Eradicate the pending-eradication candidates of an approved request; artifacts request_id, eradicated, refused, result"
       - name: "FlashArray - notify"
         playbook: playbooks/notify.yml
-        description: "Append a notify record to the alert log; artifact record_kind"
+        description: "Append a notify record to the alert log and post it to Slack when the webhook credential is attached; artifact record_kind"
+        credentials: "{{ [fleet_credential_name] + ([slack_credential_name] if slack_seeded | bool else []) }}"
       - name: "FlashArray - expand volume"
         playbook: playbooks/expand_volume.yml
         description: "Grow one volume after checking its name and current size; artifacts volume, old_size, new_size"
@@ -199,6 +207,15 @@
         injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_injectors.json') | from_json }}"
         state: present
 
+    - name: Credential type for a Slack incoming webhook
+      ansible.controller.credential_type:
+        name: Slack webhook
+        description: "An incoming webhook URL, injected as the environment variable SLACK_WEBHOOK_URL; playbooks/notify.yml posts every notification to it"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_slack_webhook_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_slack_webhook_injectors.json') | from_json }}"
+        state: present
+
     # Kept beside the fleet credential for launches that pin one array
     # (credential_names on an orchestrator node, or a person in the prompt).
     - name: One FlashArray API credential per array
@@ -241,6 +258,19 @@
           orchestrator_url: "{{ lookup('env', aap_orchestrator_url_env) }}"
           client_id: "{{ lookup('env', aap_orchestrator_client_id_env) }}"
           client_secret: "{{ lookup('env', aap_orchestrator_client_secret_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    - name: Slack webhook credential (when the webhook variable is set)
+      when: slack_seeded | bool
+      ansible.controller.credential:
+        name: "{{ slack_credential_name }}"
+        description: "Incoming webhook of the channel the FlashArray notifications go to"
+        organization: "{{ aap_organization }}"
+        credential_type: Slack webhook
+        inputs:
+          webhook_url: "{{ lookup('env', aap_slack_webhook_env) }}"
         update_secrets: "{{ aap_update_secrets | bool }}"
         state: present
       no_log: true
@@ -321,10 +351,27 @@
         ask_variables_on_launch: true
         ask_credential_on_launch: true
         ask_limit_on_launch: true
+        notification_templates_error: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
         state: present
       loop: "{{ job_templates }}"
       loop_control:
         label: "{{ item.name }}"
+
+    # Job failures and the workflow's approval events go to Slack through
+    # the platform's own notification template (bot token, chat:write).
+    - name: Slack notification template (when the bot token and channel are set)
+      when: slack_bot_seeded | bool
+      ansible.controller.notification_template:
+        name: "{{ slack_notification_name }}"
+        description: "FlashArray job failures and controller-tier approval events"
+        organization: "{{ aap_organization }}"
+        notification_type: slack
+        notification_configuration:
+          token: "{{ lookup('env', aap_slack_bot_token_env) }}"
+          channels: ["#{{ lookup('env', aap_slack_channel_env) | regex_replace('^#', '') }}"]
+          hex_color: ""
+        state: present
+      no_log: true
 
     # The request node's artifacts (request_id, at_risk_array, ...) reach
     # the reclaim node as extra vars, which is how the two playbooks hand
@@ -337,6 +384,9 @@
         inventory: "{{ aap_inventory_name }}"
         ask_variables_on_launch: true
         destroy_current_nodes: "{{ aap_rebuild_workflow_nodes | bool }}"
+        notification_templates_approvals: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
+        notification_templates_error: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
+        notification_templates_success: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
         state: present
         workflow_nodes:
           - identifier: request

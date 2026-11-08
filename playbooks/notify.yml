@@ -1,13 +1,21 @@
 ---
-# Notify-only action. Appends a JSON line to the alert log and prints it.
-# Swap or extend the tasks for mail / Slack / ServiceNow; the rulebooks pass
-# severity, subject, detail, target_array, alert_log and, for array alerts,
-# alert_id and alert_code. Every alert-log line, whichever playbook writes it,
+# Notify-only action. Appends a JSON line to the alert log, prints it and,
+# when SLACK_WEBHOOK_URL is set in the environment (env.example; on the
+# platform the "Slack webhook" credential injects it), posts it to Slack.
+# Extend the tasks for mail / ServiceNow; the rulebooks pass severity,
+# subject, detail, target_array, alert_log and, for array alerts, alert_id
+# and alert_code. Every alert-log line, whichever playbook writes it,
 # carries time, kind, severity and array plus kind-specific fields; keep that
-# shape when adding a playbook.
+# shape when adding a playbook. A failed Slack post is reported and never
+# fails the notification: the alert log is the record, Slack is the pager.
 - name: Notify a human
   hosts: localhost
   gather_facts: false
+  vars:
+    slack_icons:
+      critical: ":rotating_light:"
+      warning: ":warning:"
+      info: ":information_source:"
   tasks:
     - name: Build the alert record
       ansible.builtin.set_fact:
@@ -31,6 +39,32 @@
     - name: Show the alert
       ansible.builtin.debug:
         msg: "[{{ alert_record.severity | upper }}] {{ alert_record.subject }} :: {{ alert_record.detail }}"
+
+    - name: Read the Slack webhook from the environment
+      ansible.builtin.set_fact:
+        slack_webhook: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
+      no_log: true
+
+    - name: Post the alert to Slack
+      when: slack_webhook | length > 0
+      ansible.builtin.uri:
+        url: "{{ slack_webhook }}"
+        method: POST
+        body_format: json
+        body:
+          text: >-
+            {{ slack_icons[alert_record.severity] | default(':information_source:') }}
+            *{{ alert_record.severity | upper }}* {{ alert_record.subject }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array else '' }}{{ ('\n' ~ alert_record.detail) if alert_record.detail else '' }}
+        status_code: [200]
+        timeout: 15
+      register: slack_post
+      failed_when: false
+      no_log: true
+
+    - name: Report a failed Slack post without failing the notification
+      when: slack_webhook | length > 0 and slack_post.status | default(0) != 200
+      ansible.builtin.debug:
+        msg: "Slack post failed: status {{ slack_post.status | default(0) }} {{ slack_post.msg | default('') | truncate(120) }}"
 
     # Job artifacts for a workflow or orchestrator node that follows this one.
     - name: Publish the record kind as job artifacts

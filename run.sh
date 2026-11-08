@@ -35,10 +35,11 @@ ARGS=(
 )
 # ansible-rulebook exposes to the rulebook only the environment variables
 # named in --env-vars; the rulebooks read the secrets as {{ APPROVAL_TOKEN }}
-# and {{ GIT_WEBHOOK_SECRET }}. AO_CLIENT_ID and AO_CLIENT_SECRET are read by
-# playbooks/orchestrator_post.yml with lookup('env') and travel the same way.
+# and {{ GIT_WEBHOOK_SECRET }}. AO_CLIENT_ID, AO_CLIENT_SECRET and
+# SLACK_WEBHOOK_URL are read by playbooks with lookup('env') and travel the
+# same way.
 ENV_VARS=""
-for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET AO_CLIENT_ID AO_CLIENT_SECRET; do
+for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET AO_CLIENT_ID AO_CLIENT_SECRET SLACK_WEBHOOK_URL; do
   if [ -n "${!name:-}" ]; then
     ENV_VARS="${ENV_VARS:+$ENV_VARS,}$name"
   fi

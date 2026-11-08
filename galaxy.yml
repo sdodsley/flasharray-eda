@@ -63,6 +63,7 @@ build_ignore:
   - requirements.yml
   - run.sh
   - scripts
+  - slack
   - tests
   - tools
   - vars

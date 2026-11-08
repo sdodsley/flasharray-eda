@@ -26,8 +26,8 @@ collection:
 	ansible-galaxy collection install --force -p collections build/$(COLLECTION)-*.tar.gz
 
 lint:
-	black --check $(PLUGINS) tests/*.py tests/unit
-	pyflakes $(PLUGINS) tests/*.py tests/unit
+	black --check $(PLUGINS) slack tests/*.py tests/unit
+	pyflakes $(PLUGINS) slack tests/*.py tests/unit
 	yamllint -s .
 
 # the automation orchestrator workflow definitions (orchestrator/README.md)

@@ -144,6 +144,8 @@ orchestrator/                          workflow definitions for the automation o
                                        (orchestrator/README.md)
 tools/ao_lint.py                       offline linter for those definitions (`make lint-ao`)
 tools/ao_sync.py                       imports the definitions into an orchestrator (orchestrator/README.md, "Importing")
+slack/approval_bot.py                  Slack Socket Mode bot: approval cards with Approve/Reject buttons for the orchestrator
+                                       and the controller (slack/README.md)
 aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects;
                                        execution and decision environment definitions (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
@@ -241,6 +243,23 @@ differently (see also [SECURITY.md](SECURITY.md)):
   addresses can be forged, which is one reason `syslog.yml` only notifies.
   `syslog_programs` keeps the Purity programs and drops the controllers'
   other system log, which the array forwards too.
+
+## Notifications
+
+Every rule that notifies runs `playbooks/notify.yml`, which appends a
+record to the alert log and, when `SLACK_WEBHOOK_URL` is set (env file;
+on the platform the `Slack webhook` credential on the notify template),
+posts the same record to a Slack incoming webhook: an icon for the
+severity, the subject, the array and the detail. A failed post is
+reported in the job and never fails the notification; the alert log is
+the record, Slack is the pager. On the platform `aap/seed.yml` also
+creates a Slack notification template (bot token, `chat:write`) that posts
+job failures and the controller-tier workflow's approval events, each
+with its link into the platform ([aap/README.md](aap/README.md)).
+Deciding from the channel is `slack/approval_bot.py`: a Socket Mode bot
+that posts every pending orchestrator and controller approval as a card
+with Approve and Reject buttons and carries the click back with the Slack
+user's name ([slack/README.md](slack/README.md)).
 
 ## Decision environment and Ansible Automation Platform
 
