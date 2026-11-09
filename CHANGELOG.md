@@ -15,6 +15,12 @@
   `purefa_volume` sends the 100000000 maximum for `iops_qos: 0`, which
   reads back as a limit (100M in the GUI); a real previous limit is still
   restored through the module (HARDWARE_NOTES.md).
+- The lift's "normal for `qos_lift_normal_polls` polls" counts from the cap:
+  the telemetry signal resets a volume's normal-poll counter when it
+  becomes capped, so a cap requested through the day-2 route on a volume
+  whose latency was already normal lasts those polls instead of being
+  lifted at the next one (seen live: lifted after 34 seconds, "normal for
+  10 polls").
 - `qos_cap.yml` is idempotent: a cap on a volume that already carries the
   `qos_cap` tag and a lift on a volume without it change nothing. Live, two
   lift jobs ran 19 seconds apart; the second found the tags gone and

@@ -1014,6 +1014,16 @@ def _performance_events(arr, state, args):
             capped[_name(t.get("resource"))] = t.get("value")
     for vp in _volumes_performance(c, [n for n in capped if n not in active]):
         active[vp.get("name")] = vp
+    # The lift rule's "normal for M polls" counts from the cap: a volume that
+    # was capped by hand (the day-2 route) while its latency was already
+    # normal would otherwise be lifted at the next poll.
+    was_capped = st.get(
+        "capped_last_poll"
+    )  # None on the first poll: nothing is "new" then
+    newly_capped = (
+        set() if was_capped is None else {n for n in capped if n not in set(was_capped)}
+    )
+    st["capped_last_poll"] = sorted(capped)
     # QoS limits for the volumes about to be reported
     qos = {}
     if active:
@@ -1029,7 +1039,10 @@ def _performance_events(arr, state, args):
         seen.add(name)
         lat = max(vp.get("usec_per_read_op") or 0, vp.get("usec_per_write_op") or 0)
         counters[name] = counters.get(name, 0) + 1 if lat >= threshold else 0
-        normal[name] = normal.get(name, 0) + 1 if lat < threshold else 0
+        if name in newly_capped:
+            normal[name] = 0  # the lift's count starts after the cap
+        else:
+            normal[name] = normal.get(name, 0) + 1 if lat < threshold else 0
         events.append(
             {
                 "purefa_volume_performance": {

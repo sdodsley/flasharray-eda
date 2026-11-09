@@ -755,3 +755,30 @@ def test_signal_loop_other_signals_report_a_failed_array_and_carry_on(events):
     assert got[0]["purefa_poll_error"]["signal"] == "alerts"
     assert got[1]["purefa_alert"]["array"] == "array-a"
     assert bad.resets == 1
+
+
+def test_normal_polls_count_from_the_cap(events):
+    # a volume that has read normal for a while is capped by hand (the day-2
+    # route writes the tag): the lift's counter starts again at the cap
+    client = FakeClient(volumes_perf=[vol_perf("v", 100, 500)], tags=[])
+    arr = FakeArray(client)
+    state = {}
+    args = {"top_volumes": 5, "min_iops": 1, "baseline": False}
+
+    def volume_event():
+        out = events._performance_events(arr, state, args)
+        return next(
+            e["purefa_volume_performance"]
+            for e in out
+            if e.get("purefa_volume_performance", {}).get("volume") == "v"
+        )
+
+    assert volume_event()["normal_polls"] == 1
+    assert volume_event()["normal_polls"] == 2
+    client.tags.append(("v", "qos_cap", "2026-11-09T15:48:41"))
+    client.tags.append(("v", "qos_prev_iops", "none"))
+    capped = volume_event()
+    assert capped["eda_capped"] is True
+    assert capped["normal_polls"] == 0
+    assert volume_event()["normal_polls"] == 1
+    assert state["telemetry"]["array-a"]["capped_last_poll"] == ["v"]
