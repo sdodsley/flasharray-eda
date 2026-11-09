@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 (2026-11-09)
+
+The QoS cap holds up under a real load: `qos_cap.yml` caps only when it
+tightens, changes nothing when run twice, and a lift leaves the volume as
+the cap found it, limit or none; the telemetry source counts a lift's
+normal polls from the cap; the pod guards render the array's message for
+a missing pod. Verified against the two Purity//FA 6.10.6 arrays and
+Ansible Automation Platform 2.7: the cap under a fio load through its
+Slack approval, the platform's job-failure notification, and both
+supported-base images running on the platform;
+[docs/VERIFICATION.md](docs/VERIFICATION.md) has the ledger.
 
 - The pod guards of `dr_promote.yml`, `dr_demote.yml` and
   `dr_switchover.yml` report the array's message for a missing pod ("Pod
