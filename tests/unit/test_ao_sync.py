@@ -257,7 +257,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise Problem(404, f"no version {version}")
             tail = rest[4:]
             if tail == ["export"] and method == "GET":
-                return 200, record["versions"][version]
+                # the live contract: the export carries no credential_names
+                exported = json.loads(json.dumps(record["versions"][version]))
+                for node in exported.get("nodes", []):
+                    node.get("parameters", {}).pop("credential_names", None)
+                return 200, exported
             if tail == [] and method == "PATCH":
                 # the live contract: a version's PATCH changes name and
                 # change_description only; a definition here is ignored

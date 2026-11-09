@@ -244,7 +244,7 @@ create or when the current version has never been published. It prints
 one line per definition (`created`, `updated` or `unchanged`, and the
 published version) and `extra: <name>` for each workflow of the project that
 no file defines; `--dry-run` validates and reports the decisions without
-writing; `--only FILE` writes one definition without making the others
+writing; `--only FILE`, with every file still on the command line, writes one definition without making the others
 extras; the exit status is 1 when anything failed. Publishing a scheduled
 trigger is what creates its schedule; unpublishing deletes it.
 `GET /api/v1/workflows/{id}/versions/{version}/export` and the UI's export
@@ -332,7 +332,10 @@ sections above follow them:
   only, and `POST /workflows/{id}/versions/{v}/publish` with
   `workflow_definition` (and `expected_version`) in the body stores that
   definition as version v+1 and publishes it; with an empty body it
-  publishes version v as it stands. A node of a published definition that
+  publishes version v as it stands. The export of a version carries no
+  `credential_names`: the orchestrator resolves them when it publishes and
+  keeps no copy, so a comparison of a file with its export leaves the field
+  out (`tools/ao_sync.py` does). A node of a published definition that
   reads `${<node>.artifacts.<key>}` fails at run time when the job did not
   publish that key, which validation cannot see.
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,
