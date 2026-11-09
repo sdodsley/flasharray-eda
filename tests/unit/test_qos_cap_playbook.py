@@ -35,7 +35,8 @@ def _env():
 
 def _when(repo_root, name):
     (task,) = [t for t in _tasks(repo_root) if t["name"].startswith(name)]
-    return task["when"]
+    when = task["when"]  # a list is and-ed, as Ansible does
+    return " and ".join(f"({w})" for w in when) if isinstance(when, list) else when
 
 
 @pytest.mark.parametrize(
@@ -78,6 +79,7 @@ def test_applied_iops_is_the_limit_in_force_after_a_cap(
             before={"iops_limit": previous, "tags": {}},
             capped={"changed": True},
             lifted={},
+            cleared={},
         )
     )
     assert f"'applied_iops': {applied}," in data.replace("\n", " ")
@@ -93,9 +95,112 @@ def test_lift_restores_the_tagged_limit(repo_root):
                 mode="lift",
                 inventory_hostname="a",
                 volume="v",
-                before={"iops_limit": 500, "tags": {"qos_prev_iops": tagged}},
+                before={
+                    "iops_limit": 500,
+                    "tags": {"qos_cap": "t", "qos_prev_iops": tagged},
+                },
                 capped={},
                 lifted={"changed": True},
+                cleared={},
             )
         )
         assert f"'applied_iops': {applied}," in data.replace("\n", " ")
+
+
+def _whens(task):
+    when = task.get("when", [])
+    return when if isinstance(when, list) else [when]
+
+
+def test_cap_and_lift_are_idempotent_on_the_tag(repo_root):
+    tasks = _tasks(repo_root)
+    for name in ("Tag the volume first", "Set the IOPS limit"):
+        (task,) = [t for t in tasks if t["name"].startswith(name)]
+        assert "before.tags.qos_cap is not defined" in _whens(task), name
+    for name in ("Restore the previous IOPS limit", "Remove the cap tags"):
+        (task,) = [t for t in tasks if t["name"].startswith(name)]
+        assert "before.tags.qos_cap is defined" in _whens(task), name
+
+
+def test_applied_iops_when_the_run_changes_nothing(repo_root):
+    (stats,) = [t for t in _tasks(repo_root) if "ansible.builtin.set_stats" in t]
+    template = stats["ansible.builtin.set_stats"]["data"]
+    # a second lift finds no tag: the limit it reads stays (not "cleared")
+    data = (
+        _env()
+        .from_string(template)
+        .render(
+            mode="lift",
+            inventory_hostname="a",
+            volume="v",
+            before={"iops_limit": 1000, "tags": {}},
+            capped={},
+            lifted={},
+            cleared={},
+        )
+    )
+    assert "'applied_iops': 1000," in data.replace("\n", " ")
+    # a second cap finds the tag: the limit it reads stays
+    data = (
+        _env()
+        .from_string(template)
+        .render(
+            mode="cap",
+            inventory_hostname="a",
+            volume="v",
+            cap_iops=500,
+            before={
+                "iops_limit": 500,
+                "tags": {"qos_cap": "t", "qos_prev_iops": "1000"},
+            },
+            capped={},
+            lifted={},
+            cleared={},
+        )
+    )
+    assert "'applied_iops': 500," in data.replace("\n", " ")
+
+
+def test_lift_restores_through_the_module_and_clears_through_the_api(repo_root):
+    tasks = _tasks(repo_root)
+    (restore,) = [
+        t for t in tasks if t["name"].startswith("Restore the previous IOPS limit")
+    ]
+    (clear,) = [
+        t for t in tasks if t["name"].startswith("Remove the limit the cap added")
+    ]
+    assert "everpure.flasharray.purefa_volume" in restore
+    assert "ansible.builtin.command" in clear
+    assert 'Qos.construct(iops_limit="")' in clear["ansible.builtin.command"]["stdin"]
+    assert (
+        clear.get("no_log") is True
+        and clear["environment"]["FA_TOKEN"] == "{{ api_token }}"
+    )
+    # the two are complementary on the previous-limit tag, both need the cap tag
+    env = _env()
+    for prev, restores in (
+        ("1000", True),
+        ("none", False),
+        ("100000000", False),
+        ("", False),
+    ):
+        before = {"iops_limit": 500, "tags": {"qos_cap": "t", "qos_prev_iops": prev}}
+        r = env.from_string(
+            "{{ " + _when(repo_root, "Restore the previous IOPS limit") + " }}"
+        ).render(before=before)
+        c = env.from_string(
+            "{{ " + _when(repo_root, "Remove the limit the cap added") + " }}"
+        ).render(before=before)
+        assert (r, c) == (str(restores), str(not restores)), prev
+    untagged = {"iops_limit": 500, "tags": {}}
+    for name in (
+        "Restore the previous IOPS limit",
+        "Remove the limit the cap added",
+        "Remove the cap tags",
+    ):
+        assert (
+            env.from_string("{{ " + _when(repo_root, name) + " }}").render(
+                before=untagged
+            )
+            == "False"
+        ), name

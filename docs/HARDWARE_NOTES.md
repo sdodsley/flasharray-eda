@@ -157,7 +157,9 @@ The native exporter the Prometheus rules are written for, as served on
   6.10.6, `PATCH /volumes` with `qos.iops_limit` set to `""` removes the
   limit (reads null again), `null` is ignored, `0` is refused ("IOPS
   limit or floor must be between 100 and 100M"). `qos_cap.yml` treats
-  100000000 and null alike as "no previous limit".
+  100000000 and null alike as "no previous limit" and removes a limit
+  through the SDK with `Qos.construct(iops_limit="")` (construct, because
+  the client's own validation refuses the empty string).
 - A protection group snapshot on a group with no members fails;
   `protect_now.yml` reports those groups as failures. Eradicating a snapshot
   in a SafeMode-protected group is refused by the array; the reclaim reports

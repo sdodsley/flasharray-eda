@@ -10,10 +10,15 @@
   message for a missing pod.
 - Verified (VERIFICATION.md): the platform's Slack notification on a job
   failure, from a switchover launched against a pod that does not exist.
-- A lifted cap leaves the volume at the array's maximum (100000000, shown
-  as 100M) rather than without a limit, because `purefa_volume` sends that
-  value for `iops_qos: 0`; the API removes a limit on an empty string
-  (HARDWARE_NOTES.md). Noted, not worked around: the module is the place.
+- A lifted cap leaves the volume without a limit again: `qos_cap.yml`
+  removes the limit through the API with an empty string, because
+  `purefa_volume` sends the 100000000 maximum for `iops_qos: 0`, which
+  reads back as a limit (100M in the GUI); a real previous limit is still
+  restored through the module (HARDWARE_NOTES.md).
+- `qos_cap.yml` is idempotent: a cap on a volume that already carries the
+  `qos_cap` tag and a lift on a volume without it change nothing. Live, two
+  lift jobs ran 19 seconds apart; the second found the tags gone and
+  cleared the limit the first had just restored.
 - `qos_cap.yml` never loosens a limit: when the volume's own IOPS limit is
   already at or below `cap_iops` the cap run writes the tags and leaves the
   limit alone, so a lift restores the same value; `applied_iops` reports

@@ -11,11 +11,17 @@
 # the tag the plugin and the lift rule depend on. A cap never loosens a
 # limit: a volume whose own limit is already at or below cap_iops keeps
 # it (the tags are still written, so the lift restores the same value).
-# Lifting restores the previous IOPS limit carried in the tag, or clears
-# it with the module's value 0, which the module sends as the array's
-# maximum 100000000 (shown as 100M; a volume that never had a limit reads
-# null, and the API removes a limit on an empty string the module cannot
-# send yet), so a lifted volume is unlimited but not unset.
+# Lifting restores the previous IOPS limit carried in the tag through the
+# module, or removes the limit through the API with an empty string, the
+# one value the array takes as "no limit" (the module's 0 sends the
+# 100000000 maximum instead, which reads back as a limit and shows as
+# 100M), so a volume that had no limit before the cap has none after the
+# lift. Both modes
+# are idempotent: a cap on a volume that already carries the qos_cap tag
+# and a lift on a volume without it change nothing, so a duplicate launch
+# (two polls in the gap between a lift's restore and its tag removal, or
+# a retried launch) is harmless; the second of two lifts once found the
+# tags gone and cleared the limit the first had just restored.
 - name: Volume QoS cap with hysteresis
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -78,6 +84,7 @@
               - "qos_cap:{{ now(utc=true).isoformat(timespec='seconds') }}"
               - "qos_prev_iops:{{ before.iops_limit | default('none', true) }}"
           register: tagged
+          when: before.tags.qos_cap is not defined
 
         - name: Set the IOPS limit, unless the volume's own limit is already tighter
           everpure.flasharray.purefa_volume:
@@ -87,22 +94,54 @@
             name: "{{ volume }}"
             iops_qos: "{{ cap_iops }}"
           register: capped
-          when: >-
-            before.iops_limit is none or
-            (before.iops_limit | int) in [0, 100000000] or
-            (before.iops_limit | int) > (cap_iops | int)
+          when:
+            - before.tags.qos_cap is not defined
+            - >-
+              before.iops_limit is none or
+              (before.iops_limit | int) in [0, 100000000] or
+              (before.iops_limit | int) > (cap_iops | int)
 
     - name: Lift the cap
       when: mode == 'lift'
       block:
-        - name: Restore the previous IOPS limit, or clear it
+        - name: Restore the previous IOPS limit
           everpure.flasharray.purefa_volume:
             fa_url: "{{ fa_url }}"
             api_token: "{{ api_token }}"
             disable_warnings: true
             name: "{{ volume }}"
-            iops_qos: "{{ '0' if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000'] else before.tags.qos_prev_iops }}"
+            iops_qos: "{{ before.tags.qos_prev_iops | default('none') }}"
           register: lifted
+          when:
+            - before.tags.qos_cap is defined
+            - before.tags.qos_prev_iops | default('none') not in ['none', 'None', '', '100000000']
+
+        # The module has no way to remove a limit (its 0 sets the 100000000
+        # maximum); the API removes one on an empty string.
+        - name: Remove the limit the cap added, leaving the volume without one
+          ansible.builtin.command:
+            cmd: "{{ ansible_playbook_python }} -"
+            stdin: |
+              import json, os, urllib3
+              urllib3.disable_warnings()
+              from pypureclient import flasharray
+              c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+              qos = flasharray.Qos.construct(iops_limit="")  # construct(): the client would refuse the empty string
+              r = c.patch_volumes(names=[os.environ["VOL"]], volume=flasharray.VolumePatch(qos=qos))
+              if r.status_code != 200:
+                  raise SystemExit("removing the IOPS limit failed: %s" % (r.errors[0].message if getattr(r, "errors", None) else r.status_code))
+              after = (list(r.items)[0].to_dict().get("qos") or {}).get("iops_limit")
+              print(json.dumps({"iops_limit": after}))
+          environment:
+            FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+            FA_TOKEN: "{{ api_token }}"
+            VOL: "{{ volume }}"
+          register: cleared
+          changed_when: true
+          no_log: true
+          when:
+            - before.tags.qos_cap is defined
+            - before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
 
         - name: Remove the cap tags
           everpure.flasharray.purefa_volume_tags:
@@ -114,6 +153,7 @@
             tag: [qos_cap, qos_prev_iops]
             state: absent
           register: untagged
+          when: before.tags.qos_cap is defined
 
     - name: Record the action
       ansible.builtin.lineinfile:
@@ -125,7 +165,7 @@
               'array': inventory_hostname, 'volume': volume, 'mode': mode,
               'cap_iops': cap_iops | default(''), 'previous_iops_limit': before.iops_limit,
               'reason': reason | default('') | trim,
-              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)),
+              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)) or (cleared.changed | default(false)),
               'tag_changed': (tagged.changed | default(false)) or (untagged.changed | default(false))} | to_json }}
       delegate_to: localhost
 
@@ -138,20 +178,23 @@
     # Job artifacts for a workflow or orchestrator node that follows this one.
     # applied_iops is the limit the volume has after this run: the cap, or the
     # volume's own tighter limit it kept, or on a lift the limit restored from
-    # the tag (0 = no limit, as the lift task sets it); previous_iops is the
-    # limit read before the change.
+    # the tag (0 = no limit, as the lift task sets it), or the limit read when
+    # the run changed nothing (already tagged, or nothing to lift);
+    # previous_iops is the limit read before the change.
     - name: Publish the outcome as job artifacts
       ansible.builtin.set_stats:
         aggregate: false
         per_host: false
         data: >-
           {{ {'array': inventory_hostname, 'volume': volume, 'mode': mode,
-              'applied_iops': (([cap_iops | int, before.iops_limit | int] | min
-                                if before.iops_limit is not none and (before.iops_limit | int) not in [0, 100000000]
-                                else cap_iops | int) if mode == 'cap'
-                               else (0 if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
-                                     else before.tags.qos_prev_iops | int)),
+              'applied_iops': ((before.iops_limit if before.tags.qos_cap is defined
+                                else ([cap_iops | int, before.iops_limit | int] | min
+                                      if before.iops_limit is not none and (before.iops_limit | int) not in [0, 100000000]
+                                      else cap_iops | int)) if mode == 'cap'
+                               else (before.iops_limit if before.tags.qos_cap is not defined
+                                     else (0 if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
+                                           else before.tags.qos_prev_iops | int))),
               'previous_iops': before.iops_limit,
-              'changed': (capped.changed | default(false)) or (lifted.changed | default(false))} }}
+              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)) or (cleared.changed | default(false))} }}
       run_once: true
       delegate_to: localhost
