@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Every approval node names the group `approvers` beside `admins`, so the
+  people who decide and the Slack bot's orchestrator user can sit in a
+  group of their own; the orchestrator resolves approver names when it
+  creates an approval and takes users and groups, not service accounts.
 - A planned ActiveDR failover and failback runbook. `playbooks/dr_switchover.yml`
   demotes the link's source pod with quiesce, waits for the link to report
   the target's copy complete, promotes the target pod and records both

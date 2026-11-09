@@ -275,7 +275,7 @@ def test_only_placeholders_for_per_environment_ids(path):
             assert params["organization_name"] == "FlashArray", node["id"]
         if node["type"] == "approval":
             # approvers are named by group name, not id: the built-in group
-            assert params["approver_groups"] == ["admins"], node["id"]
+            assert params["approver_groups"] == ["admins", "approvers"], node["id"]
             # 24 hours, or one hour for the time-sensitive replication route
             assert params["decision_window"] in (86400, 3600), node["id"]
     for trigger in doc["triggers"]:

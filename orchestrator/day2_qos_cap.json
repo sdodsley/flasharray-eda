@@ -61,7 +61,7 @@
       "type": "approval",
       "name": "Approve the QoS cap",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Cap volume ${trigger.volume} on ${trigger.array} at ${trigger.iops_limit} IOPS. The previous limit is kept in an eda/qos_prev_iops tag on the volume; the performance rulebook lifts the cap once the volume's latency has been normal for its configured number of polls, and a lift can also be launched from FlashArray - QoS cap with mode lift."
       }

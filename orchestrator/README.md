@@ -189,8 +189,12 @@ definition is imported:
 creates (`aap_organization`); change both together if the templates live
 elsewhere. Approvers are named, not identified: `approver_groups` (and
 `approver_users`) take group and user names, so they are not placeholders.
-The shipped definitions name `admins`, the built-in group every instance
-has; change it to the group that should decide. `decision_window` is 86400
+The shipped definitions name two groups: `admins`, the built-in group every
+instance has, and `approvers`, a group to create for the people who decide
+and for the Slack bot's orchestrator user; the orchestrator resolves the
+names when it creates an approval, so a named group must exist by then,
+and a service account cannot be an approver, only a user. Change the names
+to the groups that should decide. `decision_window` is 86400
 seconds (24 hours), 3600 for the overdue-replication route; an approval
 nobody decides within it expires.
 `fallback_decision` (`approve` or `reject`) names the port an expired

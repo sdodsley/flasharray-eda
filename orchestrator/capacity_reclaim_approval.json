@@ -83,7 +83,7 @@
       "type": "approval",
       "name": "Approve eradicating the pending objects",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Capacity request ${capacity_request.artifacts.request_id}: eradicate the ${capacity_request.artifacts.candidate_count} volumes and snapshots already pending eradication on ${trigger.event.array} (${trigger.event.data.used_pct}% used, full in about ${trigger.event.data.days_to_full} days). Only the objects the request listed, and only those still pending eradication now, are touched; objects under a SafeMode retention lock are refused by the array. Rejecting frees nothing."
       }

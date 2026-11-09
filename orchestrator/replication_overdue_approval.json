@@ -53,7 +53,7 @@
       "type": "approval",
       "name": "Approve an immediate replicated snapshot",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 3600,
         "prompt": "Protection group ${trigger.event.data.pgroup} on ${trigger.event.array}: replication is overdue or stuck (last completed ${trigger.event.data.since_last_completed_s} s ago, schedule every ${trigger.event.data.frequency_ms} ms). Approve to take an immediate snapshot of the group and replicate it to its targets now; the group's schedule is not changed. Rejecting sends nothing."
       }

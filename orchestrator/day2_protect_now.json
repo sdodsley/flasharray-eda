@@ -39,7 +39,7 @@
       "type": "approval",
       "name": "Approve protect now",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Snapshot every local protection group on ${trigger.array} now and lengthen its enabled eradication delay by ${trigger.extend_eradication_by_s} seconds (rounded up to whole days, at most 30, never shortened). The snapshots count against the array's capacity until they expire or are destroyed."
       }

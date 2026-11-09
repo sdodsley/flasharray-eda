@@ -61,7 +61,7 @@
       "type": "approval",
       "name": "Approve the expansion",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Expand volume ${trigger.volume} on ${trigger.array} to ${trigger.new_size}. A FlashArray volume grows in place and never shrinks through this workflow; the file system inside it still has to be grown by its owner afterwards."
       }

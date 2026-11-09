@@ -68,7 +68,7 @@
       "type": "approval",
       "name": "Approve the failover",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Fail over the ActiveDR link: demote ${trigger.source_pod} on ${trigger.source_array} with quiesce, then promote ${trigger.target_pod} on ${trigger.target_array} once the copy is complete. The source pod's volumes are read-only from the demotion until the failback. Whoever approves owns moving the production hosts to ${trigger.target_array}."
       }
@@ -110,7 +110,7 @@
       "type": "approval",
       "name": "Approve the failback",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Fail back: demote ${trigger.target_pod} on ${trigger.target_array} with quiesce, then promote ${trigger.source_pod} on ${trigger.source_array} once the copy is complete, so the link replicates from ${trigger.source_array} again. The target pod's volumes are read-only from the demotion onwards; move the hosts back afterwards. A rejection or a timeout leaves production on ${trigger.target_array}."
       }

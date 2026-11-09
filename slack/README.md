@@ -24,11 +24,13 @@ One app in the workspace, created at api.slack.com/apps:
 
 ## Identities
 
-- **Orchestrator:** a service account with the `approval:decide`
-  permission on the project (`AO_CLIENT_ID` and `AO_CLIENT_SECRET`), or a
-  user login (`AO_USERNAME` with `AO_PASSWORD_FILE`). The decision is
-  recorded as that identity with `via Slack by <user> (<id>)` in the
-  decision notes.
+- **Orchestrator:** a user login (`AO_USERNAME` with `AO_PASSWORD_FILE`)
+  for a user who is in a group the approval nodes name (`approvers` in the
+  shipped definitions) and holds the `project-user` role on the project. A
+  service account (`AO_CLIENT_ID` and `AO_CLIENT_SECRET`) can list the
+  approvals but cannot decide them: the orchestrator accepts users and
+  groups as approvers, not service accounts. The decision is recorded as
+  that identity with `via Slack by <user> (<id>)` in the decision notes.
 - **Controller:** a token (`AAP_TOKEN` or `AAP_TOKEN_FILE`) of a user with
   the approve permission on the workflows. Controller approvals carry no
   notes field; the platform's activity stream records the token's user,

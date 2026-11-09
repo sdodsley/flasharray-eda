@@ -54,7 +54,7 @@
       "type": "approval",
       "name": "Approve the promotion",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Promote pod ${trigger.pod} on ${trigger.target_array} for a DR failover test. The pod must be the target of an ActiveDR replica link; its volumes become writable on ${trigger.target_array} while the source pod keeps serving production. Writes made to the promoted pod are discarded when the test is reverted."
       }
@@ -95,7 +95,7 @@
       "type": "approval",
       "name": "Approve the revert",
       "parameters": {
-        "approver_groups": ["admins"],
+        "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
         "prompt": "Demote pod ${trigger.pod} on ${trigger.target_array} to end the DR failover test. Every write made to the pod while it was promoted is discarded (the array keeps them in an undo-demote pod pending eradication) and the pod goes back to tracking its source. Approve once the application test is finished; a rejection or a timeout leaves the pod promoted."
       }
