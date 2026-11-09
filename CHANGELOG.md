@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- The pod guards of `dr_promote.yml`, `dr_demote.yml` and
+  `dr_switchover.yml` report the array's message for a missing pod ("Pod
+  does not exist.") instead of an undefined-variable error: the message's
+  default branch is evaluated even when the read returned an error, so the
+  fields it names now tolerate absence; a unit test renders every guard
+  message for a missing pod.
+- Verified (VERIFICATION.md): the platform's Slack notification on a job
+  failure, from a switchover launched against a pod that does not exist.
+
 ## 0.3.0 (2026-11-09)
 
 The syslog path is live on the platform from both arrays, with the audit

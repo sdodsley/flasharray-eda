@@ -388,3 +388,69 @@ def test_switchover_definition_matches_the_playbook(repo_root):
     assert edges[("approve_failback", "approved")] == "dr_failback"
     rejected = nodes[edges[("approve_failback", "rejected")]]
     assert rejected["parameters"]["extra_vars"]["severity"] == "critical"
+
+
+def _render(template, **vars):
+    jinja2 = pytest.importorskip("jinja2")
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    return env.from_string(template).render(**vars)
+
+
+@pytest.mark.parametrize(
+    "name, var, extra",
+    [
+        ("dr_promote.yml", "before", {"pod": "p", "target_array": "a"}),
+        ("dr_demote.yml", "before", {"pod": "p", "target_array": "a"}),
+        (
+            "dr_switchover.yml",
+            "source_before",
+            {
+                "source_pod": "p",
+                "source_array": "a",
+                "target_pod": "q",
+                "target_array": "b",
+            },
+        ),
+        (
+            "dr_switchover.yml",
+            "target_before",
+            {
+                "source_pod": "p",
+                "source_array": "a",
+                "target_pod": "q",
+                "target_array": "b",
+            },
+        ),
+    ],
+)
+def test_pod_guard_messages_render_the_read_error_for_a_missing_pod(
+    repo_root, name, var, extra
+):
+    # the message's default(...) branch is evaluated even when the read
+    # returned an error, so every field it touches must tolerate absence
+    plays = _plays(repo_root, name)
+    guards = [
+        a
+        for play in plays
+        for a in _tasks_with(play["tasks"], "ansible.builtin.assert")
+        if f"{var}.error is not defined"
+        in "\n".join(a["ansible.builtin.assert"]["that"])
+    ]
+    assert guards, f"{name} has no pod guard on {var}"
+    for guard in guards:
+        message = guard["ansible.builtin.assert"]["fail_msg"]
+        rendered = _render(message, **{var: {"error": "Pod does not exist."}}, **extra)
+        assert rendered.strip() == "Pod does not exist."
+        rendered = _render(
+            message,
+            **{
+                var: {
+                    "promotion_status": "quiescing",
+                    "links": [],
+                    "link_source_count": 0,
+                    "link_target_count": 0,
+                }
+            },
+            **extra,
+        )
+        assert "quiescing" in rendered

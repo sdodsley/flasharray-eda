@@ -130,9 +130,9 @@
           {{ source_before.error | default(source_pod ~ ' on ' ~ source_array ~ ' is '
              ~ ('destroyed' if source_before.destroyed | default(false) else
                 ('stretched' if source_before.array_count | default(1) | int != 1 else
-                 ('quiescing' if source_before.promotion_status == 'quiescing' else
+                 ('quiescing' if source_before.promotion_status | default('') == 'quiescing' else
                   'not the promoted source of a replica link to ' ~ target_pod ~ ' (promotion '
-                  ~ source_before.promotion_status ~ ', links to ' ~ source_before.link_target_count | default(0)
+                  ~ source_before.promotion_status | default('') ~ ', links to ' ~ source_before.link_target_count | default(0)
                   ~ ' target pod(s))')))) }}
 
     # Purity keeps the pod's state from before a demotion in a destroyed
@@ -291,9 +291,9 @@
           {{ target_before.error | default(target_pod ~ ' on ' ~ target_array ~ ' is '
              ~ ('destroyed' if target_before.destroyed | default(false) else
                 ('stretched' if target_before.array_count | default(1) | int != 1 else
-                 ('quiescing' if target_before.promotion_status == 'quiescing' else
+                 ('quiescing' if target_before.promotion_status | default('') == 'quiescing' else
                   'not the target of a replica link from ' ~ source_pod ~ ' (promotion '
-                  ~ target_before.promotion_status ~ ', linked from ' ~ target_before.link_source_count | default(0)
+                  ~ target_before.promotion_status | default('') ~ ', linked from ' ~ target_before.link_source_count | default(0)
                   ~ ' source pod(s))')))) }}
 
     # With the source demoted, the link reports quiesced once the target holds

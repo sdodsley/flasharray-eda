@@ -103,7 +103,7 @@
           {{ before.error | default(pod ~ ' is '
              ~ ('destroyed' if before.destroyed | default(false) else
                 ('stretched' if before.array_count | default(1) | int != 1 else
-                 ('quiescing' if before.promotion_status == 'quiescing' else
+                 ('quiescing' if before.promotion_status | default('') == 'quiescing' else
                   'not the target of a pod replica link (linked from ' ~ before.link_source_count | default(0)
                   ~ ' source pod(s), to ' ~ before.link_target_count | default(0) ~ ' target pod(s))')))) }}
 
