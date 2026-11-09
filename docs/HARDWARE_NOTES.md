@@ -160,6 +160,13 @@ The native exporter the Prometheus rules are written for, as served on
   100000000 and null alike as "no previous limit" and removes a limit
   through the SDK with `Qos.construct(iops_limit="")` (construct, because
   the client's own validation refuses the empty string).
+- A volume's `usec_per_read_op` is the array's service time, not the
+  initiator's: 4k random reads that took 2.7 ms on a VM over one iSCSI
+  path read 69 µs on the array, and 1 MiB reads that took 16 ms read 200 to
+  330 µs. A load generator on a slow link cannot make a volume look hot
+  to the telemetry signal; an IOPS cap on that volume is visible at once
+  in the volume's own `reads_per_sec` (1000 to 500 to 1000 as the limit
+  changed).
 - A protection group snapshot on a group with no members fails;
   `protect_now.yml` reports those groups as failures. Eradicating a snapshot
   in a SafeMode-protected group is refused by the array; the reclaim reports

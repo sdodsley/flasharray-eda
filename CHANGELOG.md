@@ -9,7 +9,11 @@
   fields it names now tolerate absence; a unit test renders every guard
   message for a missing pod.
 - Verified (VERIFICATION.md): the platform's Slack notification on a job
-  failure, from a switchover launched against a pod that does not exist.
+  failure, from a switchover launched against a pod that does not exist;
+  the QoS cap under a real fio load from the platform host over iSCSI,
+  twice through the day-2 route with its approval from Slack, on a volume
+  with its own 1000-IOPS limit (recorded, enforced at 500, restored) and on
+  one without (lifted to no limit, not the maximum).
 - A lifted cap leaves the volume without a limit again: `qos_cap.yml`
   removes the limit through the API with an empty string, because
   `purefa_volume` sends the 100000000 maximum for `iops_qos: 0`, which

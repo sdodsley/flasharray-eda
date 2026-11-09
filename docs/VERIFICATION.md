@@ -230,6 +230,42 @@ approval; QoS cap caps a scratch volume at the requested IOPS after its
 approval (`previous_iops` null, the volume destroyed afterwards); protect
 now snapshots every local protection group after its approval and
 reports the groups it could snapshot and the ones the array refused.
+
+The QoS cap was then exercised under a real load. The platform host
+became an iSCSI initiator for a throwaway 20 GB volume on array A (one
+portal, fio 4k random reads, queue depth 32 on four jobs), and the day-2
+cap was requested at 500 IOPS from its form and approved from Slack
+while the load ran, twice. On a volume created with its own limit of
+1000 IOPS the array's counters went from about 1000 reads a second to
+500 when the cap job wrote the tags (`qos_prev_iops: 1000`) and the
+limit, and back to 1000 when the lift job restored the limit and removed
+the tags. On a volume created without a limit the same cycle ended with
+the volume reading no limit at all: the lift removes the limit through
+the API with an empty string, because the module's "clear" (0) sets the
+array's maximum 100000000, which reads back as a limit and shows as
+100M (docs/HARDWARE_NOTES.md). The first attempt found two defects the
+tests now cover. Two lift jobs ran 19 seconds apart; the second read a
+volume with the limit restored and the tags already gone and cleared it
+to the maximum, so both modes are idempotent now (a cap on a tagged
+volume and a lift on an untagged one change nothing). And a cap on a
+volume whose latency was already normal was lifted at the next poll
+("normal for 10 polls"), because the lift's count ran from whenever the
+volume last read slow; the telemetry signal now starts it at the cap,
+which the next decision-environment image carries. The automatic
+noisy-neighbour rule itself did not fire from this host: the array's
+service time for 4k reads stayed near 70 µs with the initiator seeing
+milliseconds, and 1 MiB reads on four paths reached 60 MB/s at 200 to 330
+µs on the array and a quarter of its IOPS, so neither the 2 ms volume
+latency nor the 1 ms array latency the rule needs was approached; the
+array-side latency the plugin reads does not include the wire, and a
+real hot array is still the only way to fire that rule honestly.
+
+The platform's Slack notification template also fired on a job failure:
+the switchover launched against a pod that does not exist failed at its
+guard and the platform posted "Job #261 'FlashArray - DR switchover'
+failed" with the job's link (the notification record on the job reads
+`successful`). That failure also showed the guards' messages
+mis-rendering for a missing pod, fixed since.
 The ActiveDR failover test (`orchestrator/dr_failover_test.json`) runs
 against the replica link's target pod on the second array: after the
 first approval `dr_promote.yml` promotes the pod (its replica link stays
@@ -379,16 +415,16 @@ event takes the same path as a live one.
   controller workflow.
 - `tools/ao_sync.py` deleting or unpublishing anything: by design it never
   does, so the live run exercised create, update and unchanged only.
-- The platform's Slack notification template on a job failure: its
-  approval-pending post is verified (above); no job has failed since it
-  was attached. The bot deciding a controller workflow approval: the card
-  is posted; the click is a person's.
+- The bot deciding a controller workflow approval: the card is posted; the
+  click is a person's.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the
   real identify LED.
 - Array connection path failure or throttle changes: not induced.
-- QoS under synthetic load: thresholds are lowered on a volume with live
-  IOPS; no load generator is run.
+- The automatic noisy-neighbour cap rule on a real hot array: the cap,
+  lift, restore and clear ran under a real fio load (above), but the rule's
+  own latency thresholds were never reached from the lab's initiator, so
+  the rule has fired only on lowered thresholds and on replayed events.
 - Packaging into `everpure.flasharray` and the Red Hat EDA certification
   track ([PACKAGING.md](PACKAGING.md)).
