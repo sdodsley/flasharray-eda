@@ -345,6 +345,11 @@ sections above follow them:
   publish that key, which validation cannot see.
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,
   `artifacts` (the job's `set_stats`), `created`, `started` and `finished`.
+- Approver names are resolved to users and groups when the approval is
+  created, not at validation (a definition naming an unknown group
+  validates and fails at that node); a service account can hold
+  `approval:decide` and still cannot decide, so the Slack bot's
+  orchestrator identity is a user in a group the nodes name.
 - `GET /api/v1/approvals?status=pending` lists the approvals waiting
   (`id`, `execution_id`, `node_name`, `prompt`); `PATCH
   /api/v1/approvals/{id}` with `status` (`approved` or `rejected`) and

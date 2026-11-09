@@ -110,7 +110,9 @@
   arrays replaying queued lines after an 80-minute listener outage; the scrape-failure rule through Alertmanager to the
   platform's activation, firing and resolved; the platform's Slack
   notification on a controller-tier approval and the bot's card for it;
-  the alerts signal against a Purity//FA 6.12.4 array.
+  the alerts signal against a Purity//FA 6.12.4 array; the planned
+  failover and failback on the lab's ActiveDR link, both ways, with the
+  link reversed in between.
 
 ## 0.2.0 (2026-11-07)
 

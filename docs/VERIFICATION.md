@@ -239,7 +239,18 @@ demotes it with quiesce, discarding the writes made during the test, and
 the pod is a replica-link target again. Both playbooks refuse a pod that
 is not the target of a replica link: Purity counts the sources linked to
 a pod in `link_source_count`, so a target pod has a source count above
-zero and an inbound link.
+zero and an inbound link. The planned failover and failback
+(`orchestrator/dr_failover_failback.json`, `playbooks/dr_switchover.yml`)
+runs on the lab's ActiveDR link, whose two pods hold no volumes: after the
+first approval the switchover job demotes the source pod with quiesce,
+sees the link report the copy complete, promotes the target pod and
+records the link reversed (the target's link outbound and replicating), in
+72 seconds; after the second approval the same template with the sides
+swapped puts the link back, and both pods read as they started. Both
+approvals were given in the orchestrator's UI: the execution had been
+created when the nodes named the `admins` group alone, and a service
+account is not a user the orchestrator will list as an approver, which is
+why the shipped definitions now name an `approvers` group as well.
 
 The overdue-replication route runs on the same orchestrator.
 `orchestrator/replication_overdue_approval.json` is imported and
