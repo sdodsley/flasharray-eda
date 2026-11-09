@@ -78,8 +78,13 @@ Verified against a workspace: the bot connects over Socket Mode, posts the
 card for a pending orchestrator approval within one poll, and a click on
 Approve decides it (the orchestrator records the approval under the bot's
 identity with the Slack user in the decision notes) and the execution
-resumes. A pending controller approval is posted the same way (the
-controller-tier workflow launched by hand); its click is a person's.
+resumes. A pending controller approval is posted and decided the same way
+(the controller-tier workflow launched by hand, approved from the channel,
+recorded as the bot's platform user). Deployed, the bot holds a service
+account with the project-user role and a platform user with the Approve
+role on the workflow, nothing wider; a second click on an approval already
+decided is refused by the platform and reported back as an ephemeral
+message.
 `SLACK_CHANNEL` may be a name: Slack accepts it for the post and the bot
 keeps the channel id the post returns for the card's later updates.
 

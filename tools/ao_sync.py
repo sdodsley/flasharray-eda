@@ -291,12 +291,15 @@ def normalise(doc):
     of a published version omits `credential_names` (it resolves the names
     at publish time and keeps no copy), so the field is left out of the
     comparison on both sides; a changed credential name alone does not
-    count as a changed definition."""
+    count as a changed definition. An empty `extra_vars` is dropped from
+    the export as well."""
     doc = json.loads(json.dumps(doc))
     for node in doc.get("nodes", []) if isinstance(doc, dict) else []:
         params = node.get("parameters") if isinstance(node, dict) else None
         if isinstance(params, dict):
             params.pop("credential_names", None)
+            if params.get("extra_vars") == {}:
+                params.pop("extra_vars")
     return json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
 

@@ -263,7 +263,13 @@ latest execution's approval was given from Slack through
 throwaway copy of the definition with `fallback_decision: reject` and a
 one-minute window expired the same way, the execution failed at the node
 and the rejected branch was skipped; the engine of this release never reads
-the field (orchestrator/README.md).
+the field (orchestrator/README.md). `tools/ao_sync.py` runs live as the
+service account once it holds the project-admin role on the project: it
+created and published the failover-and-failback workflow, republished the
+drill schedule, whose description had changed in the file, as version 2,
+and reports the seven others unchanged; its first live run found the
+service-accounts path misspelt and the export contract (no
+`credential_names`, no empty `extra_vars`), both now in the tool.
 
 Slack is exercised from the platform. **FlashArray - notify** with the
 `Slack webhook` credential attached posts the record to the channel (the
@@ -278,8 +284,13 @@ it: the orchestrator records the approval under the bot's identity with
 `via Slack by <user> (<id>)` in the decision notes and the execution
 resumes into the replicate-now job. The controller's queue is watched the
 same way: launching the controller-tier workflow by hand puts its approval
-card in the channel, and the platform's own Slack notification template
-posts that the approval node needs review.
+card in the channel, the platform's own Slack notification template posts
+that the approval node needs review, then that it was approved and that
+the workflow succeeded, and the click from the channel approves it (the
+reclaim then runs and the array refuses the SafeMode-locked candidates).
+The bot runs under identities made for it, an orchestrator service account
+with the project-user role and a platform user with the Approve role on
+the workflow, and polls both queues with them.
 
 ## Replayed only
 
@@ -324,11 +335,8 @@ event takes the same path as a live one.
   the platform capacity rulebook hands the event to the orchestrator
   (verified above) or launches the request job; it does not launch the
   controller workflow.
-- `tools/ao_sync.py` against a live orchestrator end to end: it is
-  exercised against its in-process mock, and the live imports were made
-  with the same calls (validate, create, publish with the definition in
-  the body) under an administrator login, because the service account the
-  tool authenticates as cannot list the project it needs.
+- `tools/ao_sync.py` deleting or unpublishing anything: by design it never
+  does, so the live run exercised create, update and unchanged only.
 - The platform's Slack notification template on a job failure: its
   approval-pending post is verified (above); no job has failed since it
   was attached. The bot deciding a controller workflow approval: the card

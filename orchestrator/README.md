@@ -334,8 +334,9 @@ sections above follow them:
   definition as version v+1 and publishes it; with an empty body it
   publishes version v as it stands. The export of a version carries no
   `credential_names`: the orchestrator resolves them when it publishes and
-  keeps no copy, so a comparison of a file with its export leaves the field
-  out (`tools/ao_sync.py` does). A node of a published definition that
+  keeps no copy, and an empty `extra_vars` is dropped as well, so a
+  comparison of a file with its export leaves both out (`tools/ao_sync.py`
+  does). A node of a published definition that
   reads `${<node>.artifacts.<key>}` fails at run time when the job did not
   publish that key, which validation cannot see.
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,

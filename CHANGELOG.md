@@ -10,7 +10,10 @@
   it behind two approvals, and `aap/seed.yml` creates the
   `FlashArray - DR switchover` job template.
 - `tools/ao_sync.py` asks the orchestrator for `/api/v1/service_accounts`
-  (the path it used did not exist; the first live run found it).
+  (the path it used did not exist; the first live run found it) and
+  compares a file with its export without `credential_names` and without an
+  empty `extra_vars`, neither of which the export carries. Verified live as
+  the service account: create, update and unchanged.
 - `purefa_syslog` parses what Purity//FA 6.10.6 sends: lines without a
   `<PRI>`, a pid on the program, the command layout of `purity.audit`
   (`[user (local)]@array(id) command. Message ID: N UTC Time: ... Array
