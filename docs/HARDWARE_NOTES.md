@@ -51,11 +51,14 @@ unless stated.
   On the lab arrays its timer is the array's `disabled_delay` from
   `eradication_config` (288 hours on one, 192 on the other) even though
   the pod reports manual eradication enabled, where a `<pod>.relink` pod
-  gets the 24-hour `enabled_delay`. The pod cannot be demoted again while
-  such a pod exists (the `purefa_pod` module refuses before asking the
-  array), which every repeated switchover inside that window meets;
-  `dr_switchover.yml` eradicates them first when `eradicate_undo_demote`
-  is true.
+  gets the 24-hour `enabled_delay`. The array allows a second demotion
+  while such pods exist and adds another; the `purefa_pod` module of
+  everpure.flasharray 1.46 refuses it ("undo-demote pod not being
+  eradicated"), which every repeated switchover inside that window meets,
+  so `dr_switchover.yml` eradicates them first when `eradicate_undo_demote`
+  is true. The collection's master, after this finding, gives the module
+  an `eradicate_undo` option (1.47.0) that does the same inside the demote;
+  once a release carries it the playbook's own step can give way to it.
 - Twenty-six minutes with the NTP servers pointed at an unroutable address
   raised no alert on 6.10.6 within the test window, and neither did pausing
   and resuming a pod replica link; array B raised alert 13 ("Time sync
@@ -148,7 +151,13 @@ The native exporter the Prometheus rules are written for, as served on
 - `purefa_pgsnap` forbids `now` together with `remote`; `remote: true` on
   its own is the immediate replicated snapshot.
 - `purefa_volume` takes `iops_qos: 0` to clear a limit and rejects the
-  array's own "no limit" value 100000000.
+  array's own "no limit" value 100000000; what it sends for 0 is that
+  maximum, so the volume reads `iops_limit: 100000000` (100M in the GUI)
+  rather than the `null` a volume that never had a limit reads. Live on
+  6.10.6, `PATCH /volumes` with `qos.iops_limit` set to `""` removes the
+  limit (reads null again), `null` is ignored, `0` is refused ("IOPS
+  limit or floor must be between 100 and 100M"). `qos_cap.yml` treats
+  100000000 and null alike as "no previous limit".
 - A protection group snapshot on a group with no members fails;
   `protect_now.yml` reports those groups as failures. Eradicating a snapshot
   in a SafeMode-protected group is refused by the array; the reclaim reports

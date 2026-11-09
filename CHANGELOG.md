@@ -10,6 +10,19 @@
   message for a missing pod.
 - Verified (VERIFICATION.md): the platform's Slack notification on a job
   failure, from a switchover launched against a pod that does not exist.
+- A lifted cap leaves the volume at the array's maximum (100000000, shown
+  as 100M) rather than without a limit, because `purefa_volume` sends that
+  value for `iops_qos: 0`; the API removes a limit on an empty string
+  (HARDWARE_NOTES.md). Noted, not worked around: the module is the place.
+- `qos_cap.yml` never loosens a limit: when the volume's own IOPS limit is
+  already at or below `cap_iops` the cap run writes the tags and leaves the
+  limit alone, so a lift restores the same value; `applied_iops` reports
+  the limit in force. A unit test renders the condition and the artifact.
+- The undo-demote refusal is the `purefa_pod` module's, not the array's:
+  the array allows a second demotion and adds another undo-demote pod.
+  everpure.flasharray's master now carries an `eradicate_undo` option on
+  the module (1.47.0) that eradicates them inside the demote; the
+  switchover's own step stays until a release carries it.
 
 ## 0.3.0 (2026-11-09)
 

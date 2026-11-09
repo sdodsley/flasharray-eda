@@ -174,7 +174,7 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   serves production; behind a second approval the same move runs the other
   way. Hosts are moved outside the workflow. A demotion leaves the pod's
   state from before it in a destroyed `<pod>.undo-demote.<n>` pod, and the
-  pod cannot be demoted again while one exists, so the switchover job
+  module refuses to demote the pod again while one exists, so the switchover job
   eradicates that pod first when `eradicate_undo_demote` is true; the
   workflow sets it, a run by hand chooses. An unplanned failover, with the
   source array unreachable, is the promote alone (`dr_promote.yml`).

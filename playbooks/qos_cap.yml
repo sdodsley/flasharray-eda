@@ -8,9 +8,14 @@
 # everpure.flasharray.purefa_volume_tags. The pre-read of the volume's QoS
 # and tags stays on the SDK: no module reads one volume's tags. In cap mode
 # the tag is written before the limit, so a volume is never capped without
-# the tag the plugin and the lift rule depend on. Lifting restores the
-# previous IOPS limit carried in the tag, or clears it (module value 0,
-# which the array stores as its "no limit" value 100000000).
+# the tag the plugin and the lift rule depend on. A cap never loosens a
+# limit: a volume whose own limit is already at or below cap_iops keeps
+# it (the tags are still written, so the lift restores the same value).
+# Lifting restores the previous IOPS limit carried in the tag, or clears
+# it with the module's value 0, which the module sends as the array's
+# maximum 100000000 (shown as 100M; a volume that never had a limit reads
+# null, and the API removes a limit on an empty string the module cannot
+# send yet), so a lifted volume is unlimited but not unset.
 - name: Volume QoS cap with hysteresis
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -74,7 +79,7 @@
               - "qos_prev_iops:{{ before.iops_limit | default('none', true) }}"
           register: tagged
 
-        - name: Set the IOPS limit
+        - name: Set the IOPS limit, unless the volume's own limit is already tighter
           everpure.flasharray.purefa_volume:
             fa_url: "{{ fa_url }}"
             api_token: "{{ api_token }}"
@@ -82,6 +87,10 @@
             name: "{{ volume }}"
             iops_qos: "{{ cap_iops }}"
           register: capped
+          when: >-
+            before.iops_limit is none or
+            (before.iops_limit | int) in [0, 100000000] or
+            (before.iops_limit | int) > (cap_iops | int)
 
     - name: Lift the cap
       when: mode == 'lift'
@@ -127,16 +136,19 @@
           {{ '(' ~ cap_iops ~ ' IOPS)' if mode == 'cap' else '' }} :: {{ reason | default('') | trim }}
 
     # Job artifacts for a workflow or orchestrator node that follows this one.
-    # applied_iops is the limit the volume has after this run: the cap, or on
-    # a lift the limit restored from the tag (0 = no limit, as the lift task
-    # sets it); previous_iops is the limit read before the change.
+    # applied_iops is the limit the volume has after this run: the cap, or the
+    # volume's own tighter limit it kept, or on a lift the limit restored from
+    # the tag (0 = no limit, as the lift task sets it); previous_iops is the
+    # limit read before the change.
     - name: Publish the outcome as job artifacts
       ansible.builtin.set_stats:
         aggregate: false
         per_host: false
         data: >-
           {{ {'array': inventory_hostname, 'volume': volume, 'mode': mode,
-              'applied_iops': ((cap_iops | int) if mode == 'cap'
+              'applied_iops': (([cap_iops | int, before.iops_limit | int] | min
+                                if before.iops_limit is not none and (before.iops_limit | int) not in [0, 100000000]
+                                else cap_iops | int) if mode == 'cap'
                                else (0 if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
                                      else before.tags.qos_prev_iops | int)),
               'previous_iops': before.iops_limit,

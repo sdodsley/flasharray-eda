@@ -22,8 +22,8 @@
 # already demoted or a target already promoted is left as it is, so a run
 # that stopped half way can be repeated. A demotion leaves the pod's state
 # from before it in a destroyed <pod>.undo-demote.<n> pod, kept for the
-# array's eradication delay, and the pod cannot be demoted again while one
-# exists (the module refuses), which a repeated switchover of the same pod
+# array's eradication delay, and purefa_pod refuses to demote the pod again
+# while one exists (the array would allow it), which a repeated switchover
 # inside that delay runs into: with eradicate_undo_demote=true (the
 # orchestrator workflow sets it) the play on the source eradicates those
 # pods before the demotion, without it the play refuses and names them.
@@ -137,7 +137,7 @@
 
     # Purity keeps the pod's state from before a demotion in a destroyed
     # <pod>.undo-demote.<n> pod for the array's eradication delay, and the
-    # pod cannot be demoted again while one exists. A repeated switchover
+    # module refuses to demote the pod again while one exists. A repeated switchover
     # inside that delay eradicates them first, when told to.
     - name: Refuse to demote over an earlier demotion's undo-demote pod unless told to eradicate it
       ansible.builtin.assert:
