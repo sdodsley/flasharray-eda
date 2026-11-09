@@ -431,8 +431,6 @@ event takes the same path as a live one.
   controller workflow.
 - `tools/ao_sync.py` deleting or unpublishing anything: by design it never
   does, so the live run exercised create, update and unchanged only.
-- The bot deciding a controller workflow approval: the card is posted; the
-  click is a person's.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

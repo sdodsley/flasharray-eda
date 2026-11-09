@@ -170,7 +170,8 @@ ledger.
   decision environment) and the array's test line over UDP, with the
   arrays replaying queued lines after an 80-minute listener outage; the scrape-failure rule through Alertmanager to the
   platform's activation, firing and resolved; the platform's Slack
-  notification on a controller-tier approval and the bot's card for it;
+  notification on a controller-tier approval and the bot's card for it,
+  clicked from the channel;
   the alerts signal against a Purity//FA 6.12.4 array; the planned
   failover and failback on the lab's ActiveDR link, both ways, with the
   link reversed in between, then again with both approvals given from
