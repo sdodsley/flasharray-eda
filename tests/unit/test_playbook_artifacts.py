@@ -48,6 +48,7 @@ ARTIFACT_KEYS = {
         "source_status_after",
         "target_status_after",
         "link_direction_after",
+        "undo_demote_eradicated",
         "changed",
     },
 }

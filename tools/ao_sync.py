@@ -388,7 +388,7 @@ def sync_definition(client, project_id, existing, doc, dry_run=False):
         _publish(client, workflow_id, version)
         return f"unchanged, published v{version}", findings
     if dry_run:
-        return f"would update and publish v{version + 1}", findings
+        return "would update and publish a new version", findings
     published = _publish(client, workflow_id, version, definition=doc)
     new_version = (
         published.get("published_version_number")

@@ -44,6 +44,18 @@ unless stated.
   and `dr_demote.yml` therefore accept a pod only with a source count above
   zero and an inbound link. Demoting with quiesce discards the writes made
   while the pod was promoted; the source pod is never touched.
+- Demoting a pod leaves `<pod>.undo-demote.<n>` behind: a destroyed pod
+  holding the pod's state from before the demotion, found with
+  `GET /pods?names=<pod>.undo-demote.*&destroyed=true` (a pattern that
+  matches nothing is a 400 "No matching pods found", not an empty list).
+  On the lab arrays its timer is the array's `disabled_delay` from
+  `eradication_config` (288 hours on one, 192 on the other) even though
+  the pod reports manual eradication enabled, where a `<pod>.relink` pod
+  gets the 24-hour `enabled_delay`. The pod cannot be demoted again while
+  such a pod exists (the `purefa_pod` module refuses before asking the
+  array), which every repeated switchover inside that window meets;
+  `dr_switchover.yml` eradicates them first when `eradicate_undo_demote`
+  is true.
 - Twenty-six minutes with the NTP servers pointed at an unroutable address
   raised no alert on 6.10.6 within the test window, and neither did pausing
   and resuming a pod replica link; array B raised alert 13 ("Time sync

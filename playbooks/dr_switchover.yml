@@ -20,9 +20,16 @@
 # and waits for the link to report its copy complete (quiesced) before it
 # promotes, so a planned switchover never promotes stale data. A source
 # already demoted or a target already promoted is left as it is, so a run
-# that stopped half way can be repeated. This is the planned path; an
-# unplanned failover, with the source array unreachable, is dr_promote.yml on
-# the target alone. The source pod's volumes are read-only from the demotion
+# that stopped half way can be repeated. A demotion leaves the pod's state
+# from before it in a destroyed <pod>.undo-demote.<n> pod, kept for the
+# array's eradication delay, and the pod cannot be demoted again while one
+# exists (the module refuses), which a repeated switchover of the same pod
+# inside that delay runs into: with eradicate_undo_demote=true (the
+# orchestrator workflow sets it) the play on the source eradicates those
+# pods before the demotion, without it the play refuses and names them.
+# This is the planned path; an unplanned failover, with the source array
+# unreachable, is dr_promote.yml on the target alone. The source pod's
+# volumes are read-only from the demotion
 # until a failback promotes them again; moving the hosts that use them is
 # outside this playbook. Both plays resolve their own array, so the job
 # template runs with the fleet credential, not one array's.
@@ -74,9 +81,12 @@
           p = list(r.items)[0].to_dict()
           links = [l.to_dict() for l in c.get_pod_replica_links().items]
           links = [l for l in links if (l.get("local_pod") or {}).get("name") == name]
+          # a demotion leaves <pod>.undo-demote.<n> behind, destroyed, until its eradication timer runs out
+          undo = c.get_pods(names=[name + ".undo-demote.*"], destroyed=True)
+          undo_names = sorted(u.to_dict()["name"] for u in undo.items) if undo.status_code == 200 else []
           print(json.dumps({"promotion_status": p.get("promotion_status"), "requested_promotion_state": p.get("requested_promotion_state"),
                             "link_source_count": p.get("link_source_count"), "link_target_count": p.get("link_target_count"),
-                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")),
+                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")), "undo_demote_pods": undo_names,
                             "links": [{"direction": l.get("direction"), "status": l.get("status"),
                                        "remote_pod": (l.get("remote_pod") or {}).get("name"),
                                        "remote": ((l.get("remotes") or [{}])[0]).get("name")} for l in links]}))
@@ -124,6 +134,38 @@
                   'not the promoted source of a replica link to ' ~ target_pod ~ ' (promotion '
                   ~ source_before.promotion_status ~ ', links to ' ~ source_before.link_target_count | default(0)
                   ~ ' target pod(s))')))) }}
+
+    # Purity keeps the pod's state from before a demotion in a destroyed
+    # <pod>.undo-demote.<n> pod for the array's eradication delay, and the
+    # pod cannot be demoted again while one exists. A repeated switchover
+    # inside that delay eradicates them first, when told to.
+    - name: Refuse to demote over an earlier demotion's undo-demote pod unless told to eradicate it
+      ansible.builtin.assert:
+        that:
+          - >-
+            source_before.promotion_status == 'demoted' or
+            source_before.undo_demote_pods | default([]) | length == 0 or
+            eradicate_undo_demote | default(false) | bool
+        fail_msg: >-
+          {{ source_pod }} on {{ source_array }} still has {{ source_before.undo_demote_pods | default([]) | join(', ') }}
+          from an earlier demotion, and a pod cannot be demoted again while its undo-demote pod exists; run with
+          eradicate_undo_demote=true to have the pod(s) eradicated first (they hold the pod's state from before that
+          demotion), or eradicate them by hand
+
+    - name: Eradicate the undo-demote pods the earlier demotion left
+      everpure.flasharray.purefa_pod:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item }}"
+        state: absent
+        eradicate: true
+        delete_contents: true
+      loop: "{{ source_before.undo_demote_pods | default([]) }}"
+      register: undo_eradicated
+      when:
+        - source_before.promotion_status != 'demoted'
+        - eradicate_undo_demote | default(false) | bool
 
     - name: Demote the source pod, quiescing first so the target receives every write
       everpure.flasharray.purefa_pod:
@@ -201,9 +243,12 @@
           p = list(r.items)[0].to_dict()
           links = [l.to_dict() for l in c.get_pod_replica_links().items]
           links = [l for l in links if (l.get("local_pod") or {}).get("name") == name]
+          # a demotion leaves <pod>.undo-demote.<n> behind, destroyed, until its eradication timer runs out
+          undo = c.get_pods(names=[name + ".undo-demote.*"], destroyed=True)
+          undo_names = sorted(u.to_dict()["name"] for u in undo.items) if undo.status_code == 200 else []
           print(json.dumps({"promotion_status": p.get("promotion_status"), "requested_promotion_state": p.get("requested_promotion_state"),
                             "link_source_count": p.get("link_source_count"), "link_target_count": p.get("link_target_count"),
-                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")),
+                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")), "undo_demote_pods": undo_names,
                             "links": [{"direction": l.get("direction"), "status": l.get("status"),
                                        "remote_pod": (l.get("remote_pod") or {}).get("name"),
                                        "remote": ((l.get("remotes") or [{}])[0]).get("name")} for l in links]}))
@@ -327,7 +372,10 @@
               'source_status_after': source_state.source_after.promotion_status | default(''),
               'target_status_before': target_before.promotion_status, 'target_status_after': target_after.promotion_status,
               'link_direction_after': link_after.direction | default(''), 'link_status_after': link_after.status | default(''),
-              'changed': (source_state.demoted.changed | default(false)) or (promoted.changed | default(false))} | to_json }}
+              'undo_demote_eradicated': (source_state.source_before.undo_demote_pods | default([]))
+                                        if (source_state.undo_eradicated.changed | default(false)) else [],
+              'changed': (source_state.undo_eradicated.changed | default(false)) or (source_state.demoted.changed | default(false))
+                         or (promoted.changed | default(false))} | to_json }}
       delegate_to: localhost
 
     - name: Show the switchover
@@ -336,7 +384,8 @@
           {{ source_array }}/{{ source_pod }} {{ source_state.source_before.promotion_status | default('?') }} -> {{ source_state.source_after.promotion_status | default('?') }};
           {{ target_array }}/{{ target_pod }} {{ target_before.promotion_status }} -> {{ target_after.promotion_status }};
           link from {{ target_pod }} now {{ link_after.direction | default('?') }} {{ link_after.status | default('?') }}
-          {{ '(changed)' if ((source_state.demoted.changed | default(false)) or (promoted.changed | default(false))) else '(unchanged)' }}
+          {{ '(changed)' if ((source_state.undo_eradicated.changed | default(false)) or (source_state.demoted.changed | default(false))
+                             or (promoted.changed | default(false))) else '(unchanged)' }}
 
     # Job artifacts for a workflow or orchestrator node that follows this one.
     - name: Publish the outcome as job artifacts
@@ -349,6 +398,9 @@
               'source_status_after': source_state.source_after.promotion_status | default(''),
               'target_status_before': target_before.promotion_status, 'target_status_after': target_after.promotion_status,
               'link_direction_after': link_after.direction | default(''), 'link_status_after': link_after.status | default(''),
-              'changed': (source_state.demoted.changed | default(false)) or (promoted.changed | default(false))} }}
+              'undo_demote_eradicated': (source_state.source_before.undo_demote_pods | default([]))
+                                        if (source_state.undo_eradicated.changed | default(false)) else [],
+              'changed': (source_state.undo_eradicated.changed | default(false)) or (source_state.demoted.changed | default(false))
+                         or (promoted.changed | default(false))} }}
       run_once: true
       delegate_to: localhost

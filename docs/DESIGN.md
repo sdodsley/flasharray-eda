@@ -172,7 +172,11 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   the link's source pod with quiesce and promote the target pod once the
   link reports the copy complete, so the link reverses and the target
   serves production; behind a second approval the same move runs the other
-  way. Hosts are moved outside the workflow. An unplanned failover, with the
+  way. Hosts are moved outside the workflow. A demotion leaves the pod's
+  state from before it in a destroyed `<pod>.undo-demote.<n>` pod, and the
+  pod cannot be demoted again while one exists, so the switchover job
+  eradicates that pod first when `eradicate_undo_demote` is true; the
+  workflow sets it, a run by hand chooses. An unplanned failover, with the
   source array unreachable, is the promote alone (`dr_promote.yml`).
 
 ### 4.5 Capacity turns into trend and approval

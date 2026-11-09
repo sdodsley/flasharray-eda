@@ -240,6 +240,7 @@ SWITCHOVER_KEYS = {
     "target_status_after",
     "link_direction_after",
     "link_status_after",
+    "undo_demote_eradicated",
     "changed",
 }
 SWITCHOVER_REF = re.compile(r"\$\{(dr_failover|dr_failback)\.artifacts\.([a-z_]+)\}")
@@ -283,13 +284,38 @@ def test_switchover_demotes_with_quiesce_then_promotes_after_the_copy_is_complet
     repo_root,
 ):
     source, target = _plays(repo_root, SWITCHOVER)
-    (demote,) = _tasks_with(source["tasks"], POD_MODULE)
+    eradicate, demote = _tasks_with(source["tasks"], POD_MODULE)
     assert demote[POD_MODULE]["name"] == "{{ source_pod }}"
     assert demote[POD_MODULE]["promote"] is False
     assert demote[POD_MODULE]["quiesce"] is True
     asserts = _tasks_with(source["tasks"], "ansible.builtin.assert")
     assert source["tasks"].index(demote) > max(
         source["tasks"].index(a) for a in asserts
+    )
+    # an earlier demotion's undo-demote pods block the next one; the play
+    # names them and refuses unless told to eradicate them, then does so
+    # before the demotion, after every guard
+    assert eradicate[POD_MODULE] == {
+        "fa_url": "{{ fa_url }}",
+        "api_token": "{{ api_token }}",
+        "disable_warnings": True,
+        "name": "{{ item }}",
+        "state": "absent",
+        "eradicate": True,
+        "delete_contents": True,
+    }
+    assert eradicate["loop"] == "{{ source_before.undo_demote_pods | default([]) }}"
+    assert "eradicate_undo_demote | default(false) | bool" in eradicate["when"]
+    assert eradicate["register"] == "undo_eradicated"
+    assert max(source["tasks"].index(a) for a in asserts) < source["tasks"].index(
+        eradicate
+    )
+    guard = _conditions(source)
+    assert "source_before.undo_demote_pods | default([]) | length == 0" in guard
+    assert "eradicate_undo_demote | default(false) | bool" in guard
+    assert (
+        '"undo_demote_pods": undo_names'
+        in source["tasks"][3]["ansible.builtin.set_fact"]["read_pod_script"]
     )
     (promote,) = _tasks_with(target["tasks"], POD_MODULE)
     assert promote[POD_MODULE]["name"] == "{{ target_pod }}"
@@ -339,7 +365,11 @@ def test_switchover_definition_matches_the_playbook(repo_root):
             "source_pod",
             "target_array",
             "target_pod",
+            "eradicate_undo_demote",
         }
+        # a repeated switchover inside the eradication delay would otherwise
+        # stop at the undo-demote pod the last one left
+        assert params["extra_vars"]["eradicate_undo_demote"] is True
         # the playbook acts on two arrays, so the node leaves the template's
         # fleet credential in place instead of pinning one array's
         assert "credential_names" not in params

@@ -10,14 +10,20 @@
   demotes the link's source pod with quiesce, waits for the link to report
   the target's copy complete, promotes the target pod and records both
   pods' states and the link's new direction; the same playbook with the
-  sides swapped fails back. `orchestrator/dr_failover_failback.json` runs
-  it behind two approvals, and `aap/seed.yml` creates the
-  `FlashArray - DR switchover` job template.
+  sides swapped fails back. A pod cannot be demoted again while the
+  undo-demote pod of an earlier demotion exists, so with
+  `eradicate_undo_demote` true the playbook eradicates those pods first
+  and reports them in `undo_demote_eradicated`; without it the play
+  refuses and names them. `orchestrator/dr_failover_failback.json` runs
+  it behind two approvals and sets the variable, and `aap/seed.yml`
+  creates the `FlashArray - DR switchover` job template.
 - `tools/ao_sync.py` asks the orchestrator for `/api/v1/service_accounts`
   (the path it used did not exist; the first live run found it) and
   compares a file with its export without `credential_names` and without an
   empty `extra_vars`, neither of which the export carries. Verified live as
-  the service account: create, update and unchanged.
+  the service account: create, update and unchanged. The dry run says a
+  changed definition would publish a new version and no longer guesses
+  its number.
 - `purefa_syslog` parses what Purity//FA 6.10.6 sends: lines without a
   `<PRI>`, a pid on the program, the command layout of `purity.audit`
   (`[user (local)]@array(id) command. Message ID: N UTC Time: ... Array

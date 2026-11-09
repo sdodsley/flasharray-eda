@@ -538,7 +538,7 @@ def test_dry_run_writes_nothing(ao_sync, store, env, capsys, tmp_path):
     writes = len(store.writes())
     code, lines, err = run(ao_sync, capsys, store, "--dry-run", str(changed))
     assert code == 0, err
-    assert lines[0] == f"{changed}: would update and publish v2"
+    assert lines[0] == f"{changed}: would update and publish a new version"
     assert len(store.writes()) == writes
     (record,) = store.by_name(DRILL_NAME)
     assert record["versions"][1]["description"] != "changed"
