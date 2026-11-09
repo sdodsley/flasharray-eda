@@ -241,9 +241,10 @@ while the load ran, twice. On a volume created with its own limit of
 limit, and back to 1000 when the lift job restored the limit and removed
 the tags. On a volume created without a limit the same cycle ended with
 the volume reading no limit at all: the lift removes the limit through
-the API with an empty string, because the module's "clear" (0) sets the
-array's maximum 100000000, which reads back as a limit and shows as
-100M (docs/HARDWARE_NOTES.md). The first attempt found two defects the
+the API with an empty string, because the module's "clear" (0) through
+everpure.flasharray 1.46 sets the array's maximum 100000000, which reads
+back as a limit and shows as 100M (docs/HARDWARE_NOTES.md; the
+collection's master fixed it the same day). The first attempt found two defects the
 tests now cover. Two lift jobs ran 19 seconds apart; the second read a
 volume with the limit restored and the tags already gone and cleared it
 to the maximum, so both modes are idempotent now (a cap on a tagged

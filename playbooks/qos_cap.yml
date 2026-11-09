@@ -14,9 +14,10 @@
 # Lifting restores the previous IOPS limit carried in the tag through the
 # module, or removes the limit through the API with an empty string, the
 # one value the array takes as "no limit" (the module's 0 sends the
-# 100000000 maximum instead, which reads back as a limit and shows as
-# 100M), so a volume that had no limit before the cap has none after the
-# lift. Both modes
+# 100000000 maximum through everpure.flasharray 1.46, which reads back as
+# a limit and shows as 100M; the collection's master clears properly), so
+# a volume that had no limit before the cap has none after the lift. Both
+# modes
 # are idempotent: a cap on a volume that already carries the qos_cap tag
 # and a lift on a volume without it change nothing, so a duplicate launch
 # (two polls in the gap between a lift's restore and its tag removal, or
@@ -116,8 +117,9 @@
             - before.tags.qos_cap is defined
             - before.tags.qos_prev_iops | default('none') not in ['none', 'None', '', '100000000']
 
-        # The module has no way to remove a limit (its 0 sets the 100000000
-        # maximum); the API removes one on an empty string.
+        # The module through 1.46 cannot remove a limit (its 0 sets the
+        # 100000000 maximum); the API removes one on an empty string. When a
+        # release carries the module fix, iops_qos: 0 can replace this task.
         - name: Remove the limit the cap added, leaving the volume without one
           ansible.builtin.command:
             cmd: "{{ ansible_playbook_python }} -"

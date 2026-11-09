@@ -22,7 +22,9 @@
   removes the limit through the API with an empty string, because
   `purefa_volume` sends the 100000000 maximum for `iops_qos: 0`, which
   reads back as a limit (100M in the GUI); a real previous limit is still
-  restored through the module (HARDWARE_NOTES.md).
+  restored through the module (HARDWARE_NOTES.md). The collection's
+  master now clears a limit properly (`QosPatch`, 1.47.0); the API path
+  stays until a release carries it.
 - The lift's "normal for `qos_lift_normal_polls` polls" counts from the cap:
   the telemetry signal resets a volume's normal-poll counter when it
   becomes capped, so a cap requested through the day-2 route on a volume

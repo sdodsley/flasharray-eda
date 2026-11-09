@@ -151,15 +151,19 @@ The native exporter the Prometheus rules are written for, as served on
 - `purefa_pgsnap` forbids `now` together with `remote`; `remote: true` on
   its own is the immediate replicated snapshot.
 - `purefa_volume` takes `iops_qos: 0` to clear a limit and rejects the
-  array's own "no limit" value 100000000; what it sends for 0 is that
-  maximum, so the volume reads `iops_limit: 100000000` (100M in the GUI)
-  rather than the `null` a volume that never had a limit reads. Live on
+  array's own "no limit" value 100000000; through 1.46 what it sends for
+  0 is that maximum, so the volume reads `iops_limit: 100000000` (100M in
+  the GUI) rather than the `null` a volume that never had a limit reads.
+  The collection's master (1.47.0) sends the empty string through the
+  SDK's `QosPatch` model (py-pure-client 1.86.0 or later), which removes
+  the limit. Live on
   6.10.6, `PATCH /volumes` with `qos.iops_limit` set to `""` removes the
   limit (reads null again), `null` is ignored, `0` is refused ("IOPS
   limit or floor must be between 100 and 100M"). `qos_cap.yml` treats
   100000000 and null alike as "no previous limit" and removes a limit
   through the SDK with `Qos.construct(iops_limit="")` (construct, because
-  the client's own validation refuses the empty string).
+  the client's own validation refuses the empty string) until a release
+  of the collection carries the module fix.
 - A volume's `usec_per_read_op` is the array's service time, not the
   initiator's: 4k random reads that took 2.7 ms on a VM over one iSCSI
   path read 69 µs on the array, and 1 MiB reads that took 16 ms read 200 to
