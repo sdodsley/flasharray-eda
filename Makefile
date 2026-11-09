@@ -41,8 +41,9 @@ test:
 	$(PY) -m pytest -q tests/unit
 
 syntax:
-	# the remediation playbooks take their host from the rulebook (hosts: "{{ target_array }}")
-	ANSIBLE_LOCALHOST_WARNING=False ansible-playbook -i localhost, -e target_array=localhost --syntax-check $(PLAYBOOKS)
+	# the remediation playbooks take their host from the rulebook (hosts: "{{ target_array }}");
+	# the DR switchover names both sides of a replica link (source_array and target_array)
+	ANSIBLE_LOCALHOST_WARNING=False ansible-playbook -i localhost, -e target_array=localhost -e source_array=localhost --syntax-check $(PLAYBOOKS)
 
 check: lint lint-ao test syntax
 

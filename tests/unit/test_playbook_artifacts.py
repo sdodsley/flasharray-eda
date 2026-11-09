@@ -42,6 +42,14 @@ ARTIFACT_KEYS = {
     "notify.yml": {"record_kind"},
     "expand_volume.yml": {"volume", "old_size", "new_size"},
     "replicate_now.yml": {"pgroup", "reason", "snapshot_suffix", "changed"},
+    "dr_switchover.yml": {
+        "source_pod",
+        "target_pod",
+        "source_status_after",
+        "target_status_after",
+        "link_direction_after",
+        "changed",
+    },
 }
 
 # task files included by a playbook: the set_stats sits in the block's always
@@ -56,6 +64,7 @@ CREDENTIAL_ARRAY_CHECKS = {
     "capacity_reclaim.yml": "request.array",
     "dr_drill_one.yml": "drill.target_array",
     "dr_promote.yml": "inventory_hostname",
+    "dr_switchover.yml": "inventory_hostname",
 }
 CREDENTIAL_GUARD = "credential_array is not defined or credential_array == {}"
 
@@ -78,6 +87,7 @@ JOB_TEMPLATE_NAMES = {
     "FlashArray - orchestrator post",
     "FlashArray - DR promote",
     "FlashArray - DR demote",
+    "FlashArray - DR switchover",
 }
 
 RESOLVE_ARRAY = "{{ playbook_dir }}/tasks/resolve_array.yml"
@@ -93,6 +103,8 @@ RESOLVES = {
     "dr_demote.yml": "inventory_hostname",
     "dr_drill_one.yml": "drill.target_array",
     "dr_promote.yml": "inventory_hostname",
+    # two plays, one per side of the link, each resolving its own array
+    "dr_switchover.yml": ["inventory_hostname", "inventory_hostname"],
     "expand_volume.yml": "inventory_hostname",
     "identify_led.yml": "inventory_hostname",
     "preferred_array.yml": "inventory_hostname",
@@ -450,10 +462,13 @@ def test_array_facing_playbooks_resolve_the_array_before_touching_the_token(
             assert not includes, f"{path.name}: includes resolve_array.yml"
             assert "api_token" not in path.read_text(), f"{path.name}: unresolved"
             continue
-        assert len(includes) == 1, f"{path.name}: expected one resolve include"
+        wanted = RESOLVES[path.name]
+        wanted = wanted if isinstance(wanted, list) else [wanted]
+        assert len(includes) == len(wanted), f"{path.name}: resolve includes"
+        for include, name in zip(includes, wanted):
+            expected = "{{ " + name + " }}"
+            assert include["vars"]["resolve_array_name"] == expected, path.name
         include = includes[0]
-        expected = "{{ " + RESOLVES[path.name] + " }}"
-        assert include["vars"]["resolve_array_name"] == expected, path.name
         # alert_runbook.yml itself never names the token: its per-code task
         # files do, delegated to the array, so only the include is checked
         first_token = next(

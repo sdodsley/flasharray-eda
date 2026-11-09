@@ -101,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
         "projects": "projects",
         "credentials": "credentials",
         "integrations": "integrations",
-        "service-accounts": "service_accounts",
+        "service_accounts": "service_accounts",
         "workflows": "workflows",
     }
 

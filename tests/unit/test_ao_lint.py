@@ -77,7 +77,7 @@ def _platform_job_template_names():
     return names
 
 
-def test_there_are_eight_shipped_definitions():
+def test_there_are_nine_shipped_definitions():
     assert [p.name for p in DEFINITIONS] == [
         "capacity_reclaim_approval.json",
         "day2_expand_volume.json",
@@ -85,6 +85,7 @@ def test_there_are_eight_shipped_definitions():
         "day2_protect_now.json",
         "day2_qos_cap.json",
         "dr_drill_schedule.json",
+        "dr_failover_failback.json",
         "dr_failover_test.json",
         "replication_overdue_approval.json",
     ]

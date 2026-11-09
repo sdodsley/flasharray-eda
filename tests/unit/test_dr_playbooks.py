@@ -225,3 +225,136 @@ def test_failover_definition_matches_the_playbooks(repo_root):
     # the form's pod pattern is the playbooks' plain-name pattern
     pod = doc["triggers"][0]["parameters"]["input_schema"]["properties"]["pod"]
     assert pod["pattern"] == "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+
+
+# ---- the planned switchover: one playbook, two plays, one per side -------
+SWITCHOVER = "dr_switchover.yml"
+SWITCHOVER_KEYS = {
+    "source_array",
+    "source_pod",
+    "target_array",
+    "target_pod",
+    "source_status_before",
+    "source_status_after",
+    "target_status_before",
+    "target_status_after",
+    "link_direction_after",
+    "link_status_after",
+    "changed",
+}
+SWITCHOVER_REF = re.compile(r"\$\{(dr_failover|dr_failback)\.artifacts\.([a-z_]+)\}")
+
+
+def _plays(repo_root, name):
+    return yaml.load((repo_root / "playbooks" / name).read_text(), Loader=_Loader)
+
+
+def _conditions(play):
+    return "\n".join(
+        "\n".join(a["ansible.builtin.assert"]["that"])
+        for a in _tasks_with(play["tasks"], "ansible.builtin.assert")
+    )
+
+
+def test_switchover_has_two_plays_each_resolving_and_guarding_its_own_array(
+    repo_root,
+):
+    plays = _plays(repo_root, SWITCHOVER)
+    assert [p["hosts"] for p in plays] == ["{{ source_array }}", "{{ target_array }}"]
+    for play in plays:
+        assert play.get("gather_facts") is False
+        first = play["tasks"][0]
+        assert first.get("ansible.builtin.include_tasks") == {
+            "file": "{{ playbook_dir }}/tasks/resolve_array.yml"
+        }
+        assert first["vars"] == {"resolve_array_name": "{{ inventory_hostname }}"}
+        assert CREDENTIAL_GUARD in _conditions(play)
+    source, target = plays
+    s = _conditions(source)
+    assert "inventory_hostname == source_array" in s
+    assert "source_array != target_array" in s
+    assert "source_before.error is not defined" in s and "'outbound'" in s
+    t = _conditions(target)
+    assert "inventory_hostname == target_array" in t
+    assert "target_before.promotion_status != 'quiescing'" in t and "'inbound'" in t
+
+
+def test_switchover_demotes_with_quiesce_then_promotes_after_the_copy_is_complete(
+    repo_root,
+):
+    source, target = _plays(repo_root, SWITCHOVER)
+    (demote,) = _tasks_with(source["tasks"], POD_MODULE)
+    assert demote[POD_MODULE]["name"] == "{{ source_pod }}"
+    assert demote[POD_MODULE]["promote"] is False
+    assert demote[POD_MODULE]["quiesce"] is True
+    asserts = _tasks_with(source["tasks"], "ansible.builtin.assert")
+    assert source["tasks"].index(demote) > max(
+        source["tasks"].index(a) for a in asserts
+    )
+    (promote,) = _tasks_with(target["tasks"], POD_MODULE)
+    assert promote[POD_MODULE]["name"] == "{{ target_pod }}"
+    assert promote[POD_MODULE]["promote"] is True
+    assert promote[POD_MODULE]["undo"] is False
+    reads = _tasks_with(target["tasks"], "ansible.builtin.command")
+    # a read that waits for the link to report quiesced sits between the
+    # guards and the promotion, so stale data is never promoted
+    wait = next(r for r in reads if "quiesced" in str(r.get("until", "")))
+    guards = _tasks_with(target["tasks"], "ansible.builtin.assert")
+    assert target["tasks"].index(wait) > max(target["tasks"].index(a) for a in guards)
+    assert target["tasks"].index(wait) < target["tasks"].index(promote)
+    assert "ignore_errors" not in wait
+    for play in (source, target):
+        for task in _tasks_with(play["tasks"], "ansible.builtin.command"):
+            assert task.get("no_log") is True, task["name"]
+            assert task["environment"]["FA_TOKEN"] == "{{ api_token }}"
+            assert task.get("changed_when") is False
+
+
+def test_switchover_records_and_publishes_the_outcome(repo_root):
+    source, target = _plays(repo_root, SWITCHOVER)
+    assert not _tasks_with(source["tasks"], SET_STATS)
+    assert not _tasks_with(source["tasks"], "ansible.builtin.lineinfile")
+    (record,) = _tasks_with(target["tasks"], "ansible.builtin.lineinfile")
+    line = record["ansible.builtin.lineinfile"]["line"]
+    assert "'kind': 'dr_switchover'" in line and "'severity'" in line
+    assert record["ansible.builtin.lineinfile"]["path"] == "{{ alert_log }}"
+    (stats,) = _tasks_with(target["tasks"], SET_STATS)
+    assert target["tasks"][-1] is stats
+    assert stats[SET_STATS].get("aggregate") is False
+    assert stats.get("run_once") is True and stats.get("delegate_to") == "localhost"
+    assert SWITCHOVER_KEYS <= _artifact_keys(target["tasks"])
+
+
+def test_switchover_definition_matches_the_playbook(repo_root):
+    doc = json.loads(
+        (repo_root / "orchestrator" / "dr_failover_failback.json").read_text()
+    )
+    nodes = {n["id"]: n for n in doc["nodes"]}
+    published = _artifact_keys(_plays(repo_root, SWITCHOVER)[1]["tasks"])
+    for node_id in ("dr_failover", "dr_failback"):
+        params = nodes[node_id]["parameters"]
+        assert params["job_template_name"] == "FlashArray - DR switchover"
+        assert set(params["extra_vars"]) == {
+            "source_array",
+            "source_pod",
+            "target_array",
+            "target_pod",
+        }
+        # the playbook acts on two arrays, so the node leaves the template's
+        # fleet credential in place instead of pinning one array's
+        assert "credential_names" not in params
+    over = nodes["dr_failover"]["parameters"]["extra_vars"]
+    back = nodes["dr_failback"]["parameters"]["extra_vars"]
+    assert over["source_array"] == "${trigger.source_array}"
+    assert over["target_pod"] == "${trigger.target_pod}"
+    assert back["source_array"] == "${trigger.target_array}"
+    assert back["source_pod"] == "${trigger.target_pod}"
+    assert back["target_pod"] == "${trigger.source_pod}"
+    for node_id, node in nodes.items():
+        for job, key in SWITCHOVER_REF.findall(json.dumps(node)):
+            assert key in published, f"{node_id} reads {job}.artifacts.{key}"
+    edges = {(e["from"], e.get("from_port")): e["to"] for e in doc["edges"]}
+    assert edges[("approve_failover", "approved")] == "dr_failover"
+    assert edges[("approve_failback", "approved")] == "dr_failback"
+    rejected = nodes[edges[("approve_failback", "rejected")]]
+    assert rejected["parameters"]["extra_vars"]["severity"] == "critical"

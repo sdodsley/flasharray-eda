@@ -1,0 +1,194 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashArray - DR failover and failback",
+  "description": "A planned ActiveDR switchover behind two approvals. An operator names the link's source side (the array and pod serving production) and its target side. After the first approval the source pod is demoted with quiesce and the target pod promoted once the link reports the copy complete, so the link reverses and the target serves production; the outcome is logged with both pods' states and the link's new direction. Production hosts are moved outside the workflow. After the second approval the same move runs the other way, and the link is back where it started. A rejected or expired failover changes nothing; a rejected or expired failback leaves production on the target side and says so at critical severity.",
+  "triggers": [
+    {
+      "id": "switchover_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["source_array", "source_pod", "target_array", "target_pod"],
+          "additionalProperties": false,
+          "properties": {
+            "source_array": {
+              "type": "string",
+              "title": "Source array",
+              "description": "Inventory name of the array whose pod is the replica link's source today (the side serving production)",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "source_pod": {
+              "type": "string",
+              "title": "Source pod",
+              "description": "Name of the promoted source pod on that array; the playbook refuses a target pod, an unlinked pod and a stretched pod",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+              "maxLength": 63
+            },
+            "target_array": {
+              "type": "string",
+              "title": "Target array",
+              "description": "Inventory name of the array that holds the link's target pod (the side that takes over)",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "target_pod": {
+              "type": "string",
+              "title": "Target pod",
+              "description": "Name of the demoted target pod on that array, as the replica link names it",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+              "maxLength": 63
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_requested",
+      "type": "aap_job_template",
+      "name": "Notify: DR failover requested",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR failover of ${trigger.source_pod} on ${trigger.source_array} to ${trigger.target_pod} on ${trigger.target_array}: awaiting approval",
+          "detail": "Requested through the orchestrator. Approve or reject within 24 hours. The failover demotes the source pod with quiesce (its volumes become read-only) and promotes the target pod once the link reports the copy complete; the link then replicates from ${trigger.target_array} back to ${trigger.source_array}. Hosts are moved outside the workflow.",
+          "target_array": "${trigger.source_array}"
+        }
+      }
+    },
+    {
+      "id": "approve_failover",
+      "type": "approval",
+      "name": "Approve the failover",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Fail over the ActiveDR link: demote ${trigger.source_pod} on ${trigger.source_array} with quiesce, then promote ${trigger.target_pod} on ${trigger.target_array} once the copy is complete. The source pod's volumes are read-only from the demotion until the failback. Whoever approves owns moving the production hosts to ${trigger.target_array}."
+      }
+    },
+    {
+      "id": "dr_failover",
+      "type": "aap_job_template",
+      "name": "Switch the link over to the target",
+      "parameters": {
+        "job_template_name": "FlashArray - DR switchover",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "source_array": "${trigger.source_array}",
+          "source_pod": "${trigger.source_pod}",
+          "target_array": "${trigger.target_array}",
+          "target_pod": "${trigger.target_pod}"
+        }
+      }
+    },
+    {
+      "id": "notify_failed_over",
+      "type": "aap_job_template",
+      "name": "Notify: failed over, production on the target",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "DR failover done: ${trigger.target_pod} on ${trigger.target_array} is promoted, ${trigger.source_pod} on ${trigger.source_array} demoted",
+          "detail": "Source ${dr_failover.artifacts.source_status_before} -> ${dr_failover.artifacts.source_status_after}; target ${dr_failover.artifacts.target_status_before} -> ${dr_failover.artifacts.target_status_after}; the link from ${trigger.target_pod} is now ${dr_failover.artifacts.link_direction_after} and ${dr_failover.artifacts.link_status_after}; changed: ${dr_failover.artifacts.changed}. Move the production hosts to ${trigger.target_array}, run on it as long as needed, then approve the failback, which runs the same switchover the other way. The failback approval expires after 24 hours and leaves production on the target. AAP job: ${dr_failover.job_url}",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    },
+    {
+      "id": "approve_failback",
+      "type": "approval",
+      "name": "Approve the failback",
+      "parameters": {
+        "approver_groups": ["admins"],
+        "decision_window": 86400,
+        "prompt": "Fail back: demote ${trigger.target_pod} on ${trigger.target_array} with quiesce, then promote ${trigger.source_pod} on ${trigger.source_array} once the copy is complete, so the link replicates from ${trigger.source_array} again. The target pod's volumes are read-only from the demotion onwards; move the hosts back afterwards. A rejection or a timeout leaves production on ${trigger.target_array}."
+      }
+    },
+    {
+      "id": "dr_failback",
+      "type": "aap_job_template",
+      "name": "Switch the link back to the source",
+      "parameters": {
+        "job_template_name": "FlashArray - DR switchover",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "source_array": "${trigger.target_array}",
+          "source_pod": "${trigger.target_pod}",
+          "target_array": "${trigger.source_array}",
+          "target_pod": "${trigger.source_pod}"
+        }
+      }
+    },
+    {
+      "id": "notify_failed_back",
+      "type": "aap_job_template",
+      "name": "Notify: failed back, production on the source",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR failback done: ${trigger.source_pod} on ${trigger.source_array} is promoted again",
+          "detail": "Target side ${dr_failback.artifacts.source_status_before} -> ${dr_failback.artifacts.source_status_after}; source side ${dr_failback.artifacts.target_status_before} -> ${dr_failback.artifacts.target_status_after}; the link from ${trigger.source_pod} is ${dr_failback.artifacts.link_direction_after} and ${dr_failback.artifacts.link_status_after} again; changed: ${dr_failback.artifacts.changed}. AAP jobs: ${dr_failover.job_url} (failover), ${dr_failback.job_url} (failback)",
+          "target_array": "${trigger.source_array}"
+        }
+      }
+    },
+    {
+      "id": "notify_failover_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: failover rejected",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR failover of ${trigger.source_pod} on ${trigger.source_array} rejected or expired; nothing changed",
+          "detail": "The failover approval was rejected or timed out after 24 hours. Both pods are untouched. Raise a new request if the switchover is still wanted.",
+          "target_array": "${trigger.source_array}"
+        }
+      }
+    },
+    {
+      "id": "notify_failback_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: failback rejected, production stays on the target",
+      "parameters": {
+        "job_template_name": "FlashArray - notify",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "critical",
+          "subject": "Production stays on ${trigger.target_array}: the DR failback of ${trigger.target_pod} was not approved",
+          "detail": "The failback approval was rejected or timed out after 24 hours. ${trigger.target_pod} on ${trigger.target_array} stays promoted and the link replicates back to ${trigger.source_pod} on ${trigger.source_array}, which stays read-only. Fail back later with the FlashArray - DR switchover job template, source ${trigger.target_array}/${trigger.target_pod}, target ${trigger.source_array}/${trigger.source_pod}. Failover job: ${dr_failover.job_url}",
+          "target_array": "${trigger.target_array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "switchover_request", "to": "notify_requested"},
+    {"from": "notify_requested", "to": "approve_failover"},
+    {"from": "approve_failover", "to": "dr_failover", "from_port": "approved"},
+    {"from": "approve_failover", "to": "notify_failover_rejected", "from_port": "rejected"},
+    {"from": "dr_failover", "to": "notify_failed_over"},
+    {"from": "notify_failed_over", "to": "approve_failback"},
+    {"from": "approve_failback", "to": "dr_failback", "from_port": "approved"},
+    {"from": "approve_failback", "to": "notify_failback_rejected", "from_port": "rejected"},
+    {"from": "dr_failback", "to": "notify_failed_back"}
+  ]
+}

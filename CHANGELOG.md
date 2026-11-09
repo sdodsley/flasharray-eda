@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A planned ActiveDR failover and failback runbook. `playbooks/dr_switchover.yml`
+  demotes the link's source pod with quiesce, waits for the link to report
+  the target's copy complete, promotes the target pod and records both
+  pods' states and the link's new direction; the same playbook with the
+  sides swapped fails back. `orchestrator/dr_failover_failback.json` runs
+  it behind two approvals, and `aap/seed.yml` creates the
+  `FlashArray - DR switchover` job template.
+- `tools/ao_sync.py` asks the orchestrator for `/api/v1/service_accounts`
+  (the path it used did not exist; the first live run found it).
 - `purefa_syslog` parses what Purity//FA 6.10.6 sends: lines without a
   `<PRI>`, a pid on the program, the command layout of `purity.audit`
   (`[user (local)]@array(id) command. Message ID: N UTC Time: ... Array

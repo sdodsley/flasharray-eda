@@ -149,7 +149,7 @@ galaxy.yml, meta/runtime.yml           the repository root is the collection sdo
 extensions/eda/plugins/event_source/   purefa_events.py (REST pull, six signals), purefa_syslog.py (push)
 extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN
 playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now, dr_promote, dr_demote,
-                                       preferred_array, dr_drill, capacity_request/reclaim, qos_cap, protect_now,
+                                       preferred_array, dr_drill, dr_switchover, capacity_request/reclaim, qos_cap, protect_now,
                                        expand_volume, orchestrator_post,
                                        alert_runbook (+ runbooks/<code>.yml, included relative to the playbook)
 orchestrator/                          workflow definitions for the automation orchestrator and job_templates.txt

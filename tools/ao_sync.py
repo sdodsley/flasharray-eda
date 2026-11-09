@@ -551,7 +551,7 @@ def main(argv=None):
         for option, path, kind in (
             ("--aap-credential", "/api/v1/credentials", "credential"),
             ("--aap-integration", "/api/v1/integrations", "integration"),
-            ("--service-account", "/api/v1/service-accounts", "service account"),
+            ("--service-account", "/api/v1/service_accounts", "service account"),
         ):
             if given[option] is not None:
                 found = find_by_name(client.list_all(path), given[option], kind)

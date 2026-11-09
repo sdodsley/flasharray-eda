@@ -167,6 +167,13 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   outside the workflow, then behind a second approval demote it again;
   writes made during the test are discarded and the source pod is never
   touched.
+- Planned failover and failback (`dr_switchover.yml`, driven by
+  `orchestrator/dr_failover_failback.json`): behind one approval, demote
+  the link's source pod with quiesce and promote the target pod once the
+  link reports the copy complete, so the link reverses and the target
+  serves production; behind a second approval the same move runs the other
+  way. Hosts are moved outside the workflow. An unplanned failover, with the
+  source array unreachable, is the promote alone (`dr_promote.yml`).
 
 ### 4.5 Capacity turns into trend and approval
 

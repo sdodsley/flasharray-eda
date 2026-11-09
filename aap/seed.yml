@@ -138,6 +138,9 @@
       - name: "FlashArray - DR demote"
         playbook: playbooks/dr_demote.yml
         description: "Demote a promoted target pod again, discarding the writes made during the test; artifacts array, pod, promotion status before and after, link status, changed"
+      - name: "FlashArray - DR switchover"
+        playbook: playbooks/dr_switchover.yml
+        description: "Planned ActiveDR switchover: demote the source pod with quiesce, promote the target pod once the link reports the copy complete, so the link reverses; the same template with the sides swapped fails back; artifacts both pods' states before and after, the link's direction and status, changed"
   tasks:
     - name: Refuse to run without the platform address and token
       ansible.builtin.assert:

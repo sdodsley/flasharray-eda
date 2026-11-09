@@ -1,0 +1,354 @@
+---
+# Planned switchover of an ActiveDR pod replica link, and the failback that
+# is the same move in the other direction: demote the pod that is the link's
+# source today (with quiesce, so the writes still in flight reach the target
+# first), wait for the target's copy to be complete, then promote the target
+# pod, at which point the link reverses and the former target replicates
+# back to the former source. Run by hand, by the "FlashArray - DR switchover"
+# job template or by the "FlashArray - DR failover and failback" orchestrator
+# workflow, with source_array and source_pod (the side that serves production
+# now), target_array and target_pod (the side that takes over) and alert_log:
+#   ansible-playbook -i inventory/local-<site>.yml playbooks/dr_switchover.yml \
+#       -e source_array=array-a -e source_pod=pod1 \
+#       -e target_array=array-b -e target_pod=pod1-dr -e alert_log=$PWD/alerts.log
+# Failing back is the same command with the two sides swapped.
+#
+# The play on the source refuses a pod that is not the promoted source of a
+# link to the named target pod (a missing, destroyed or stretched pod, a pod
+# with no link, a target pod, a pod still quiescing). The play on the target
+# refuses a pod that is not the target of a link from the named source pod,
+# and waits for the link to report its copy complete (quiesced) before it
+# promotes, so a planned switchover never promotes stale data. A source
+# already demoted or a target already promoted is left as it is, so a run
+# that stopped half way can be repeated. This is the planned path; an
+# unplanned failover, with the source array unreachable, is dr_promote.yml on
+# the target alone. The source pod's volumes are read-only from the demotion
+# until a failback promotes them again; moving the hosts that use them is
+# outside this playbook. Both plays resolve their own array, so the job
+# template runs with the fleet credential, not one array's.
+- name: Demote the source pod of the replica link
+  hosts: "{{ source_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve the array's URL and token
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == source_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          source_array {{ source_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse names that are not plain names, or one array named twice
+      ansible.builtin.assert:
+        that:
+          - source_pod is match('^[A-Za-z0-9][A-Za-z0-9_-]*$')
+          - target_pod is match('^[A-Za-z0-9][A-Za-z0-9_-]*$')
+          - target_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - source_array != target_array
+        fail_msg: >-
+          source_pod, target_pod and target_array must be plain names, and the two arrays must differ
+          ({{ source_array | string | truncate(40) }} / {{ target_array | string | truncate(40) }})
+
+    # One read, used before and after the change: the pod's promotion state
+    # and link counts, and the replica links whose local pod it is.
+    - name: Keep the pod read in one place
+      ansible.builtin.set_fact:
+        read_pod_script: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          name = os.environ["POD"]
+          r = c.get_pods(names=[name])
+          if r.status_code != 200:
+              print(json.dumps({"error": r.errors[0].message if getattr(r, "errors", None) else "HTTP %s" % r.status_code}))
+              raise SystemExit(0)
+          # to_dict(): SDK models raise AttributeError for fields the array did not return
+          p = list(r.items)[0].to_dict()
+          links = [l.to_dict() for l in c.get_pod_replica_links().items]
+          links = [l for l in links if (l.get("local_pod") or {}).get("name") == name]
+          print(json.dumps({"promotion_status": p.get("promotion_status"), "requested_promotion_state": p.get("requested_promotion_state"),
+                            "link_source_count": p.get("link_source_count"), "link_target_count": p.get("link_target_count"),
+                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")),
+                            "links": [{"direction": l.get("direction"), "status": l.get("status"),
+                                       "remote_pod": (l.get("remote_pod") or {}).get("name"),
+                                       "remote": ((l.get("remotes") or [{}])[0]).get("name")} for l in links]}))
+
+    - name: Read the source pod and its replica links
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ source_pod }}"
+      register: source_read_before
+      changed_when: false
+      no_log: true
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        source_before: "{{ source_read_before.stdout | from_json }}"
+
+    - name: Show the source pod before the change
+      ansible.builtin.debug:
+        var: source_before
+
+    # A source already demoted (a run that stopped half way) passes; its link
+    # may already read inbound then, so the direction is checked only on a
+    # promoted pod.
+    - name: Refuse a pod that is not the promoted source of a link to the target pod
+      ansible.builtin.assert:
+        that:
+          - source_before.error is not defined
+          - not (source_before.destroyed | default(false) | bool)
+          - source_before.array_count | default(1) | int == 1
+          - source_before.promotion_status in ['promoted', 'demoted']
+          - >-
+            source_before.promotion_status == 'demoted' or
+            (source_before.link_target_count | default(0) | int > 0 and
+             source_before.links | selectattr('direction', 'equalto', 'outbound')
+             | selectattr('remote_pod', 'equalto', target_pod) | list | length > 0)
+        fail_msg: >-
+          {{ source_before.error | default(source_pod ~ ' on ' ~ source_array ~ ' is '
+             ~ ('destroyed' if source_before.destroyed | default(false) else
+                ('stretched' if source_before.array_count | default(1) | int != 1 else
+                 ('quiescing' if source_before.promotion_status == 'quiescing' else
+                  'not the promoted source of a replica link to ' ~ target_pod ~ ' (promotion '
+                  ~ source_before.promotion_status ~ ', links to ' ~ source_before.link_target_count | default(0)
+                  ~ ' target pod(s))')))) }}
+
+    - name: Demote the source pod, quiescing first so the target receives every write
+      everpure.flasharray.purefa_pod:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ source_pod }}"
+        promote: false
+        quiesce: true
+      register: demoted
+      when: source_before.promotion_status != 'demoted'
+
+    # The demotion quiesces first, so the pod reads as quiescing until the
+    # target has everything; a pod still settling after the last try is
+    # recorded as it is.
+    - name: Read the source pod again, waiting for the demotion to settle
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ source_pod }}"
+      register: source_read_after
+      changed_when: false
+      no_log: true
+      retries: 36
+      delay: 5
+      until: (source_read_after.stdout | from_json).promotion_status | default('') == (source_read_after.stdout | from_json).requested_promotion_state | default('')
+      ignore_errors: true
+
+    - name: Parse the source pod after the change
+      ansible.builtin.set_fact:
+        source_after: "{{ source_read_after.stdout | from_json }}"
+
+    - name: Show the source pod after the change
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}/{{ source_pod }}: {{ source_before.promotion_status }} -> {{ source_after.promotion_status }}
+          (requested {{ source_after.requested_promotion_state }})
+          {{ '(changed)' if demoted.changed | default(false) else '(unchanged)' }}
+
+- name: Promote the target pod of the replica link
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve the array's URL and token
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Keep the pod read in one place
+      ansible.builtin.set_fact:
+        read_pod_script: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          name = os.environ["POD"]
+          r = c.get_pods(names=[name])
+          if r.status_code != 200:
+              print(json.dumps({"error": r.errors[0].message if getattr(r, "errors", None) else "HTTP %s" % r.status_code}))
+              raise SystemExit(0)
+          # to_dict(): SDK models raise AttributeError for fields the array did not return
+          p = list(r.items)[0].to_dict()
+          links = [l.to_dict() for l in c.get_pod_replica_links().items]
+          links = [l for l in links if (l.get("local_pod") or {}).get("name") == name]
+          print(json.dumps({"promotion_status": p.get("promotion_status"), "requested_promotion_state": p.get("requested_promotion_state"),
+                            "link_source_count": p.get("link_source_count"), "link_target_count": p.get("link_target_count"),
+                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")),
+                            "links": [{"direction": l.get("direction"), "status": l.get("status"),
+                                       "remote_pod": (l.get("remote_pod") or {}).get("name"),
+                                       "remote": ((l.get("remotes") or [{}])[0]).get("name")} for l in links]}))
+
+    - name: Read the target pod and its replica links
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ target_pod }}"
+      register: target_read_before
+      changed_when: false
+      no_log: true
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        target_before: "{{ target_read_before.stdout | from_json }}"
+
+    - name: Show the target pod before the change
+      ansible.builtin.debug:
+        var: target_before
+
+    # A target already promoted (a run that stopped half way) passes; its
+    # link then already reads outbound.
+    - name: Refuse a pod that is not the target of a link from the source pod, or one still quiescing
+      ansible.builtin.assert:
+        that:
+          - target_before.error is not defined
+          - not (target_before.destroyed | default(false) | bool)
+          - target_before.array_count | default(1) | int == 1
+          - target_before.promotion_status != 'quiescing'
+          - >-
+            target_before.promotion_status == 'promoted' or
+            (target_before.link_source_count | default(0) | int > 0 and
+             target_before.links | selectattr('direction', 'equalto', 'inbound')
+             | selectattr('remote_pod', 'equalto', source_pod) | list | length > 0)
+        fail_msg: >-
+          {{ target_before.error | default(target_pod ~ ' on ' ~ target_array ~ ' is '
+             ~ ('destroyed' if target_before.destroyed | default(false) else
+                ('stretched' if target_before.array_count | default(1) | int != 1 else
+                 ('quiescing' if target_before.promotion_status == 'quiescing' else
+                  'not the target of a replica link from ' ~ source_pod ~ ' (promotion '
+                  ~ target_before.promotion_status ~ ', linked from ' ~ target_before.link_source_count | default(0)
+                  ~ ' source pod(s))')))) }}
+
+    # With the source demoted, the link reports quiesced once the target holds
+    # everything the source had; a planned switchover promotes nothing older.
+    - name: Wait for the link to report the target's copy complete
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ target_pod }}"
+      register: target_read_quiesced
+      changed_when: false
+      no_log: true
+      retries: 36
+      delay: 5
+      until: >-
+        (target_read_quiesced.stdout | from_json).links | selectattr('direction', 'equalto', 'inbound')
+        | selectattr('remote_pod', 'equalto', source_pod) | selectattr('status', 'in', ['quiesced', 'idle'])
+        | list | length > 0
+      when: target_before.promotion_status != 'promoted'
+
+    - name: Promote the target pod
+      everpure.flasharray.purefa_pod:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ target_pod }}"
+        promote: true
+        undo: false
+      register: promoted
+      when: target_before.promotion_status != 'promoted'
+
+    # After the promotion the link reverses: the pod reads promoted and its
+    # link to the source pod outbound. Bounded waits; whatever the last read
+    # shows is recorded.
+    - name: Read the target pod again, waiting for the promotion and the link's reversal
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ read_pod_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ target_pod }}"
+      register: target_read_after
+      changed_when: false
+      no_log: true
+      retries: 24
+      delay: 5
+      until: >-
+        (target_read_after.stdout | from_json).promotion_status | default('') == 'promoted' and
+        (target_read_after.stdout | from_json).links | selectattr('direction', 'equalto', 'outbound')
+        | selectattr('remote_pod', 'equalto', source_pod) | list | length > 0
+      ignore_errors: true
+
+    - name: Parse the target pod after the change
+      ansible.builtin.set_fact:
+        target_after: "{{ target_read_after.stdout | from_json }}"
+
+    - name: Pick the link to the source pod after the change
+      ansible.builtin.set_fact:
+        link_after: "{{ (target_after.links | selectattr('remote_pod', 'equalto', source_pod) | list + [{}]) | first }}"
+        source_state: "{{ hostvars[source_array] }}"
+
+    - name: Record the switchover
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'dr_switchover', 'severity': 'warning',
+              'array': inventory_hostname, 'source_array': source_array, 'source_pod': source_pod,
+              'target_array': target_array, 'target_pod': target_pod,
+              'source_status_before': source_state.source_before.promotion_status | default(''),
+              'source_status_after': source_state.source_after.promotion_status | default(''),
+              'target_status_before': target_before.promotion_status, 'target_status_after': target_after.promotion_status,
+              'link_direction_after': link_after.direction | default(''), 'link_status_after': link_after.status | default(''),
+              'changed': (source_state.demoted.changed | default(false)) or (promoted.changed | default(false))} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the switchover
+      ansible.builtin.debug:
+        msg: >-
+          {{ source_array }}/{{ source_pod }} {{ source_state.source_before.promotion_status | default('?') }} -> {{ source_state.source_after.promotion_status | default('?') }};
+          {{ target_array }}/{{ target_pod }} {{ target_before.promotion_status }} -> {{ target_after.promotion_status }};
+          link from {{ target_pod }} now {{ link_after.direction | default('?') }} {{ link_after.status | default('?') }}
+          {{ '(changed)' if ((source_state.demoted.changed | default(false)) or (promoted.changed | default(false))) else '(unchanged)' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'source_array': source_array, 'source_pod': source_pod, 'target_array': target_array, 'target_pod': target_pod,
+              'source_status_before': source_state.source_before.promotion_status | default(''),
+              'source_status_after': source_state.source_after.promotion_status | default(''),
+              'target_status_before': target_before.promotion_status, 'target_status_after': target_after.promotion_status,
+              'link_direction_after': link_after.direction | default(''), 'link_status_after': link_after.status | default(''),
+              'changed': (source_state.demoted.changed | default(false)) or (promoted.changed | default(false))} }}
+      run_once: true
+      delegate_to: localhost
