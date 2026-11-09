@@ -299,7 +299,15 @@ first approval `dr_promote.yml` promotes the pod (its replica link stays
 replicating, the source pod is untouched) and the notify carries the
 states before and after; after the second approval `dr_demote.yml`
 demotes it with quiesce, discarding the writes made during the test, and
-the pod is a replica-link target again. Both playbooks refuse a pod that
+the pod is a replica-link target again. A test run the same day as two
+switchovers of the link found the revert refused: the earlier demotion's
+undo-demote pod was still on the array and the demote job failed with the
+module's message, leaving the pod promoted until the undo-demote pod was
+eradicated by hand and the job relaunched. Since then `dr_demote.yml`
+eradicates such pods first when the workflow passes
+`eradicate_undo_demote`, which the definition's revert node now does (the
+step is unit-tested; the next test inside the delay will show it). Both
+playbooks refuse a pod that
 is not the target of a replica link: Purity counts the sources linked to
 a pod in `link_source_count`, so a target pod has a source count above
 zero and an inbound link. The planned failover and failback

@@ -31,7 +31,7 @@ as a technology preview that may change (docs/ORCHESTRATOR.md).
 | `day2_qos_cap.json` | `manual_trigger` with an input form (array, volume, IOPS limit) | Notify, approval (24 hours), then **FlashArray - QoS cap** in `cap` mode with the requested array's credential, then a warning notify with the applied and previous limits and the AAP job URL. The cap carries the `eda/qos_cap` tag, so the performance rulebook lifts it once the volume's latency is normal again. A rejection notifies and changes nothing. |
 | `day2_protect_now.json` | `manual_trigger` with an input form (array, seconds to add to the eradication delay) | Approval (24 hours), then **FlashArray - protect now** with the requested array's credential: an immediate snapshot of every local protection group and a longer enabled eradication delay (0 seconds snapshots only), then a warning notify with the snapshot suffix, the groups snapshotted or failed and the delay. A rejection notifies and changes nothing. |
 | `day2_identify_led.json` | `manual_trigger` with an input form (array, component, LED on or off) | No approval: **FlashArray - identify LED** with the requested array's credential sets the component's identify LED, then an info notify reports the state, whether it changed and any error (a component without an identify LED), with the AAP job URL. |
-| `dr_failover_test.json` | `manual_trigger` with an input form (target_array, pod) | A DR failover test on an ActiveDR replica link: notify, approval "promote" (24 hours), **FlashArray - DR promote** promotes the replica-link target pod on `target_array`, a notify with the promotion artifacts, then approval "revert" (its prompt says the writes made during the test are discarded), **FlashArray - DR demote** demotes the pod again and a notify reports the revert. Each rejection has its own notify; a rejected revert leaves the pod promoted and says so. |
+| `dr_failover_test.json` | `manual_trigger` with an input form (target_array, pod) | A DR failover test on an ActiveDR replica link: notify, approval "promote" (24 hours), **FlashArray - DR promote** promotes the replica-link target pod on `target_array`, a notify with the promotion artifacts, then approval "revert" (its prompt says the writes made during the test are discarded), **FlashArray - DR demote** eradicates the undo-demote pod an earlier demotion left (so a test can be repeated inside the eradication delay), demotes the pod again and a notify reports the revert. Each rejection has its own notify; a rejected revert leaves the pod promoted and says so. |
 | `dr_failover_failback.json` | `manual_trigger` with an input form (source_array, source_pod, target_array, target_pod) | A planned ActiveDR switchover behind two approvals: notify, approval "failover" (24 hours), then **FlashArray - DR switchover** demotes the source pod with quiesce and promotes the target pod once the link reports the copy complete, so the link reverses and the target serves production (the undo-demote pod an earlier demotion of the source pod left is eradicated first); a notify with both pods' states and the link's new direction; approval "failback" (24 hours), the same template with the sides swapped, and a notify. A rejected failover changes nothing; a rejected failback says at critical severity that production stays on the target. |
 | `replication_overdue_approval.json` | `eda_trigger` on webhook path `fa_replication` | A `purefa_pg_replication` event forwarded by the replication rulebook (a protection group overdue or stuck, with `orchestrator_enabled` on): **FlashArray - notify** announces it, an approval node waits up to one hour, and an approval runs **FlashArray - replicate now** (an immediate snapshot of the group replicated to its targets; the schedule is untouched), then a notify with the job URL. A rejection notifies and sends nothing. |
 | `dr_drill_schedule.json` | `scheduled_trigger`, cron `0 2 * * *` (UTC), missed runs skipped | Every night **FlashArray - DR drill** copies a volume out of the latest completed replicated snapshot on each drill target, verifies and destroys it; a condition on `failed_count` sends a critical **FlashArray - notify** when any drill failed and a one-line summary otherwise. Publishing the definition creates the schedule. |
@@ -96,7 +96,7 @@ template itself (extra vars or a survey), not in these files:
 | FlashArray - protect now | `playbooks/protect_now.yml` | `target_array`, `extend_eradication_by_s`, `audit_user` and `audit_command` (constants naming the workflow, so the record shows what asked) | `alert_log` |
 | FlashArray - identify LED | `playbooks/identify_led.yml` | `target_array`, `component`, `led_state`, `severity` (`info`) | `alert_log` |
 | FlashArray - DR promote | `playbooks/dr_promote.yml` | `target_array`, `pod` | `alert_log` |
-| FlashArray - DR demote | `playbooks/dr_demote.yml` | `target_array`, `pod`, `quiesce` | `alert_log` |
+| FlashArray - DR demote | `playbooks/dr_demote.yml` | `target_array`, `pod`, `quiesce`, `eradicate_undo_demote` | `alert_log` |
 | FlashArray - DR switchover | `playbooks/dr_switchover.yml` | `source_array`, `source_pod`, `target_array`, `target_pod`, `eradicate_undo_demote` | `alert_log`; runs with the fleet credential, each play resolving its own array |
 
 The protect-now playbook acts on every local protection group of the
@@ -163,8 +163,10 @@ with `set_stats` so the orchestrator sees them as
   `snapshot_suffix` and `changed`.
 - **FlashArray - DR promote** and **FlashArray - DR demote** publish
   `array`, `pod`, the pod's promotion status before and after, the replica
-  link's status and `changed`; the failover test's notify nodes report
-  them.
+  link's status and `changed`; DR demote also publishes
+  `undo_demote_eradicated` (the undo-demote pods eradicated before the
+  demotion, usually none) and `test_writes_discarded`; the failover test's
+  notify nodes report them.
 - **FlashArray - DR switchover** publishes `source_array`, `source_pod`,
   `target_array`, `target_pod`, both pods' promotion status before and
   after, `link_direction_after`, `link_status_after`, `undo_demote_eradicated`

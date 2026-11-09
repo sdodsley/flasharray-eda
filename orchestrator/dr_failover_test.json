@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0.0",
   "name": "FlashArray - DR failover test",
-  "description": "An operator asks for a DR failover test of one ActiveDR pod. The request is logged, a human approves the promotion, the replica link's target pod is promoted on the target array (its volumes become writable there, the source keeps serving production) and the outcome is logged with the states before and after and the AAP job link. The application test then runs outside the workflow; a second approval reverts it, demoting the pod again, which discards every write made during the test, and the outcome is logged. A rejection of either approval is logged; a rejected or expired revert leaves the pod promoted and says so at critical severity, because the replica is then no longer tracking its source until someone demotes it.",
+  "description": "An operator asks for a DR failover test of one ActiveDR pod. The request is logged, a human approves the promotion, the replica link's target pod is promoted on the target array (its volumes become writable there, the source keeps serving production) and the outcome is logged with the states before and after and the AAP job link. The application test then runs outside the workflow; a second approval reverts it, demoting the pod again (after eradicating the undo-demote pod an earlier demotion left, so a test can be repeated inside the array's eradication delay), which discards every write made during the test, and the outcome is logged. A rejection of either approval is logged; a rejected or expired revert leaves the pod promoted and says so at critical severity, because the replica is then no longer tracking its source until someone demotes it.",
   "triggers": [
     {
       "id": "failover_test_request",
@@ -97,7 +97,7 @@
       "parameters": {
         "approver_groups": ["admins", "approvers"],
         "decision_window": 86400,
-        "prompt": "Demote pod ${trigger.pod} on ${trigger.target_array} to end the DR failover test. Every write made to the pod while it was promoted is discarded (the array keeps them in an undo-demote pod pending eradication) and the pod goes back to tracking its source. Approve once the application test is finished; a rejection or a timeout leaves the pod promoted."
+        "prompt": "Demote pod ${trigger.pod} on ${trigger.target_array} to end the DR failover test. Every write made to the pod while it was promoted is discarded (the array keeps them in an undo-demote pod pending eradication) and the pod goes back to tracking its source; an undo-demote pod left by an earlier demotion of this pod is eradicated first, so a test can be repeated inside the array's eradication delay. Approve once the application test is finished; a rejection or a timeout leaves the pod promoted."
       }
     },
     {
@@ -112,7 +112,8 @@
         "extra_vars": {
           "target_array": "${trigger.target_array}",
           "pod": "${trigger.pod}",
-          "quiesce": true
+          "quiesce": true,
+          "eradicate_undo_demote": true
         }
       }
     },
@@ -127,7 +128,7 @@
         "extra_vars": {
           "severity": "info",
           "subject": "DR failover test of pod ${trigger.pod} on ${trigger.target_array} reverted",
-          "detail": "Demotion ${dr_demote.artifacts.promotion_status_before} -> ${dr_demote.artifacts.promotion_status_after}; replica link ${dr_demote.artifacts.link_status_before} -> ${dr_demote.artifacts.link_status_after}; changed: ${dr_demote.artifacts.changed}; writes made during the test discarded: ${dr_demote.artifacts.test_writes_discarded}. The undo-demote pod the array leaves pending eradication must be eradicated before the next test of this pod. AAP jobs: ${dr_promote.job_url} (promote), ${dr_demote.job_url} (demote)",
+          "detail": "Demotion ${dr_demote.artifacts.promotion_status_before} -> ${dr_demote.artifacts.promotion_status_after}; replica link ${dr_demote.artifacts.link_status_before} -> ${dr_demote.artifacts.link_status_after}; changed: ${dr_demote.artifacts.changed}; writes made during the test discarded: ${dr_demote.artifacts.test_writes_discarded}. The undo-demote pod the array leaves pending eradication is eradicated by the next test of this pod through this workflow; a demote run by hand while it exists needs eradicate_undo_demote true, or the pod eradicated first. AAP jobs: ${dr_promote.job_url} (promote), ${dr_demote.job_url} (demote)",
           "target_array": "${trigger.target_array}"
         }
       }
@@ -159,7 +160,7 @@
         "extra_vars": {
           "severity": "critical",
           "subject": "Pod ${trigger.pod} on ${trigger.target_array} is still promoted: the DR failover test was not reverted",
-          "detail": "The revert approval was rejected or timed out after 24 hours. The pod stays promoted and writable on ${trigger.target_array} and no longer tracks its source. Demote it with the FlashArray - DR demote job template (target_array ${trigger.target_array}, pod ${trigger.pod}) once the test is over; demoting discards the writes made during the test. Promote job: ${dr_promote.job_url}",
+          "detail": "The revert approval was rejected or timed out after 24 hours. The pod stays promoted and writable on ${trigger.target_array} and no longer tracks its source. Demote it with the FlashArray - DR demote job template (target_array ${trigger.target_array}, pod ${trigger.pod}, eradicate_undo_demote true if an earlier demotion's undo-demote pod is still on the array) once the test is over; demoting discards the writes made during the test. Promote job: ${dr_promote.job_url}",
           "target_array": "${trigger.target_array}"
         }
       }

@@ -164,9 +164,10 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
 - ActiveDR failover test (`dr_promote.yml`, `dr_demote.yml`, driven by
   `orchestrator/dr_failover_test.json`): behind an approval, promote the
   replica link's target pod on the DR array, run the application test
-  outside the workflow, then behind a second approval demote it again;
-  writes made during the test are discarded and the source pod is never
-  touched.
+  outside the workflow, then behind a second approval demote it again,
+  eradicating the undo-demote pod an earlier demotion left so the test can
+  be repeated inside the eradication delay; writes made during the test
+  are discarded and the source pod is never touched.
 - Planned failover and failback (`dr_switchover.yml`, driven by
   `orchestrator/dr_failover_failback.json`): behind one approval, demote
   the link's source pod with quiesce and promote the target pod once the

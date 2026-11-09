@@ -45,7 +45,11 @@ ARTIFACT_REF = re.compile(r"\$\{(dr_promote|dr_demote)\.artifacts\.([a-z_]+)\}")
 # playbook -> (record kind, promote value, the extra_vars its template takes)
 PLAYBOOKS = {
     "dr_promote.yml": ("dr_promote", True, {"target_array", "pod"}),
-    "dr_demote.yml": ("dr_demote", False, {"target_array", "pod", "quiesce"}),
+    "dr_demote.yml": (
+        "dr_demote",
+        False,
+        {"target_array", "pod", "quiesce", "eradicate_undo_demote"},
+    ),
 }
 TEMPLATE_OF = {
     "dr_promote.yml": "FlashArray - DR promote",
@@ -100,13 +104,16 @@ def test_guards_come_before_the_pod_module(name, repo_root):
     for guard in POD_GUARDS:
         assert guard in conditions, f"{name}: missing guard {guard}"
     modules = _tasks_with(tasks, POD_MODULE)
-    assert len(modules) == 1, f"{name}: one {POD_MODULE} task"
+    # the demote play eradicates an earlier demotion's undo-demote pods before
+    # the demotion; the promote play has the one module task
+    expected = 2 if name == "dr_demote.yml" else 1
+    assert len(modules) == expected, f"{name}: {expected} {POD_MODULE} task(s)"
     assert tasks.index(modules[0]) > max(tasks.index(a) for a in asserts)
     # the pod is read (and parsed) before the guards that look at it
     reads = _tasks_with(tasks, "ansible.builtin.command")
     assert len(reads) == 2, f"{name}: a read before and a read after"
     assert tasks.index(reads[0]) < tasks.index(asserts[-1])
-    assert tasks.index(reads[1]) > tasks.index(modules[0])
+    assert tasks.index(reads[1]) > tasks.index(modules[-1])
 
 
 @pytest.mark.parametrize("name", sorted(PLAYBOOKS))
@@ -131,7 +138,9 @@ def test_reads_never_show_the_token(name, repo_root):
 def test_pod_module_call(name, repo_root):
     kind, promote, _ = PLAYBOOKS[name]
     tasks = _play(repo_root, name)["tasks"]
-    args = _tasks_with(tasks, POD_MODULE)[0][POD_MODULE]
+    # the promotion or demotion itself is the last module task (the demote
+    # play eradicates undo-demote pods before it)
+    args = _tasks_with(tasks, POD_MODULE)[-1][POD_MODULE]
     assert args["name"] == "{{ pod }}"
     assert args["promote"] is promote
     assert args["fa_url"] == "{{ fa_url }}"
@@ -210,6 +219,12 @@ def test_failover_definition_matches_the_playbooks(repo_root):
         assert extra["pod"] == "${trigger.pod}"
         assert extra["target_array"] == "${trigger.target_array}"
     assert nodes["dr_demote"]["parameters"]["extra_vars"]["quiesce"] is True
+    # the revert eradicates the undo-demote pod an earlier demotion left, so
+    # a test can be repeated inside the eradication delay, and its prompt says so
+    assert (
+        nodes["dr_demote"]["parameters"]["extra_vars"]["eradicate_undo_demote"] is True
+    )
+    assert "undo-demote" in nodes["approve_revert"]["parameters"]["prompt"]
     # every artifact a node reads is one the playbook publishes
     for node_id, node in nodes.items():
         for job, key in ARTIFACT_REF.findall(json.dumps(node)):
@@ -225,6 +240,46 @@ def test_failover_definition_matches_the_playbooks(repo_root):
     # the form's pod pattern is the playbooks' plain-name pattern
     pod = doc["triggers"][0]["parameters"]["input_schema"]["properties"]["pod"]
     assert pod["pattern"] == "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+
+
+def test_demote_eradicates_the_undo_demote_pods_only_when_told(repo_root):
+    tasks = _play(repo_root, "dr_demote.yml")["tasks"]
+    eradicate, demote = _tasks_with(tasks, POD_MODULE)
+    assert demote[POD_MODULE]["promote"] is False
+    # an earlier demotion's undo-demote pods block the next one; the play
+    # names them and refuses unless told to eradicate them, then does so
+    # after every guard and before the demotion
+    assert eradicate[POD_MODULE] == {
+        "fa_url": "{{ fa_url }}",
+        "api_token": "{{ api_token }}",
+        "disable_warnings": True,
+        "name": "{{ item }}",
+        "state": "absent",
+        "eradicate": True,
+        "delete_contents": True,
+    }
+    assert eradicate["loop"] == "{{ before.undo_demote_pods | default([]) }}"
+    assert "eradicate_undo_demote | default(false) | bool" in eradicate["when"]
+    assert "before.promotion_status != 'demoted'" in eradicate["when"]
+    assert eradicate["register"] == "undo_eradicated"
+    asserts = _tasks_with(tasks, "ansible.builtin.assert")
+    assert (
+        max(tasks.index(a) for a in asserts)
+        < tasks.index(eradicate)
+        < tasks.index(demote)
+    )
+    guard = "\n".join("\n".join(a["ansible.builtin.assert"]["that"]) for a in asserts)
+    assert "before.undo_demote_pods | default([]) | length == 0" in guard
+    assert "eradicate_undo_demote | default(false) | bool" in guard
+    read = _tasks_with(tasks, "ansible.builtin.set_fact")[0]
+    assert (
+        '"undo_demote_pods": undo_names'
+        in read["ansible.builtin.set_fact"]["read_pod_script"]
+    )
+    # the record and the artifacts say which pods went
+    record = _tasks_with(tasks, "ansible.builtin.lineinfile")[0]
+    assert "'undo_demote_eradicated'" in record["ansible.builtin.lineinfile"]["line"]
+    assert "undo_demote_eradicated" in _artifact_keys(tasks)
 
 
 # ---- the planned switchover: one playbook, two plays, one per side -------

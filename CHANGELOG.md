@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `dr_demote.yml` eradicates the undo-demote pod an earlier demotion left
+  when `eradicate_undo_demote` is true, as `dr_switchover.yml` does, and
+  the DR failover test workflow's revert node passes it; without the flag
+  the play refuses and names the pods. Live, a failover test's revert after
+  a switchover of the same link failed on the module's refusal and the pod
+  stayed promoted until the undo-demote pod was eradicated by hand and the
+  demote job relaunched. The record and the artifacts carry
+  `undo_demote_eradicated`.
+
 ## 0.3.1 (2026-11-09)
 
 The QoS cap holds up under a real load: `qos_cap.yml` caps only when it

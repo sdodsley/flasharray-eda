@@ -55,8 +55,10 @@ unless stated.
   while such pods exist and adds another; the `purefa_pod` module of
   everpure.flasharray 1.46 refuses it ("undo-demote pod not being
   eradicated"), which every repeated switchover inside that window meets,
-  so `dr_switchover.yml` eradicates them first when `eradicate_undo_demote`
-  is true. The collection's master, after this finding, gives the module
+  and a failover test's revert after a switchover of the same link met it
+  too, so `dr_switchover.yml` and `dr_demote.yml` eradicate them first when
+  `eradicate_undo_demote` is true (both orchestrator workflows set it). The
+  collection's master, after this finding, gives the module
   an `eradicate_undo` option (1.47.0) that does the same inside the demote;
   once a release carries it the playbook's own step can give way to it.
 - Twenty-six minutes with the NTP servers pointed at an unroutable address

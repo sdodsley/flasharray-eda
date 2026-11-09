@@ -4,16 +4,18 @@
 # again and tracks its source. Run by hand, by an Ansible Automation Platform
 # job template or by the "FlashArray - DR failover test" orchestrator
 # workflow with target_array, pod, alert_log and optionally quiesce (default
-# true):
+# true) and eradicate_undo_demote (default false):
 #   ansible-playbook -i inventory/local-<site>.yml playbooks/dr_demote.yml \
 #       -e target_array=array-b -e pod=pod1 -e alert_log=$PWD/alerts.log
 # Demoting a promoted target pod discards every write made while it was
 # promoted: the array keeps them in an undo-demote pod
 # (<pod>.undo-demote.<n>) that is pending eradication, and purefa_pod refuses
-# the next demotion of the same pod while that undo-demote pod exists, so a
-# second failover test of one pod inside the eradication delay needs the
-# first test's undo-demote pod eradicated by hand in between. The record
-# says that the writes are discarded. quiesce false skips the quiesce step
+# the next demotion of the same pod while that undo-demote pod exists (the
+# array would allow it), which a second failover test of one pod inside the
+# eradication delay runs into: with eradicate_undo_demote=true (the
+# orchestrator workflow sets it) the play eradicates those pods before the
+# demotion, without it the play refuses and names them. The record says
+# that the writes are discarded. quiesce false skips the quiesce step
 # (purefa_pod skip_quiesce), which loses whatever the pod has not yet
 # replicated. The same guards as dr_promote.yml apply (a plain pod name; an
 # existing, unstretched replica link target that is not quiescing); a target
@@ -63,9 +65,12 @@
           p = list(r.items)[0].to_dict()
           links = [l.to_dict() for l in c.get_pod_replica_links().items]
           links = [l for l in links if (l.get("local_pod") or {}).get("name") == name]
+          # a demotion leaves <pod>.undo-demote.<n> behind, destroyed, until its eradication timer runs out
+          undo = c.get_pods(names=[name + ".undo-demote.*"], destroyed=True)
+          undo_names = sorted(u.to_dict()["name"] for u in undo.items) if undo.status_code == 200 else []
           print(json.dumps({"promotion_status": p.get("promotion_status"), "requested_promotion_state": p.get("requested_promotion_state"),
                             "link_source_count": p.get("link_source_count"), "link_target_count": p.get("link_target_count"),
-                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")),
+                            "array_count": p.get("array_count"), "destroyed": bool(p.get("destroyed")), "undo_demote_pods": undo_names,
                             "links": [{"direction": l.get("direction"), "status": l.get("status"),
                                        "remote_pod": (l.get("remote_pod") or {}).get("name"),
                                        "remote": ((l.get("remotes") or [{}])[0]).get("name")} for l in links]}))
@@ -106,6 +111,38 @@
                  ('quiescing' if before.promotion_status | default('') == 'quiescing' else
                   'not the target of a pod replica link (linked from ' ~ before.link_source_count | default(0)
                   ~ ' source pod(s), to ' ~ before.link_target_count | default(0) ~ ' target pod(s))')))) }}
+
+    # Purity keeps the pod's state from before a demotion in a destroyed
+    # <pod>.undo-demote.<n> pod for the array's eradication delay, and the
+    # module refuses to demote the pod again while one exists. A repeated
+    # failover test inside that delay eradicates them first, when told to.
+    - name: Refuse to demote over an earlier demotion's undo-demote pod unless told to eradicate it
+      ansible.builtin.assert:
+        that:
+          - >-
+            before.promotion_status == 'demoted' or
+            before.undo_demote_pods | default([]) | length == 0 or
+            eradicate_undo_demote | default(false) | bool
+        fail_msg: >-
+          {{ pod }} on {{ inventory_hostname }} still has {{ before.undo_demote_pods | default([]) | join(', ') }}
+          from an earlier demotion, and a pod cannot be demoted again while its undo-demote pod exists; run with
+          eradicate_undo_demote=true to have the pod(s) eradicated first (they hold the pod's state from before that
+          demotion), or eradicate them by hand
+
+    - name: Eradicate the undo-demote pods the earlier demotion left
+      everpure.flasharray.purefa_pod:
+        fa_url: "{{ fa_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item }}"
+        state: absent
+        eradicate: true
+        delete_contents: true
+      loop: "{{ before.undo_demote_pods | default([]) }}"
+      register: undo_eradicated
+      when:
+        - before.promotion_status != 'demoted'
+        - eradicate_undo_demote | default(false) | bool
 
     - name: Demote the pod
       everpure.flasharray.purefa_pod:
@@ -161,7 +198,9 @@
               'requested_promotion_state': after.requested_promotion_state,
               'link_status_before': link_before.status | default(''), 'link_status_after': link_after.status | default(''),
               'quiesce': quiesce | default(true) | bool,
-              'changed': demoted.changed | default(false),
+              'undo_demote_eradicated': (before.undo_demote_pods | default([]))
+                                        if (undo_eradicated.changed | default(false)) else [],
+              'changed': (undo_eradicated.changed | default(false)) or (demoted.changed | default(false)),
               'test_writes_discarded': demoted.changed | default(false),
               'note': 'writes made while the pod was promoted are discarded; the array keeps them in an undo-demote pod pending eradication'} | to_json }}
       delegate_to: localhost
@@ -174,6 +213,8 @@
           link from {{ link_before.remote | default('?') }}
           {{ link_before.status | default('?') }} -> {{ link_after.status | default('?') }}
           {{ '(changed: writes made during the test are discarded)' if demoted.changed | default(false) else '(unchanged)' }}
+          {{ ('; eradicated first: ' ~ (before.undo_demote_pods | default([]) | join(', ')))
+             if (undo_eradicated.changed | default(false)) else '' }}
 
     # Job artifacts for a workflow or orchestrator node that follows this one.
     - name: Publish the outcome as job artifacts
@@ -186,7 +227,9 @@
               'promotion_status_before': before.promotion_status, 'promotion_status_after': after.promotion_status,
               'link_status_before': link_before.status | default(''), 'link_status_after': link_after.status | default(''),
               'quiesce': quiesce | default(true) | bool,
-              'changed': demoted.changed | default(false),
+              'undo_demote_eradicated': (before.undo_demote_pods | default([]))
+                                        if (undo_eradicated.changed | default(false)) else [],
+              'changed': (undo_eradicated.changed | default(false)) or (demoted.changed | default(false)),
               'test_writes_discarded': demoted.changed | default(false)} }}
       run_once: true
       delegate_to: localhost
