@@ -267,7 +267,11 @@ posts the same record to a Slack incoming webhook: an icon for the
 severity, the severity, the subject with the array named once, and the
 detail on the next line, escaped for Slack. A failed post is reported in
 the job and never fails the notification; the alert log is the record,
-Slack is the pager. On the platform `aap/seed.yml` also
+Slack is the pager. Only records at or above `slack_min_severity` are
+posted (an extra var, else `SLACK_MIN_SEVERITY` in the environment, else
+warning): an alert that has finished its day in `closing`, or a request
+whose approval card the bot posts anyway, is record material and stays in
+the alert log and the job output. On the platform `aap/seed.yml` also
 creates a Slack notification template (bot token, `chat:write`) that posts
 job failures and the controller-tier workflow's approval, success and
 failure events, each with its link into the platform

@@ -39,7 +39,7 @@ ARGS=(
 # SLACK_WEBHOOK_URL are read by playbooks with lookup('env') and travel the
 # same way.
 ENV_VARS=""
-for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET AO_CLIENT_ID AO_CLIENT_SECRET SLACK_WEBHOOK_URL; do
+for name in APPROVAL_TOKEN GIT_WEBHOOK_SECRET AO_CLIENT_ID AO_CLIENT_SECRET SLACK_WEBHOOK_URL SLACK_MIN_SEVERITY; do
   if [ -n "${!name:-}" ]; then
     ENV_VARS="${ENV_VARS:+$ENV_VARS,}$name"
   fi

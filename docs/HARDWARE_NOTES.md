@@ -16,6 +16,11 @@ unless stated.
   ID(s)" on REST 2.46 and on REST 2.59 (Purity//FA 6.12.4) alike. The
   alerts signal diffs `/alerts` with `state!='closed'` on every version and
   derives the opened / updated / closing / closed transitions itself.
+  A resolved alert stays `closing` for 24 hours before the array marks it
+  `closed` (its `closed` and `updated` fields are set when it resolves), so
+  the closed transition, and anything a rulebook does with it, comes a day
+  after the fault cleared: the lab's stretched-pod test alerts posted their
+  closed notices exactly a day after the pods were unstretched.
 - Stretching an empty pod to a second array raises alert 152 (info, "pod
   is now online") on both arrays and alert 120 (critical, "offline on
   peer") on the source, which opens and closes within milliseconds: a safe

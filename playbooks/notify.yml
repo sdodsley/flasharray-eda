@@ -8,6 +8,10 @@
 # carries time, kind, severity and array plus kind-specific fields; keep that
 # shape when adding a playbook. A failed Slack post is reported and never
 # fails the notification: the alert log is the record, Slack is the pager.
+# Slack gets only records at or above slack_min_severity (an extra var, else
+# the SLACK_MIN_SEVERITY environment variable, else warning): an alert
+# finishing its day in "closing", or a request whose approval card the bot
+# posts anyway, is record material, not pager material.
 - name: Notify a human
   hosts: localhost
   gather_facts: false
@@ -16,6 +20,10 @@
       critical: ":rotating_light:"
       warning: ":warning:"
       info: ":information_source:"
+    severity_rank:
+      info: 0
+      warning: 1
+      critical: 2
   tasks:
     - name: Build the alert record
       ansible.builtin.set_fact:
@@ -45,19 +53,37 @@
         slack_webhook: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
       no_log: true
 
+    # The floor below which a record stays out of Slack: an extra var, else
+    # the environment, else warning. A severity the table does not know is
+    # posted.
+    - name: Settle the Slack severity floor
+      ansible.builtin.set_fact:
+        slack_floor: "{{ slack_min_severity | default(lookup('env', 'SLACK_MIN_SEVERITY') or 'warning') }}"
+
+    - name: Decide whether this record reaches Slack
+      ansible.builtin.set_fact:
+        slack_wanted: >-
+          {{ slack_webhook | length > 0 and
+             (severity_rank[alert_record.severity] | default(99) | int) >= (severity_rank[slack_floor] | default(0) | int) }}
+
+    - name: Note a record kept out of Slack by its severity
+      when: slack_webhook | length > 0 and not (slack_wanted | bool)
+      ansible.builtin.debug:
+        msg: "not posted to Slack: severity {{ alert_record.severity }} is below the floor {{ slack_floor }}"
+
     # A literal block scalar carries the line break between the subject line
     # and the detail: inside a Jinja expression Ansible doubles backslashes,
     # so a '\n' written there is two characters, not a newline. Slack wants
     # &, < and > escaped in message text; carriage returns are dropped.
     - name: Format the Slack message
-      when: slack_webhook | length > 0
+      when: slack_wanted | bool
       ansible.builtin.set_fact:
         slack_text: |-
           {{ slack_icons[alert_record.severity] | default(':information_source:') }} *{{ alert_record.severity | upper }}* {{ alert_record.subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array and alert_record.array not in alert_record.subject else '' }}
           {{ alert_record.detail | regex_replace('\r', '') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
 
     - name: Post the alert to Slack
-      when: slack_webhook | length > 0
+      when: slack_wanted | bool
       ansible.builtin.uri:
         url: "{{ slack_webhook }}"
         method: POST
@@ -71,7 +97,7 @@
       no_log: true
 
     - name: Report a failed Slack post without failing the notification
-      when: slack_webhook | length > 0 and slack_post.status | default(0) != 200
+      when: slack_wanted | bool and slack_post.status | default(0) != 200
       ansible.builtin.debug:
         msg: "Slack post failed: status {{ slack_post.status | default(0) }} {{ slack_post.msg | default('') | truncate(120) }}"
 

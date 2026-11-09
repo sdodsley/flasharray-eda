@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `notify.yml` posts to Slack only at or above `slack_min_severity` (an
+  extra var, else `SLACK_MIN_SEVERITY` in the environment, else warning);
+  every record still reaches the alert log, and the job says when a record
+  stayed out of the channel. Purity keeps a resolved alert `closing` for
+  24 hours before it is `closed`, so the alerts rulebook's closed notices
+  arrive a day after the fault cleared; at info severity they no longer
+  page anyone.
 - `dr_demote.yml` eradicates the undo-demote pod an earlier demotion left
   when `eradicate_undo_demote` is true, as `dr_switchover.yml` does, and
   the DR failover test workflow's revert node passes it; without the flag
