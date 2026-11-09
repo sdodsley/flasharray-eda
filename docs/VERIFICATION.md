@@ -305,8 +305,9 @@ undo-demote pod was still on the array and the demote job failed with the
 module's message, leaving the pod promoted until the undo-demote pod was
 eradicated by hand and the job relaunched. Since then `dr_demote.yml`
 eradicates such pods first when the workflow passes
-`eradicate_undo_demote`, which the definition's revert node now does (the
-step is unit-tested; the next test inside the delay will show it). Both
+`eradicate_undo_demote`, which the definition's revert node now does; a
+test run inside the delay then showed it, the revert's job eradicating the
+earlier undo-demote pod before demoting, both approvals from Slack. Both
 playbooks refuse a pod that
 is not the target of a replica link: Purity counts the sources linked to
 a pod in `link_source_count`, so a target pod has a source count above

@@ -51,7 +51,11 @@ unless stated.
   On the lab arrays its timer is the array's `disabled_delay` from
   `eradication_config` (288 hours on one, 192 on the other) even though
   the pod reports manual eradication enabled, where a `<pod>.relink` pod
-  gets the 24-hour `enabled_delay`. The array allows a second demotion
+  gets the 24-hour `enabled_delay`. The undo-demote pod left by demoting a
+  promoted target pod at the end of a failover test carried the 24-hour
+  delay, where those left by a switchover's demotion of a source pod
+  carried the longer one; what decides it is not established. The array
+  allows a second demotion
   while such pods exist and adds another; the `purefa_pod` module of
   everpure.flasharray 1.46 refuses it ("undo-demote pod not being
   eradicated"), which every repeated switchover inside that window meets,

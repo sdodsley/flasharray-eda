@@ -9,7 +9,9 @@
   a switchover of the same link failed on the module's refusal and the pod
   stayed promoted until the undo-demote pod was eradicated by hand and the
   demote job relaunched. The record and the artifacts carry
-  `undo_demote_eradicated`.
+  `undo_demote_eradicated`. Verified live afterwards: a test's revert
+  eradicated the earlier undo-demote pod and demoted the pod, both
+  approvals from Slack.
 
 ## 0.3.1 (2026-11-09)
 
