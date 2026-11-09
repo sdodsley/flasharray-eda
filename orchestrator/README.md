@@ -351,6 +351,11 @@ sections above follow them:
   validates and fails at that node); a service account can hold
   `approval:decide` and still cannot decide, so the Slack bot's
   orchestrator identity is a user in a group the nodes name.
+- A launch the platform answers with a 503 may still have created the
+  job: the gateway timed out after the controller had accepted one, the
+  node retried and launched the template again, and the execution
+  recorded the second job. A playbook behind an AAP node must be safe to
+  run twice; `dr_switchover.yml` leaves a side already where it should be.
 - `GET /api/v1/approvals?status=pending` lists the approvals waiting
   (`id`, `execution_id`, `node_name`, `prompt`); `PATCH
   /api/v1/approvals/{id}` with `status` (`approved` or `rejected`) and

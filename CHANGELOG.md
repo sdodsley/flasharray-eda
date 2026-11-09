@@ -118,7 +118,11 @@
   notification on a controller-tier approval and the bot's card for it;
   the alerts signal against a Purity//FA 6.12.4 array; the planned
   failover and failback on the lab's ActiveDR link, both ways, with the
-  link reversed in between.
+  link reversed in between, then again with both approvals given from
+  Slack by the bot's user, the undo-demote pods of the first run
+  eradicated on the way and a duplicate launch of the failback (the
+  gateway answered 503 after the job was created) absorbed by the
+  playbook changing nothing the second time.
 
 ## 0.2.0 (2026-11-07)
 

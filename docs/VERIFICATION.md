@@ -247,10 +247,37 @@ sees the link report the copy complete, promotes the target pod and
 records the link reversed (the target's link outbound and replicating), in
 72 seconds; after the second approval the same template with the sides
 swapped puts the link back, and both pods read as they started. Both
-approvals were given in the orchestrator's UI: the execution had been
-created when the nodes named the `admins` group alone, and a service
-account is not a user the orchestrator will list as an approver, which is
-why the shipped definitions now name an `approvers` group as well.
+approvals of that first run were given in the orchestrator's UI: the
+execution had been created when the nodes named the `admins` group alone,
+and a service account is not a user the orchestrator will list as an
+approver, which is why the shipped definitions now name an `approvers`
+group as well.
+
+The run was repeated once the definitions were republished with that group
+and the bot logged in as a user in it. The failover approval was decided
+from Slack within ten seconds of the card and recorded as that user with
+the Slack name in the notes, and the switchover job then stopped at the
+demotion: the first run had left `test.undo-demote.5` on array A, a
+destroyed pod holding the pod's state from before that demotion, with 288
+hours on its timer, and the pod cannot be demoted again while it exists
+(the module refuses; docs/HARDWARE_NOTES.md). With the playbook listing
+those pods and eradicating them when `eradicate_undo_demote` is set, which
+the definition now does, the next run went through on two Slack clicks:
+the failover eradicated that pod, demoted the source and promoted the
+target in 77 seconds, and the failback eradicated array B's
+`test-rl.undo-demote.21` from the first run's failback, demoted the target
+and promoted the source again in 75 seconds, both pods and the link reading
+as they started. Two things rode along. The platform's gateway answered
+the failback's launch with a 503 after the controller had created the
+job, so the orchestrator retried the node and launched the template a
+second time 80 seconds later; the second job found the source demoted and
+the target promoted, changed nothing and said so, and it is that job the
+execution recorded. A launch refused with a 503 is not a launch that did
+not happen, and the playbook's rule of leaving a side that is already
+where it should be is what made the duplicate harmless. And the
+replication rulebook, polling the link, saw it quiesced during the planned
+demotion and posted a critical notify about it: to a monitor that does
+not know about it, a planned switchover looks like a stalled link.
 
 The overdue-replication route runs on the same orchestrator.
 `orchestrator/replication_overdue_approval.json` is imported and
@@ -299,9 +326,13 @@ card in the channel, the platform's own Slack notification template posts
 that the approval node needs review, then that it was approved and that
 the workflow succeeded, and the click from the channel approves it (the
 reclaim then runs and the array refuses the SafeMode-locked candidates).
-The bot runs under identities made for it, an orchestrator service account
-with the project-user role and a platform user with the Approve role on
-the workflow, and polls both queues with them.
+The bot runs under identities made for it: an orchestrator user in the
+`approvers` group the approval nodes name, the group holding the
+project-user role on the project (a service account with the same role
+lists the approvals but is refused the decision, 403, because approver
+names resolve to users and groups), and a platform user with the Approve
+role on the workflow; it polls both queues with them, and the orchestrator
+records each decision as that user with the Slack name in the notes.
 
 ## Replayed only
 
