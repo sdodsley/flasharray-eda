@@ -251,7 +251,8 @@ volume and a lift on an untagged one change nothing). And a cap on a
 volume whose latency was already normal was lifted at the next poll
 ("normal for 10 polls"), because the lift's count ran from whenever the
 volume last read slow; the telemetry signal now starts it at the cap,
-which the next decision-environment image carries. The automatic
+and the performance activation runs on the rebuilt image that carries
+it (the change is unit-tested; the next cap will show it). The automatic
 noisy-neighbour rule itself did not fire from this host: the array's
 service time for 4k reads stayed near 70 µs with the initiator seeing
 milliseconds, and 1 MiB reads on four paths reached 60 MB/s at 200 to 330
@@ -259,6 +260,31 @@ milliseconds, and 1 MiB reads on four paths reached 60 MB/s at 200 to 330
 latency nor the 1 ms array latency the rule needs was approached; the
 array-side latency the plugin reads does not include the wire, and a
 real hot array is still the only way to fire that rule honestly.
+
+The two ansible-builder images on the supported bases ran on the platform.
+Both were built with ansible-builder 3.2 on a `vfs` image store seeded
+with the platform's own copies of `ee-supported-rhel9` and
+`de-supported-rhel9` (no registry login on the host), and loaded into
+the stores the platform uses rather than pulled: the execution
+environment from `aap/execution-environment.yml` (4.2 GB; ansible-core
+2.16, `everpure.flasharray` 1.46.0, py-pure-client on the Python Ansible
+runs on) into the controller's task container, the decision environment
+from `aap/decision-environment.yml` (2.9 GB; ansible-rulebook, the three
+collections, py-pure-client) into the activation workers' store. On the
+execution environment, registered as a throwaway EE object, copies of the
+notify and switchover templates ran: the notify posted to Slack in 28
+seconds, and the switchover launched against a pod that does not exist
+reached the array through py-pure-client and stopped at its guard with
+the array's own "Pod does not exist." On the decision environment,
+registered as a throwaway DE object with the pull policy `missing` (the
+API's default `always` makes the worker pull `localhost/...` and fail on
+the registry certificate, docs/HARDWARE_NOTES.md), the alertmanager
+activation was recreated, ran in a container from that image, took a
+posted replica-link alert through its rule and launched the notify job.
+The activation was then recreated on the project's own decision
+environment and the throwaway objects and images removed. The images
+that run the lab day to day remain the ones `decision-environment/
+Containerfile` and `aap/Containerfile.ee` build.
 
 The platform's Slack notification template also fired on a job failure:
 the switchover launched against a pod that does not exist failed at its
@@ -391,22 +417,11 @@ event takes the same path as a live one.
   rule (lab override), the replica-link rule (a real pause) and the scrape
   rule (a closed port) are driven through Alertmanager to the platform
   activation; the rest wait for a real fault.
-- The ansible-builder images on the platform. All three definitions build
-  with ansible-builder 3.2 on a `vfs` image store (rootless podman with
-  native overlay on the lab host fails every multi-stage `COPY --from`
-  with "copier: stat ... no such file" although the stage image holds the
-  path, [PACKAGING.md](PACKAGING.md)): the decision environment from
-  `decision-environment/execution-environment.yml` carries the three
-  collections, ansible-rulebook 1.3.2 and the plain-file tree, and runs
-  `alertmanager.yml` as a standalone listener that takes a posted alert
-  through its rule to a notify record; `aap/execution-environment.yml` on
-  the supported base carries `everpure.flasharray` and py-pure-client on
-  the Python 3.12 Ansible runs on; `aap/decision-environment.yml` on the
-  supported base carries the three collections and py-pure-client, with
-  `systemd-python` excluded. Neither supported-base image has run a job or
-  an activation on the platform; the images that run there are the ones
-  `decision-environment/Containerfile` and `aap/Containerfile.ee` build.
-  CI runs the static checks only. The upstream-based definitions pin
+- The ansible-builder images under CI: CI runs the static checks only; the
+  three definitions build on the lab host's `vfs` image store (rootless
+  podman with native overlay there fails every multi-stage `COPY --from`,
+  [PACKAGING.md](PACKAGING.md)) and the two supported-base images have run
+  on the platform (above). The upstream-based definitions pin
   `quay.io/ansible/ansible-rulebook:v1.3.2`, the tested ansible-rulebook;
   `latest` on that repository is not guaranteed to be the newest release.
 - A rulebook activation launching the controller-tier approval workflow:

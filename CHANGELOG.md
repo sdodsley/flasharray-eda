@@ -13,7 +13,11 @@
   the QoS cap under a real fio load from the platform host over iSCSI,
   twice through the day-2 route with its approval from Slack, on a volume
   with its own 1000-IOPS limit (recorded, enforced at 500, restored) and on
-  one without (lifted to no limit, not the maximum).
+  one without (lifted to no limit, not the maximum); the two supported-base
+  ansible-builder images running on the platform, the execution environment
+  under a notify job and a guarded switchover job and the decision
+  environment under the alertmanager activation taking an alert through its
+  rule to a job.
 - A lifted cap leaves the volume without a limit again: `qos_cap.yml`
   removes the limit through the API with an empty string, because
   `purefa_volume` sends the 100000000 maximum for `iops_qos: 0`, which

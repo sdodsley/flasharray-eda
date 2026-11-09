@@ -224,6 +224,12 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
 - The controller's task container and the activation workers keep image
   stores of their own, separate from the host user's command line; an
   image built on the host is loaded into them or pulled from a registry.
+- A decision environment created through the API defaults to the pull
+  policy `always`; an activation on a locally loaded image then fails to
+  start with "x509: certificate is valid for <platform host>, not
+  localhost", the worker's pull of `localhost/...` meeting the registry's
+  certificate. `pull_policy: missing`, which the seed sets, uses the
+  loaded image.
 - `ansible.eda.rulebook_activation` cannot modify an activation; the
   enabled flag is the one thing a seed can still set, so the seed enforces
   it on every run and a site keeps it true once the activations run. An
