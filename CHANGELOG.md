@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-09)
+
+The syslog path is live on the platform from both arrays, with the audit
+and alert layouts parsed into fields; notifications reach Slack and
+approvals come back from it through a bot with identities of its own; a
+planned ActiveDR failover and failback runbook joins the orchestrator
+workflows, now nine behind nineteen job templates, and `tools/ao_sync.py`
+imports the definitions into a live orchestrator. Exercised against the
+two Purity//FA 6.10.6 arrays, Ansible Automation Platform 2.7 and a live
+orchestrator; [docs/VERIFICATION.md](docs/VERIFICATION.md) has the
+ledger.
 
 - Every approval node names the group `approvers` beside `admins`, so the
   people who decide and the Slack bot's orchestrator user can sit in a
