@@ -2,11 +2,23 @@
 
 ## Unreleased
 
-- Planned work no longer pages: `dr_switchover.yml` tags both pods
-  `eda/planned_work` (an ISO time) for as long as it runs, the plugin
-  stamps `planned` on the replica-link events of a pod whose tag is
-  fresher than `planned_work_max_age` (default an hour), and the
-  replication rulebook logs those events instead of notifying; the
+- The alert lifecycle: `closing` is the resolved signal (the array holds a
+  resolved alert there for a day before `closed`), so the alerts rulebook
+  notifies once at one severity below the alert's with the time it was
+  open (`resolved_after_s`), routes an alert again when its severity rises
+  (`severity_raised`, `previous_severity`) and logs the `closed` event a day
+  later; the plugin emits `purefa_hardware_recovered` when a component
+  leaves the issue set and the health rulebook clears the identify LED it
+  lit when it is still lit; the runbook map falls through from
+  code to component type (`alert_runbooks_by_type`) to default, and code 13
+  (NTP) reapplies the baseline servers through `runbooks/13.yml`.
+- Planned work no longer pages: `dr_switchover.yml` tags the promoted
+  source pod `eda/planned_work` (an ISO time) before it demotes, the
+  plugin stamps `planned` on the replica-link events of that pod and of the
+  link's other side while the tag is fresher than `planned_work_max_age`
+  (default 15 minutes; a demoted pod refuses tag changes, so the target is
+  marked through the source and the tag expires rather than being cleared),
+  and the replication rulebook logs those events instead of notifying; the
   failover-and-failback workflow also silences the
   `FlashArrayReplicaLink.*` rules for both arrays in Alertmanager around
   each switchover through `playbooks/alertmanager_silence.yml` (the

@@ -41,4 +41,21 @@
             alert_id: "{{ event.purefa_alert.alert_id }}"
             alert_code: "{{ event.purefa_alert.code }}"
             alert_runbooks: "{{ alert_runbooks }}"
+            alert_runbooks_by_type: "{{ alert_runbooks_by_type | default({}) }}"
+            component_type: "{{ event.purefa_alert.component_type }}"
+            baseline_ntp_servers_csv: "{{ baseline_ntp_servers_csv | default('') }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Alert resolved - notify
+      condition: event.purefa_alert.transition == "closing"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ event.purefa_alert.severity_down }}"
+            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} resolved: {{ event.purefa_alert.summary }}"
+            detail: "open for {{ event.purefa_alert.resolved_after_s }} s; {{ event.purefa_alert.action }}"
+            target_array: "{{ event.purefa_alert.array }}"
+            alert_id: "{{ event.purefa_alert.alert_id }}"
+            alert_code: "{{ event.purefa_alert.code }}"
             alert_log: "{{ alert_log }}"

@@ -55,9 +55,15 @@ unless stated.
   marker); the planned-work marker the switchover sets
   (`eda/planned_work`, an ISO time, beside `eda/planned_work_note`) lives
   there, and the plugin reads the `eda` namespace once per replication
-  poll. During a planned switchover both arrays report the link
-  `quiescing` and then `quiesced` for about a minute, the state the
-  replication rulebook pages on when nothing marks the work as planned.
+  poll. A demoted pod refuses tag changes (`PUT /pods/tags/batch` on the
+  replica link's target answered "Invalid operation on demoted pod"), so
+  the marker goes on the promoted source pod and the plugin applies it to
+  the link's other side itself; once the switchover has demoted that pod
+  the tag cannot be cleared either, so the plugin stops honouring it after
+  `planned_work_max_age` (15 minutes). During a planned switchover both
+  arrays report the link `quiescing` and then `quiesced` for about a
+  minute, the state the replication rulebook pages on when nothing marks
+  the work as planned.
 - Demoting a pod leaves `<pod>.undo-demote.<n>` behind: a destroyed pod
   holding the pod's state from before the demotion, found with
   `GET /pods?names=<pod>.undo-demote.*&destroyed=true` (a pattern that

@@ -35,3 +35,11 @@ fixture_events:
       controllers:
         - {name: CT0, mode: primary, status: ready}
         - {name: CT1, mode: secondary, status: ready}
+  - purefa_hardware_recovered:
+      array: "REPLAY_ARRAY"
+      component: "REPLAY_COMPONENT"
+      type: controller
+      status: ok
+      previous_status: critical
+      identify_enabled: true
+      maintenance_active: false

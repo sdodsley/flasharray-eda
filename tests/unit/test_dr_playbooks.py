@@ -389,10 +389,7 @@ def test_switchover_demotes_with_quiesce_then_promotes_after_the_copy_is_complet
             assert task.get("no_log") is True, task["name"]
             if task["name"].startswith(("Mark ", "Clear ")):
                 # the planned-work tags: one task per pod, each with its array's token
-                assert task["environment"]["FA_TOKEN"] in (
-                    "{{ api_token }}",
-                    "{{ peer_api_token }}",
-                )
+                assert task["environment"]["FA_TOKEN"] == "{{ api_token }}"
                 assert task.get("changed_when") is True
                 continue
             assert task["environment"]["FA_TOKEN"] == "{{ api_token }}"
@@ -414,42 +411,35 @@ def test_switchover_records_and_publishes_the_outcome(repo_root):
     assert SWITCHOVER_KEYS <= _artifact_keys(target["tasks"])
 
 
-def test_switchover_marks_both_pods_as_planned_work_and_clears_them(repo_root):
+def test_switchover_marks_the_source_pod_as_planned_work(repo_root):
     source, target = _plays(repo_root, SWITCHOVER)
     names = [t["name"] for t in source["tasks"]]
-    mark_source = names.index("Mark the source pod as planned work")
-    mark_target = names.index("Mark the target pod as planned work")
+    mark = names.index("Mark the source pod as planned work")
     demote = next(
         i
         for i, t in enumerate(source["tasks"])
         if POD_MODULE in t and t[POD_MODULE].get("promote") is False
     )
     asserts = _tasks_with(source["tasks"], "ansible.builtin.assert")
-    # after every guard, before anything changes
-    assert max(source["tasks"].index(a) for a in asserts) < mark_source
-    assert mark_source < mark_target < demote
+    # after every guard, before anything changes, with this array's own token
+    assert max(source["tasks"].index(a) for a in asserts) < mark < demote
+    task = source["tasks"][mark]
+    assert task["environment"]["FA_TOKEN"] == "{{ api_token }}"
+    assert task["environment"]["MODE"] == "set"
+    assert task.get("failed_when") is False and task.get("register") == "marked_source"
+    stop = source["tasks"][mark + 1]
+    assert "ansible.builtin.fail" in stop and "marked_source.rc" in stop["when"]
     script = next(
         t["ansible.builtin.set_fact"]["planned_work_script"]
         for t in source["tasks"]
         if "planned_work_script" in t.get("ansible.builtin.set_fact", {})
     )
-    assert 'key="planned_work"' in script
-    assert "put_pods_tags_batch" in script and "delete_pods_tags" in script
-    target_mark = source["tasks"][mark_target]
-    assert target_mark["environment"]["FA_TOKEN"] == "{{ peer_api_token }}"
-    assert "peer_fa_url | length > 0" in target_mark["when"]
-    assert source["tasks"][mark_source]["environment"]["MODE"] == "set"
-    # the target play clears both tags last, before the artifacts, never failing on it
-    tnames = [t["name"] for t in target["tasks"]]
-    clear_t = tnames.index("Clear the planned-work tags on the target pod")
-    clear_s = tnames.index("Clear the planned-work tags on the source pod")
-    assert clear_t < clear_s < len(target["tasks"]) - 1
-    assert SET_STATS in target["tasks"][-1]
-    for i in (clear_t, clear_s):
-        assert target["tasks"][i].get("failed_when") is False
-        assert target["tasks"][i]["environment"]["MODE"] == "clear"
-    # each play still resolves only its own array; the peer's credentials come
-    # from the inventory or the fleet credential without a second include
+    assert 'key="planned_work"' in script and "put_pods_tags_batch" in script
+    # a demoted pod refuses tag changes: the target pod is never tagged and
+    # nothing tries to clear a tag from the demoted source afterwards
+    assert "Mark the target pod as planned work" not in names
+    assert not [t for t in target["tasks"] if t["name"].startswith(("Mark ", "Clear "))]
+    # each play still resolves only its own array
     for play in (source, target):
         includes = _tasks_with(play["tasks"], "ansible.builtin.include_tasks")
         assert len(includes) == 1

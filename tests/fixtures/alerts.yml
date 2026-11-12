@@ -58,3 +58,21 @@ fixture_events:
       summary: "(hardware:ct1.eth7): failure during maintenance"
       action: ""
       knowledge_base_url: ""
+  - purefa_alert:
+      array: "REPLAY_ARRAY"
+      transition: closing
+      maintenance_active: false
+      alert_id: "900000005"
+      code: 42
+      severity: warning
+      severity_down: info
+      previous_severity: null
+      severity_raised: false
+      state: closing
+      component_type: hardware
+      component_name: ct1.eth7
+      summary: "(hardware:ct1.eth7): failure cleared"
+      action: ""
+      knowledge_base_url: ""
+      age_s: 300
+      resolved_after_s: 300

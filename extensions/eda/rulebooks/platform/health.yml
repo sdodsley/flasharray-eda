@@ -86,6 +86,26 @@
       action:
         debug:
           msg: 'maintenance window active on {{ event.purefa_hardware.array }}: {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned'
+    - name: Hardware recovered - clear the identify LED
+      condition: event.purefa_hardware_recovered.component is defined and event.purefa_hardware_recovered.identify_enabled == true and event.purefa_hardware_recovered.maintenance_active == false
+      action:
+        run_job_template:
+          name: FlashArray - identify LED
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              target_array: '{{ event.purefa_hardware_recovered.array }}'
+              component: '{{ event.purefa_hardware_recovered.component }}'
+              component_type: '{{ event.purefa_hardware_recovered.type }}'
+              component_status: '{{ event.purefa_hardware_recovered.status }}'
+              component_details: recovered from {{ event.purefa_hardware_recovered.previous_status }}
+              led_state: false
+              severity: info
+    - name: Hardware recovered - log
+      condition: event.purefa_hardware_recovered.component is defined
+      action:
+        debug:
+          msg: '{{ event.purefa_hardware_recovered.array }} {{ event.purefa_hardware_recovered.component }} recovered ({{ event.purefa_hardware_recovered.previous_status }} -> {{ event.purefa_hardware_recovered.status }}); identify LED {{ ''left as it is'' if event.purefa_hardware_recovered.identify_enabled else ''off'' }}'
     - name: Drive not healthy - notify
       condition: event.purefa_health.drive_issue_count is defined and event.purefa_health.drive_issue_count > 0
       throttle:

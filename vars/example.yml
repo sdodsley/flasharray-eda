@@ -129,7 +129,12 @@ alert_runbooks:
   "42": {route: ticket, severity: warning, note: "Hardware failure: check the identify LED, open a case with the alert text."}
   "120": {route: ticket, severity: critical, note: "Stretched pod offline on peer: check the replication paths and the mediator before touching the pod."}
   "122": {route: ticket, severity: critical, note: "Mediator unhealthy: verify DNS and outbound HTTPS from both arrays."}
-  "13": {route: notify, note: "NTP not synchronised: compare with the baseline NTP servers."}
+  "13": {route: tasks, note: "NTP not synchronised: runbooks/13.yml reapplies the baseline NTP servers; compare with them if it persists."}
+# component type -> route, for codes the map above does not name (the alert's
+# component_type: hardware, software, array, ...); default still applies last.
+alert_runbooks_by_type: {}
+#  hardware: {route: ticket, note: "Hardware alert without a code entry: check the identify LED."}
+
 
 # --- replication actions (replication signal) ----------------------------
 rpo_escalate_polls: 4                 # RPO breached this many polls in a row -> critical

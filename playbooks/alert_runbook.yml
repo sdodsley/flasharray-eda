@@ -3,8 +3,9 @@
 # ticket record carrying the array's own action text and KB link.
 #
 # The alerts rulebook passes the alert fields plus `alert_runbooks` (a map of
-# alert code -> {severity, route, note}). A code with no entry takes the
-# `default` entry. `route` is one of:
+# alert code -> {severity, route, note}) and `alert_runbooks_by_type` (the
+# same, by the alert's component_type). The entry is looked up by code, then
+# by component type, then `default`. `route` is one of:
 #   notify   -> alert log only (same shape as notify.yml)
 #   ticket   -> alert log + a ticket record; swap the lineinfile for
 #               servicenow.itsm.incident or jira when connected
@@ -15,9 +16,12 @@
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Pick the runbook entry for this alert code
+    - name: Pick the runbook entry for this alert code, else its component type, else the default
       ansible.builtin.set_fact:
-        runbook: "{{ alert_runbooks[alert_code | string] | default(alert_runbooks['default']) }}"
+        runbook: >-
+          {{ alert_runbooks[alert_code | string]
+             | default((alert_runbooks_by_type | default({}))[component_type | default('')]
+                       | default(alert_runbooks['default'])) }}
 
     # Only the per-code tasks can touch the array (they delegate to it and
     # read hostvars[target_array]); a notify or ticket route needs nothing.

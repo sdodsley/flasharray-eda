@@ -46,7 +46,8 @@ include_initial_alerts
                   transition "initial" (default true)
 planned_work_max_age
                   seconds an eda/planned_work tag on a pod counts as planned
-                  work on the replica-link events (default 3600); the tag
+                  work on the replica-link events, its own and its link's other
+                  side on any array this source polls (default 900); the tag
                   read needs REST 2.39 or later, older arrays poll without it
 poll_error_escalate
                   consecutive failed polls of one signal on one array after
@@ -97,9 +98,14 @@ purefa_alert            transition: initial|opened|updated|closing|closed;
                         alert_id, code, severity, state, component_type,
                         component_name, summary, description, issue, actual,
                         expected, action, knowledge_base_url, flagged,
-                        created, updated, category
+                        created, updated, category, age_s, resolved_after_s,
+                        severity_down, previous_severity, severity_raised
 purefa_audit            audit_id, time, user, user_interface, origin, command,
                         subcommand, arguments, by_automation, system_user
+purefa_hardware_recovered
+                        component, type, status, previous_status,
+                        identify_enabled, maintenance_active: a component
+                        that left the issue set since the last poll
 purefa_health           hardware_issues[{component,type,status}],
                         hardware_issue_count,
                         drive_issues[{drive,status,type}], drive_issue_count,
@@ -148,7 +154,7 @@ purefa_array_connection remote, status, type, replication_transport,
                         remote_version
 purefa_replica_link     local_pod, remote_pod, remote_array, status,
                         planned, planned_note (a fresh eda/planned_work tag on
-                        the local pod), direction, paused, lag_ms, lag_s, recovery_point,
+                        the local pod or on the link's other side), direction, paused, lag_ms, lag_s, recovery_point,
                         recovery_point_age_s, rpo_seconds, rpo_breached,
                         rpo_breach_polls, paused_for_s
 purefa_stretched_pod    pod, members[{array,status,mediator_status,
@@ -254,9 +260,9 @@ options:
     type: bool
     default: true
   planned_work_max_age:
-    description: Seconds an eda/planned_work tag on a pod counts as planned work on the replica-link events.
+    description: Seconds an eda/planned_work tag on a pod counts as planned work on the replica-link events, its own and the link's other side.
     type: int
-    default: 3600
+    default: 900
   poll_error_escalate:
     description: Consecutive failed polls of one signal on one array after which purefa_poll_error carries escalate true.
     type: int
@@ -461,6 +467,18 @@ def _now_ms():
     return int(time.time() * 1000)
 
 
+_SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
+_SEVERITY_DOWN = {"critical": "warning", "warning": "info", "info": "info"}
+
+
+def _severity_raised(previous, current):
+    """True when an alert's severity went up between two polls; nothing is a
+    rise from no previous reading or an unknown level."""
+    before = _SEVERITY_RANK.get(str(previous)) if previous is not None else None
+    after = _SEVERITY_RANK.get(str(current))
+    return before is not None and after is not None and after > before
+
+
 def _poll_error(signal, array, error, consecutive=1, escalate=False):
     return {
         "purefa_poll_error": {
@@ -494,17 +512,23 @@ def _iso_ms(value):
     return int(parsed.timestamp() * 1000)
 
 
-def _planned_work(c, arr, args, now, st):
+def _planned_work(c, arr, args, now, state):
     """Pods whose eda/planned_work tag (an ISO time) is fresher than
     planned_work_max_age, mapped to their eda/planned_work_note. A playbook
-    doing planned work on a pod (dr_switchover.yml) sets the tags first and
-    clears them afterwards, and the replica-link events of such a pod carry
-    planned: true so a rule can log what would otherwise page; the age limit
-    means a job that died cannot silence a link for good. A tag read that
+    doing planned work on a pod (dr_switchover.yml) tags the promoted source
+    pod first (a demoted pod refuses tag changes), and the replica-link
+    events of that pod, and of the link's other side on any array this
+    activation polls, carry planned: true so a rule can log what would
+    otherwise page; the age limit means a tag that cannot be cleared (the
+    pod is demoted by then) or a job that died cannot silence a link for
+    good. What was found goes into state["planned_pods"][array] for the
+    other array's poll. A tag read that
     fails leaves nothing planned and never fails the poll; it is said once
     per array at warning (the SDK has the pod tag calls from REST 2.39, so an
     older array would say it every poll), then at debug until a read works."""
-    max_age = float(args.get("planned_work_max_age", 3600) or 3600) * 1000
+    max_age = float(args.get("planned_work_max_age", 900) or 900) * 1000
+    st = state.setdefault("replication", {}).setdefault(arr.name, {})
+    found = state.setdefault("planned_pods", {})
     stamps, notes = {}, {}
     try:
         tags = _items(c.get_pods_tags(namespaces=["eda"]), "pods/tags")
@@ -512,6 +536,7 @@ def _planned_work(c, arr, args, now, st):
         say = logger.debug if st.get("pod_tags_warned") else logger.warning
         say("purefa_events[replication]: %s pod tags unread: %s", arr.name, exc)
         st["pod_tags_warned"] = True
+        found[arr.name] = {}
         return {}
     st.pop("pod_tags_warned", None)
     for tag in tags:
@@ -520,11 +545,12 @@ def _planned_work(c, arr, args, now, st):
             stamps[pod] = _iso_ms(tag.get("value"))
         elif tag.get("key") == "planned_work_note":
             notes[pod] = str(tag.get("value") or "")
-    return {
+    found[arr.name] = {
         pod: notes.get(pod, "")
         for pod, stamp in stamps.items()
         if stamp is not None and 0 <= now - stamp <= max_age
     }
+    return found[arr.name]
 
 
 def _maintenance(arr, state, max_age=20.0):
@@ -603,7 +629,7 @@ def poll_alerts(arr, state, args):
 
     maintenance_active = bool(_maintenance(arr, state))
 
-    def event(a, transition):
+    def event(a, transition, previous=None):
         return {
             "purefa_alert": {
                 "array": arr.name,
@@ -626,21 +652,47 @@ def poll_alerts(arr, state, args):
                 "category": a.get("category"),
                 "created": a.get("created"),
                 "updated": a.get("updated"),
+                # the lifecycle, read from the array: how long the alert has
+                # been open, how long it was open when it resolved (closing
+                # sets closed), one severity below its own for the resolved
+                # notice, and whether its severity went up since the last poll
+                "age_s": (
+                    round((_now_ms() - a["created"]) / 1000)
+                    if a.get("created")
+                    else None
+                ),
+                "resolved_after_s": (
+                    round((a["closed"] - a["created"]) / 1000)
+                    if a.get("closed") and a.get("created")
+                    else None
+                ),
+                "severity_down": _SEVERITY_DOWN.get(
+                    str(a.get("severity")), a.get("severity")
+                ),
+                "previous_severity": previous,
+                "severity_raised": (
+                    _severity_raised(previous, a.get("severity")) if previous else False
+                ),
             }
         }
 
     for a in active:
         aid = a.get("name")
-        key = (a.get("state"), a.get("updated"))
+        key = (a.get("state"), a.get("updated"), a.get("severity"))
         current[aid] = key
         if first:
             if _truthy(args.get("include_initial_alerts"), True):
                 events.append(event(a, "initial"))
         elif aid not in seen:
             events.append(event(a, "opened"))
-        elif seen[aid] != key:
+        elif seen[aid][:2] != key[:2]:
+            previous = seen[aid][2] if len(seen[aid]) > 2 else None
             events.append(
-                event(a, "closing" if a.get("state") == "closing" else "updated")
+                event(
+                    a,
+                    "closing" if a.get("state") == "closing" else "updated",
+                    previous=previous,
+                )
             )
     if not first:
         for aid in set(seen) - set(current):
@@ -738,7 +790,9 @@ def poll_audits(arr, state, args):
 
 def poll_health(arr, state, args):
     c = arr.client
-    st = state.setdefault("health", {}).setdefault(arr.name, {"primary": None})
+    st = state.setdefault("health", {}).setdefault(
+        arr.name, {"primary": None, "issues": {}}
+    )
     hw_ignore = set(
         _as_list(args.get("hardware_ignore_status"))
         or ["ok", "not_installed", "unused"]
@@ -828,6 +882,32 @@ def poll_health(arr, state, args):
                 }
             }
         )
+    # a component that was an issue last poll and is not one now has
+    # recovered: the rulebook can clear the identify LED it lit
+    previous_issues = st.get("issues", {})
+    current_issues = {h.get("name"): h for h in issues}
+    by_name = {h.get("name"): h for h in hardware}
+    for name, was in previous_issues.items():
+        if name in current_issues:
+            continue
+        h = by_name.get(name, {})
+        events.append(
+            {
+                "purefa_hardware_recovered": {
+                    "array": arr.name,
+                    "component": name,
+                    "type": h.get("type") or was.get("type"),
+                    "status": h.get("status"),
+                    "previous_status": was.get("status"),
+                    "identify_enabled": h.get("identify_enabled"),
+                    "maintenance_active": bool(windows),
+                }
+            }
+        )
+    st["issues"] = {
+        n: {"type": h.get("type"), "status": h.get("status")}
+        for n, h in current_issues.items()
+    }
     if st["primary"] and primary and st["primary"] != primary:
         events.append(
             {
@@ -1201,8 +1281,24 @@ def poll_replication(arr, state, args):
     # the marker read comes after the mandatory calls and only where there is a
     # link to mark, so a hung array fails fast once and an array without ActiveDR
     # costs nothing extra
-    planned = _planned_work(c, arr, args, now, st) if links else {}
+    planned = _planned_work(c, arr, args, now, state) if links else {}
+
+    def planned_for(link):
+        # the local pod's own tag, or the tag on the link's other side read
+        # by this activation's poll of that array (a demoted pod cannot be
+        # tagged, so the target side is marked through the source)
+        local = _name(link.get("local_pod"))
+        if local in planned:
+            return True, planned[local]
+        remote_pod = _name(link.get("remote_pod"))
+        for remote in link.get("remotes") or []:
+            notes = state.get("planned_pods", {}).get(_name(remote), {})
+            if remote_pod in notes:
+                return True, notes[remote_pod]
+        return False, ""
+
     for link in links:
+        is_planned, planned_note = planned_for(link)
         rp = link.get("recovery_point")
         key = f"{_name(link.get('local_pod'))}->{_name(link.get('remote_pod'))}"
         breached = bool(rpo > 0 and (link.get("lag") or 0) > rpo * 1000)
@@ -1221,8 +1317,8 @@ def poll_replication(arr, state, args):
                     "remote_array": ",".join(
                         _name(r) for r in (link.get("remotes") or [])
                     ),
-                    "planned": _name(link.get("local_pod")) in planned,
-                    "planned_note": planned.get(_name(link.get("local_pod")), ""),
+                    "planned": is_planned,
+                    "planned_note": planned_note,
                     "status": link.get("status"),
                     "direction": link.get("direction"),
                     "paused": link.get("paused"),

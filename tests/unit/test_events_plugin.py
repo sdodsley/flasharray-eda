@@ -50,6 +50,7 @@ class FakeClient:
         volumes_perf=None,
         tags=None,
         pod_tags=None,
+        hardware=None,
     ):
         self.alerts = alerts or []
         self.audits = audits or []
@@ -58,6 +59,7 @@ class FakeClient:
         self.volumes_perf = volumes_perf or []
         self.tags = tags or []  # (volume, key, value)
         self.pod_tags = pod_tags or []  # (pod, key, value)
+        self.hardware = hardware or []  # /hardware rows
         self.calls = []
 
     # --- alerts / audits -------------------------------------------------
@@ -90,6 +92,23 @@ class FakeClient:
 
     def get_pods(self, **kw):
         return FakeResponse([])
+
+    def get_hardware(self, **kw):
+        return FakeResponse(self.hardware)
+
+    def get_drives(self, **kw):
+        return FakeResponse([])
+
+    def get_controllers(self, **kw):
+        return FakeResponse([{"name": "CT0", "mode": "primary", "status": "ready"}])
+
+    def get_support(self, **kw):
+        return FakeResponse(
+            [{"remote_assist_active": False, "phonehome_enabled": True}]
+        )
+
+    def get_arrays(self, **kw):
+        return FakeResponse([{"version": "6.10.6"}])
 
     def get_pods_tags(self, **kw):
         return FakeResponse(
@@ -882,6 +901,38 @@ def test_replica_link_events_carry_planned_work_from_fresh_pod_tags(events):
     ]
     assert flags == [False, False, False]
     assert state["replication"]["array-a"]["pod_tags_warned"] is True
+    # the mark reaches the link's other side through the shared state: array-b
+    # polled by the same source sees its inbound link from the tagged pod as planned
+    shared = {}
+    client.get_pods_tags = lambda **kw: FakeResponse(
+        [
+            {
+                "resource": {"name": "p1"},
+                "namespace": "eda",
+                "key": "planned_work",
+                "value": fresh,
+            }
+        ]
+    )
+    events.poll_replication(FakeArray(client), shared, {})
+    other = FakeClient()
+    other.get_pod_replica_links = lambda **kw: FakeResponse(
+        [
+            {
+                "local_pod": {"name": "p1-target"},
+                "remote_pod": {"name": "p1"},
+                "remotes": [{"name": "array-a"}],
+                "status": "quiesced",
+                "direction": "inbound",
+                "paused": False,
+                "lag": 0,
+                "recovery_point": now,
+            }
+        ]
+    )
+    out = events.poll_replication(FakeArray(other, "array-b"), shared, {})
+    (mirror,) = [e["purefa_replica_link"] for e in out if "purefa_replica_link" in e]
+    assert mirror["planned"] is True
     # an array with no replica link never pays for the tag read
     quiet = FakeClient(pod_tags=[("p1", "planned_work", fresh)])
     calls = []

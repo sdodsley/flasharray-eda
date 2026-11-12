@@ -1,0 +1,25 @@
+---
+# Alert 13 (NTP not synchronised): reapply the baseline NTP servers when a
+# baseline is configured, otherwise say so. Included by
+# playbooks/alert_runbook.yml (route: tasks) on localhost, with the array's
+# credentials resolved onto hostvars[target_array] first; the alerts rulebook
+# passes baseline_ntp_servers_csv from the vars file. The config-drift
+# rulebook would reapply the same baseline on its next poll; this runs it
+# the moment the array says time is adrift.
+- name: Reapply the baseline NTP servers for alert 13
+  when: baseline_ntp_servers_csv | default('') | length > 0
+  everpure.flasharray.purefa_ntp:
+    fa_url: "{{ hostvars[target_array].fa_url }}"
+    api_token: "{{ hostvars[target_array].api_token }}"
+    disable_warnings: true
+    state: present
+    ntp_servers: "{{ baseline_ntp_servers_csv.split(',') | map('trim') | list }}"
+  register: ntp_reapplied
+
+- name: Say what the runbook did
+  ansible.builtin.debug:
+    msg: >-
+      alert 13 on {{ target_array }}:
+      {{ 'NTP servers reapplied from the baseline' if ntp_reapplied.changed | default(false)
+         else ('NTP already at the baseline' if baseline_ntp_servers_csv | default('') | length > 0
+               else 'no baseline_ntp_servers_csv configured, nothing reapplied') }}

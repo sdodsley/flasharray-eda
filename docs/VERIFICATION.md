@@ -470,3 +470,11 @@ event takes the same path as a live one.
   the rule has fired only on lowered thresholds and on replayed events.
 - Packaging into `everpure.flasharray` and the Red Hat EDA certification
   track ([PACKAGING.md](PACKAGING.md)).
+
+The alert lifecycle rules (the resolved notice at `closing`, the second
+routing on a severity rise, the identify LED cleared when a component
+recovers, runbook 13 reapplying the NTP baseline) and the planned-work
+marker on the switchover's source pod are unit-tested and replayable but
+have not run against a live alert or a live switchover yet; the first
+switchover with the marker stopped at the target pod's tag, which a
+demoted pod refuses, before anything changed.

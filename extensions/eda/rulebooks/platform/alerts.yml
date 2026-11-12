@@ -85,17 +85,47 @@
               alert_id: '{{ event.purefa_alert.alert_id }}'
               alert_code: '{{ event.purefa_alert.code }}'
               alert_runbooks: '{{ alert_runbooks }}'
-    - name: Alert closed - log
-      condition: event.purefa_alert.transition == "closed"
+              alert_runbooks_by_type: '{{ alert_runbooks_by_type | default({}) }}'
+              component_type: '{{ event.purefa_alert.component_type }}'
+              baseline_ntp_servers_csv: '{{ baseline_ntp_servers_csv | default('''') }}'
+    - name: Alert severity raised - route through the runbook map again
+      condition: event.purefa_alert.transition == "updated" and event.purefa_alert.severity_raised == true and event.purefa_alert.maintenance_active == false
+      action:
+        run_job_template:
+          name: FlashArray - alert runbook
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: '{{ event.purefa_alert.severity }}'
+              transition: updated
+              previous_severity: '{{ event.purefa_alert.previous_severity }}'
+              subject: '{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }}: {{ event.purefa_alert.summary }}'
+              component: '{{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}'
+              array_action: '{{ event.purefa_alert.action }}'
+              knowledge_base_url: '{{ event.purefa_alert.knowledge_base_url }}'
+              target_array: '{{ event.purefa_alert.array }}'
+              alert_id: '{{ event.purefa_alert.alert_id }}'
+              alert_code: '{{ event.purefa_alert.code }}'
+              alert_runbooks: '{{ alert_runbooks }}'
+              alert_runbooks_by_type: '{{ alert_runbooks_by_type | default({}) }}'
+              component_type: '{{ event.purefa_alert.component_type }}'
+              baseline_ntp_servers_csv: '{{ baseline_ntp_servers_csv | default('''') }}'
+    - name: Alert resolved - notify
+      condition: event.purefa_alert.transition == "closing"
       action:
         run_job_template:
           name: FlashArray - notify
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              severity: info
-              subject: '{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} closed: {{ event.purefa_alert.summary }}'
-              detail: alert {{ event.purefa_alert.alert_id }} is {{ event.purefa_alert.state }}
+              severity: '{{ event.purefa_alert.severity_down }}'
+              subject: '{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} resolved: {{ event.purefa_alert.summary }}'
+              detail: open for {{ event.purefa_alert.resolved_after_s }} s; {{ event.purefa_alert.action }}
               target_array: '{{ event.purefa_alert.array }}'
               alert_id: '{{ event.purefa_alert.alert_id }}'
               alert_code: '{{ event.purefa_alert.code }}'
+    - name: Alert closed - log
+      condition: event.purefa_alert.transition == "closed"
+      action:
+        debug:
+          msg: 'closed: {{ event.purefa_alert.array }} #{{ event.purefa_alert.alert_id }} code {{ event.purefa_alert.code }} (a resolved alert reads closed a day after closing; the resolved notice went out then)'

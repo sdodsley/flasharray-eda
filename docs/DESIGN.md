@@ -128,6 +128,13 @@ design intent.
   ticket plus per-code tasks under `playbooks/runbooks/<code>.yml`, carrying
   the array's own action text and knowledge base link; unknown codes take the
   default entry.
+  The lifecycle is read from the array: `closing` is the resolved signal
+  (a resolved alert sits in `closing` for a day before `closed`), and the
+  rulebook notifies once at one severity below the alert's with the time
+  it was open; an alert whose severity rises is routed again; a hardware
+  component that leaves the issue set clears the identify LED the loop
+  lit. The map falls through from code to component type to default, and
+  code 13 (NTP) reapplies the baseline servers through a per-code runbook.
 - Time-boxed remote assist (`purefa_ra`): design intent; `health.yml` logs
   remote-assist events.
 - Controller failover or port down: `health.yml` notifies. Host-side checks
@@ -173,9 +180,10 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   the link's source pod with quiesce and promote the target pod once the
   link reports the copy complete, so the link reverses and the target
   serves production; behind a second approval the same move runs the other
-  way. Hosts are moved outside the workflow. While the switchover runs both
-  pods carry an `eda/planned_work` tag the replication rulebook reads as
-  planned work and logs instead of paging, and the workflow holds an
+  way. Hosts are moved outside the workflow. Before it demotes, the
+  switchover tags the source pod `eda/planned_work`, which the plugin reads
+  as planned work on the link's events from both arrays and the replication
+  rulebook logs instead of paging, and the workflow holds an
   Alertmanager silence on the replica-link rules for both arrays, expired
   once the switchover's notify has gone out. A demotion leaves the pod's
   state from before it in a destroyed `<pod>.undo-demote.<n>` pod, and the
