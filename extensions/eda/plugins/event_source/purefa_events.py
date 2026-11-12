@@ -44,6 +44,10 @@ audit_lookback    seconds of audit history to replay at start-up (default 0)
 include_initial_alerts
                   emit alerts that are already open at start-up with
                   transition "initial" (default true)
+planned_work_max_age
+                  seconds an eda/planned_work tag on a pod counts as planned
+                  work on the replica-link events (default 3600); the tag
+                  read needs REST 2.39 or later, older arrays poll without it
 poll_error_escalate
                   consecutive failed polls of one signal on one array after
                   which purefa_poll_error carries escalate: true (default 10)
@@ -143,7 +147,8 @@ purefa_array_connection remote, status, type, replication_transport,
                         failed_paths[{local,remote,status}], throttle,
                         remote_version
 purefa_replica_link     local_pod, remote_pod, remote_array, status,
-                        direction, paused, lag_ms, lag_s, recovery_point,
+                        planned, planned_note (a fresh eda/planned_work tag on
+                        the local pod), direction, paused, lag_ms, lag_s, recovery_point,
                         recovery_point_age_s, rpo_seconds, rpo_breached,
                         rpo_breach_polls, paused_for_s
 purefa_stretched_pod    pod, members[{array,status,mediator_status,
@@ -248,6 +253,10 @@ options:
     description: Emit alerts already open at start-up with transition initial.
     type: bool
     default: true
+  planned_work_max_age:
+    description: Seconds an eda/planned_work tag on a pod counts as planned work on the replica-link events.
+    type: int
+    default: 3600
   poll_error_escalate:
     description: Consecutive failed polls of one signal on one array after which purefa_poll_error carries escalate true.
     type: int
@@ -329,6 +338,7 @@ EXAMPLES = r"""
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -470,6 +480,51 @@ def _poll_streak(state, signal, array, failed):
     streaks = state.setdefault("poll_errors", {}).setdefault(signal, {})
     streaks[array] = streaks.get(array, 0) + 1 if failed else 0
     return streaks[array]
+
+
+def _iso_ms(value):
+    """Milliseconds since the epoch for an ISO 8601 time, or None."""
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        parsed = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def _planned_work(c, arr, args, now, st):
+    """Pods whose eda/planned_work tag (an ISO time) is fresher than
+    planned_work_max_age, mapped to their eda/planned_work_note. A playbook
+    doing planned work on a pod (dr_switchover.yml) sets the tags first and
+    clears them afterwards, and the replica-link events of such a pod carry
+    planned: true so a rule can log what would otherwise page; the age limit
+    means a job that died cannot silence a link for good. A tag read that
+    fails leaves nothing planned and never fails the poll; it is said once
+    per array at warning (the SDK has the pod tag calls from REST 2.39, so an
+    older array would say it every poll), then at debug until a read works."""
+    max_age = float(args.get("planned_work_max_age", 3600) or 3600) * 1000
+    stamps, notes = {}, {}
+    try:
+        tags = _items(c.get_pods_tags(namespaces=["eda"]), "pods/tags")
+    except Exception as exc:  # noqa: BLE001 - a marker read must not fail the poll
+        say = logger.debug if st.get("pod_tags_warned") else logger.warning
+        say("purefa_events[replication]: %s pod tags unread: %s", arr.name, exc)
+        st["pod_tags_warned"] = True
+        return {}
+    st.pop("pod_tags_warned", None)
+    for tag in tags:
+        pod = _name(tag.get("resource"))
+        if tag.get("key") == "planned_work":
+            stamps[pod] = _iso_ms(tag.get("value"))
+        elif tag.get("key") == "planned_work_note":
+            notes[pod] = str(tag.get("value") or "")
+    return {
+        pod: notes.get(pod, "")
+        for pod, stamp in stamps.items()
+        if stamp is not None and 0 <= now - stamp <= max_age
+    }
 
 
 def _maintenance(arr, state, max_age=20.0):
@@ -1142,7 +1197,12 @@ def poll_replication(arr, state, args):
             }
         )
 
-    for link in _items(c.get_pod_replica_links(), "pod-replica-links"):
+    links = _items(c.get_pod_replica_links(), "pod-replica-links")
+    # the marker read comes after the mandatory calls and only where there is a
+    # link to mark, so a hung array fails fast once and an array without ActiveDR
+    # costs nothing extra
+    planned = _planned_work(c, arr, args, now, st) if links else {}
+    for link in links:
         rp = link.get("recovery_point")
         key = f"{_name(link.get('local_pod'))}->{_name(link.get('remote_pod'))}"
         breached = bool(rpo > 0 and (link.get("lag") or 0) > rpo * 1000)
@@ -1161,6 +1221,8 @@ def poll_replication(arr, state, args):
                     "remote_array": ",".join(
                         _name(r) for r in (link.get("remotes") or [])
                     ),
+                    "planned": _name(link.get("local_pod")) in planned,
+                    "planned_note": planned.get(_name(link.get("local_pod")), ""),
                     "status": link.get("status"),
                     "direction": link.get("direction"),
                     "paused": link.get("paused"),

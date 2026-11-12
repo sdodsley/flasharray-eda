@@ -49,6 +49,15 @@ unless stated.
   and `dr_demote.yml` therefore accept a pod only with a source count above
   zero and an inbound link. Demoting with quiesce discards the writes made
   while the pod was promoted; the source pod is never touched.
+- Pods take tags on Purity//FA 6.10.6 (REST 2.46): `GET /pods/tags` answered
+  on both lab arrays, and the SDK carries `put_pods_tags_batch` and
+  `delete_pods_tags` from REST 2.39 (an older array polls without the
+  marker); the planned-work marker the switchover sets
+  (`eda/planned_work`, an ISO time, beside `eda/planned_work_note`) lives
+  there, and the plugin reads the `eda` namespace once per replication
+  poll. During a planned switchover both arrays report the link
+  `quiescing` and then `quiesced` for about a minute, the state the
+  replication rulebook pages on when nothing marks the work as planned.
 - Demoting a pod leaves `<pod>.undo-demote.<n>` behind: a destroyed pod
   holding the pod's state from before the demotion, found with
   `GET /pods?names=<pod>.undo-demote.*&destroyed=true` (a pattern that

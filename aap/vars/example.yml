@@ -95,6 +95,12 @@ aap_job_extra_vars:
   alert_log: /tmp/flasharray-eda-alerts.log
   request_dir: /tmp/flasharray-eda-requests
   baseline_dir: /tmp/flasharray-eda-baseline
+# The Alertmanager the "FlashArray - Alertmanager silence" template talks to
+# (prometheus/alertmanager.example.yml), as the execution environment reaches
+# it. Empty makes the template a recorded no-op, so the DR workflows run the
+# same on a site without the Prometheus path.
+aap_alertmanager_url: ""
+
 # Default drills for "FlashArray - DR drill" (same shape as dr_drills in
 # vars/example.yml; a launch may override it).
 aap_dr_drills:

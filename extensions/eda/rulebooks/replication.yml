@@ -124,6 +124,20 @@
             target_array: "{{ event.purefa_array_connection.array }}"
             alert_log: "{{ alert_log }}"
 
+    # A planned switchover tags both pods eda/planned_work for as long as it
+    # runs (dr_switchover.yml), and the plugin stamps planned: true on the
+    # link's events while the tag is fresh; the link then reads quiescing,
+    # quiesced and paused on purpose, so those events are logged here and
+    # never reach the notify rules below (the first matching rule wins).
+    - name: Replica link changing during planned work - log only
+      condition: event.purefa_replica_link.planned == true
+      action:
+        debug:
+          msg: >-
+            planned work on {{ event.purefa_replica_link.array }}/{{ event.purefa_replica_link.local_pod }}
+            ({{ event.purefa_replica_link.planned_note }}): link {{ event.purefa_replica_link.status }}
+            paused={{ event.purefa_replica_link.paused }}, not paged
+
     - name: Replica link paused - notify
       condition: event.purefa_replica_link.paused == true
       throttle:

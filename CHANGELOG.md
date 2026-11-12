@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Planned work no longer pages: `dr_switchover.yml` tags both pods
+  `eda/planned_work` (an ISO time) for as long as it runs, the plugin
+  stamps `planned` on the replica-link events of a pod whose tag is
+  fresher than `planned_work_max_age` (default an hour), and the
+  replication rulebook logs those events instead of notifying; the
+  failover-and-failback workflow also silences the
+  `FlashArrayReplicaLink.*` rules for both arrays in Alertmanager around
+  each switchover through `playbooks/alertmanager_silence.yml` (the
+  "FlashArray - Alertmanager silence" template, `aap_alertmanager_url`; a
+  recorded no-op without one, and an Alertmanager that does not answer is
+  recorded rather than fatal). The ledger had the critical page a planned
+  switchover produced.
 - The loop watches itself: the plugin counts consecutive failed polls per
   array and signal and flags `escalate` on `purefa_poll_error` at its
   `poll_error_escalate` argument (default 10); the health rulebook pages at

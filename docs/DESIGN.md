@@ -173,7 +173,11 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   the link's source pod with quiesce and promote the target pod once the
   link reports the copy complete, so the link reverses and the target
   serves production; behind a second approval the same move runs the other
-  way. Hosts are moved outside the workflow. A demotion leaves the pod's
+  way. Hosts are moved outside the workflow. While the switchover runs both
+  pods carry an `eda/planned_work` tag the replication rulebook reads as
+  planned work and logs instead of paging, and the workflow holds an
+  Alertmanager silence on the replica-link rules for both arrays, expired
+  once the switchover's notify has gone out. A demotion leaves the pod's
   state from before it in a destroyed `<pod>.undo-demote.<n>` pod, and the
   module refuses to demote the pod again while one exists, so the switchover job
   eradicates that pod first when `eradicate_undo_demote` is true; the

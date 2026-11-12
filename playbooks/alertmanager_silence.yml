@@ -1,0 +1,140 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Planned work on the Prometheus path: create or expire an Alertmanager
+# silence for the FlashArray replica-link rules of the arrays named, so a
+# planned switchover does not page through Alertmanager while the link is
+# quiesced. Run by the "FlashArray - DR failover and failback" orchestrator
+# workflow around each switchover node (create before, expire after), or by
+# hand:
+#   ansible-playbook playbooks/alertmanager_silence.yml -e mode=create \
+#       -e alertmanager_url=http://alertmanager.example.com:9093 \
+#       -e 'silence_array_regex=array-a|array-b' -e alert_log=$PWD/alerts.log
+#   ansible-playbook playbooks/alertmanager_silence.yml -e mode=expire \
+#       -e alertmanager_url=... -e silence_id=<id> -e alert_log=...
+# alertmanager_url empty (the template default when no Alertmanager is
+# configured) makes both modes a recorded no-op, so the workflow runs the
+# same on a site without the Prometheus path. A silence lasts
+# silence_minutes (default 30) if nothing expires it, so a workflow that
+# dies between the two nodes cannot silence the rules for good. The record
+# and the job artifacts carry the silence id; the expire node reads it from
+# the create node's artifacts. The playbook sends no credentials: reach the
+# Alertmanager API over a network only the execution environment can, or
+# through a proxy that authenticates on the job's behalf
+# (prometheus/alertmanager.example.yml). An
+# Alertmanager that does not answer is recorded, not fatal: planned work
+# must not stall on its own silence.
+- name: Silence or unsilence the replica-link rules in Alertmanager
+  hosts: localhost
+  gather_facts: false
+  vars:
+    silence_alertname_regex: "FlashArrayReplicaLink.*"
+    silence_minutes: 30
+    silence_created_by: flasharray-eda
+  tasks:
+    - name: Refuse a mode or a regex that is not what the workflow sends
+      ansible.builtin.assert:
+        that:
+          - mode in ['create', 'expire']
+          - alertmanager_url | default('') | string is match('^(https?://[A-Za-z0-9][A-Za-z0-9._:/-]*)?$')
+          - >-
+            mode == 'expire' or
+            (silence_array_regex | default('') | string is match('^[A-Za-z0-9][A-Za-z0-9._-]*([|][A-Za-z0-9][A-Za-z0-9._-]*)*$'))
+          - silence_minutes | int > 0
+        fail_msg: >-
+          mode must be create or expire, alertmanager_url an http(s) URL or empty, silence_minutes positive, and a
+          create needs silence_array_regex: plain array names joined with |
+
+    - name: Note when no Alertmanager is configured
+      when: alertmanager_url | default('') | length == 0
+      ansible.builtin.debug:
+        msg: "no alertmanager_url configured: nothing to {{ mode }}"
+
+    - name: Create the silence
+      when: mode == 'create' and alertmanager_url | default('') | length > 0
+      ansible.builtin.uri:
+        url: "{{ alertmanager_url }}/api/v2/silences"
+        method: POST
+        body_format: json
+        body:
+          matchers:
+            - name: alertname
+              value: "{{ silence_alertname_regex }}"
+              isRegex: true
+              isEqual: true
+            - name: array_name
+              value: "{{ silence_array_regex }}"
+              isRegex: true
+              isEqual: true
+          startsAt: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+          # now() is local and naive, which is what timestamp() expects; now(utc=true) would shift it by the zone offset
+          endsAt: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime((now().timestamp() | int) + (silence_minutes | int) * 60, utc=true) }}"
+          createdBy: "{{ silence_created_by }}"
+          comment: "{{ silence_comment | default('planned work on the FlashArray replica link') }}"
+        status_code: [200]
+        timeout: 15
+      register: created
+      changed_when: created.status | default(0) == 200
+      failed_when: false
+
+    - name: Expire the silence
+      when: mode == 'expire' and alertmanager_url | default('') | length > 0 and silence_id | default('') | length > 0
+      ansible.builtin.uri:
+        url: "{{ alertmanager_url }}/api/v2/silence/{{ silence_id }}"
+        method: DELETE
+        status_code: [200, 404]
+        timeout: 15
+      register: expired
+      changed_when: expired.status | default(0) == 200
+      failed_when: false
+
+    - name: Note an expire with nothing to expire
+      when: mode == 'expire' and alertmanager_url | default('') | length > 0 and silence_id | default('') | length == 0
+      ansible.builtin.debug:
+        msg: "no silence_id to expire (the create node made no silence)"
+
+    - name: Settle the outcome
+      ansible.builtin.set_fact:
+        silence_outcome:
+          mode: "{{ mode }}"
+          silence_id: "{{ created.json.silenceID | default(silence_id | default('')) }}"
+          alertmanager: "{{ alertmanager_url | default('') }}"
+          arrays: "{{ silence_array_regex | default('') }}"
+          minutes: "{{ silence_minutes | int }}"
+          changed: "{{ (created.changed | default(false)) or (expired.changed | default(false)) }}"
+          error: >-
+            {{ '' if (created is skipped or created.status | default(0) == 200) and (expired is skipped or expired.status | default(0) in [200, 404])
+               else ('alertmanager ' ~ (created.msg | default(expired.msg | default('did not answer'))) | truncate(160)) }}
+
+    - name: Record the silence
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'alertmanager_silence', 'severity': 'info',
+              'array': silence_outcome.arrays, 'mode': silence_outcome.mode, 'silence_id': silence_outcome.silence_id,
+              'alertmanager': silence_outcome.alertmanager, 'minutes': silence_outcome.minutes,
+              'comment': silence_comment | default(''), 'changed': silence_outcome.changed | bool,
+              'error': silence_outcome.error} | to_json }}
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          alertmanager silence {{ silence_outcome.mode }}: id {{ silence_outcome.silence_id | default('-', true) }}
+          for arrays {{ silence_outcome.arrays }} on {{ silence_outcome.alertmanager | default('(none configured)', true) }}
+          {{ '(changed)' if silence_outcome.changed | bool else '(unchanged)' }}
+          {{ silence_outcome.error }}
+
+    # Job artifacts for the node that expires the silence.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'silence_id': silence_outcome.silence_id, 'mode': silence_outcome.mode,
+              'alertmanager': silence_outcome.alertmanager, 'changed': silence_outcome.changed | bool,
+              'error': silence_outcome.error} }}
+      run_once: true
+      delegate_to: localhost

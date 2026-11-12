@@ -93,6 +93,11 @@
               subject: '{{ event.purefa_array_connection.array }} has failed replication paths to {{ event.purefa_array_connection.remote }}'
               detail: '{{ event.purefa_array_connection.paths_connected }} of {{ event.purefa_array_connection.paths_total }} paths connected; failed: {{ event.purefa_array_connection.failed_paths }}'
               target_array: '{{ event.purefa_array_connection.array }}'
+    - name: Replica link changing during planned work - log only
+      condition: event.purefa_replica_link.planned == true
+      action:
+        debug:
+          msg: 'planned work on {{ event.purefa_replica_link.array }}/{{ event.purefa_replica_link.local_pod }} ({{ event.purefa_replica_link.planned_note }}): link {{ event.purefa_replica_link.status }} paused={{ event.purefa_replica_link.paused }}, not paged'
     - name: Replica link paused - notify
       condition: event.purefa_replica_link.paused == true
       throttle:

@@ -387,6 +387,14 @@ def test_switchover_demotes_with_quiesce_then_promotes_after_the_copy_is_complet
     for play in (source, target):
         for task in _tasks_with(play["tasks"], "ansible.builtin.command"):
             assert task.get("no_log") is True, task["name"]
+            if task["name"].startswith(("Mark ", "Clear ")):
+                # the planned-work tags: one task per pod, each with its array's token
+                assert task["environment"]["FA_TOKEN"] in (
+                    "{{ api_token }}",
+                    "{{ peer_api_token }}",
+                )
+                assert task.get("changed_when") is True
+                continue
             assert task["environment"]["FA_TOKEN"] == "{{ api_token }}"
             assert task.get("changed_when") is False
 
@@ -404,6 +412,47 @@ def test_switchover_records_and_publishes_the_outcome(repo_root):
     assert stats[SET_STATS].get("aggregate") is False
     assert stats.get("run_once") is True and stats.get("delegate_to") == "localhost"
     assert SWITCHOVER_KEYS <= _artifact_keys(target["tasks"])
+
+
+def test_switchover_marks_both_pods_as_planned_work_and_clears_them(repo_root):
+    source, target = _plays(repo_root, SWITCHOVER)
+    names = [t["name"] for t in source["tasks"]]
+    mark_source = names.index("Mark the source pod as planned work")
+    mark_target = names.index("Mark the target pod as planned work")
+    demote = next(
+        i
+        for i, t in enumerate(source["tasks"])
+        if POD_MODULE in t and t[POD_MODULE].get("promote") is False
+    )
+    asserts = _tasks_with(source["tasks"], "ansible.builtin.assert")
+    # after every guard, before anything changes
+    assert max(source["tasks"].index(a) for a in asserts) < mark_source
+    assert mark_source < mark_target < demote
+    script = next(
+        t["ansible.builtin.set_fact"]["planned_work_script"]
+        for t in source["tasks"]
+        if "planned_work_script" in t.get("ansible.builtin.set_fact", {})
+    )
+    assert 'key="planned_work"' in script
+    assert "put_pods_tags_batch" in script and "delete_pods_tags" in script
+    target_mark = source["tasks"][mark_target]
+    assert target_mark["environment"]["FA_TOKEN"] == "{{ peer_api_token }}"
+    assert "peer_fa_url | length > 0" in target_mark["when"]
+    assert source["tasks"][mark_source]["environment"]["MODE"] == "set"
+    # the target play clears both tags last, before the artifacts, never failing on it
+    tnames = [t["name"] for t in target["tasks"]]
+    clear_t = tnames.index("Clear the planned-work tags on the target pod")
+    clear_s = tnames.index("Clear the planned-work tags on the source pod")
+    assert clear_t < clear_s < len(target["tasks"]) - 1
+    assert SET_STATS in target["tasks"][-1]
+    for i in (clear_t, clear_s):
+        assert target["tasks"][i].get("failed_when") is False
+        assert target["tasks"][i]["environment"]["MODE"] == "clear"
+    # each play still resolves only its own array; the peer's credentials come
+    # from the inventory or the fleet credential without a second include
+    for play in (source, target):
+        includes = _tasks_with(play["tasks"], "ansible.builtin.include_tasks")
+        assert len(includes) == 1
 
 
 def test_switchover_definition_matches_the_playbook(repo_root):
@@ -439,8 +488,30 @@ def test_switchover_definition_matches_the_playbook(repo_root):
         for job, key in SWITCHOVER_REF.findall(json.dumps(node)):
             assert key in published, f"{node_id} reads {job}.artifacts.{key}"
     edges = {(e["from"], e.get("from_port")): e["to"] for e in doc["edges"]}
-    assert edges[("approve_failover", "approved")] == "dr_failover"
-    assert edges[("approve_failback", "approved")] == "dr_failback"
+    # each switchover sits between an Alertmanager silence and its expiry
+    assert edges[("approve_failover", "approved")] == "silence_failover"
+    assert edges[("silence_failover", None)] == "dr_failover"
+    assert edges[("notify_failed_over", None)] == "unsilence_failover"
+    assert edges[("unsilence_failover", None)] == "approve_failback"
+    assert edges[("approve_failback", "approved")] == "silence_failback"
+    assert edges[("silence_failback", None)] == "dr_failback"
+    assert edges[("notify_failed_back", None)] == "unsilence_failback"
+    for node_id in ("silence_failover", "silence_failback"):
+        params = nodes[node_id]["parameters"]
+        assert params["job_template_name"] == "FlashArray - Alertmanager silence"
+        assert params["extra_vars"]["mode"] == "create"
+        assert (
+            params["extra_vars"]["silence_array_regex"]
+            == "${trigger.source_array}|${trigger.target_array}"
+        )
+    for node_id, maker in (
+        ("unsilence_failover", "silence_failover"),
+        ("unsilence_failback", "silence_failback"),
+    ):
+        assert nodes[node_id]["parameters"]["extra_vars"] == {
+            "mode": "expire",
+            "silence_id": "${" + maker + ".artifacts.silence_id}",
+        }
     rejected = nodes[edges[("approve_failback", "rejected")]]
     assert rejected["parameters"]["extra_vars"]["severity"] == "critical"
 

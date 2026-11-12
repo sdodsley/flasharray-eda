@@ -40,6 +40,7 @@ ARTIFACT_KEYS = {
     "reconcile.yml": {"ntp_changed", "dns_changed"},
     "apply_baseline.yml": {"ntp_changed", "dns_changed", "git_head"},
     "notify.yml": {"record_kind"},
+    "alertmanager_silence.yml": {"silence_id", "mode"},
     "expand_volume.yml": {"volume", "old_size", "new_size"},
     "replicate_now.yml": {"pgroup", "reason", "snapshot_suffix", "changed"},
     "dr_switchover.yml": {
@@ -89,6 +90,7 @@ JOB_TEMPLATE_NAMES = {
     "FlashArray - DR promote",
     "FlashArray - DR demote",
     "FlashArray - DR switchover",
+    "FlashArray - Alertmanager silence",
 }
 
 RESOLVE_ARRAY = "{{ playbook_dir }}/tasks/resolve_array.yml"

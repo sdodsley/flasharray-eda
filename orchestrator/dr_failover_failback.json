@@ -150,6 +150,64 @@
       }
     },
     {
+      "id": "silence_failover",
+      "type": "aap_job_template",
+      "name": "Silence the replica-link rules in Alertmanager for the failover",
+      "parameters": {
+        "job_template_name": "FlashArray - Alertmanager silence",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "mode": "create",
+          "silence_array_regex": "${trigger.source_array}|${trigger.target_array}",
+          "silence_comment": "planned switchover of ${trigger.source_pod} on ${trigger.source_array} to ${trigger.target_pod} on ${trigger.target_array} (flasharray-eda)"
+        }
+      }
+    },
+    {
+      "id": "unsilence_failover",
+      "type": "aap_job_template",
+      "name": "Expire the failover silence",
+      "parameters": {
+        "job_template_name": "FlashArray - Alertmanager silence",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "mode": "expire",
+          "silence_id": "${silence_failover.artifacts.silence_id}"
+        }
+      }
+    },
+    {
+      "id": "silence_failback",
+      "type": "aap_job_template",
+      "name": "Silence the replica-link rules in Alertmanager for the failback",
+      "parameters": {
+        "job_template_name": "FlashArray - Alertmanager silence",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "mode": "create",
+          "silence_array_regex": "${trigger.source_array}|${trigger.target_array}",
+          "silence_comment": "planned failback of ${trigger.target_pod} on ${trigger.target_array} to ${trigger.source_pod} on ${trigger.source_array} (flasharray-eda)"
+        }
+      }
+    },
+    {
+      "id": "unsilence_failback",
+      "type": "aap_job_template",
+      "name": "Expire the failback silence",
+      "parameters": {
+        "job_template_name": "FlashArray - Alertmanager silence",
+        "organization_name": "FlashArray",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "mode": "expire",
+          "silence_id": "${silence_failback.artifacts.silence_id}"
+        }
+      }
+    },
+    {
       "id": "notify_failover_rejected",
       "type": "aap_job_template",
       "name": "Notify: failover rejected",
@@ -185,12 +243,16 @@
   "edges": [
     {"from": "switchover_request", "to": "notify_requested"},
     {"from": "notify_requested", "to": "approve_failover"},
-    {"from": "approve_failover", "to": "dr_failover", "from_port": "approved"},
+    {"from": "approve_failover", "to": "silence_failover", "from_port": "approved"},
+    {"from": "silence_failover", "to": "dr_failover"},
     {"from": "approve_failover", "to": "notify_failover_rejected", "from_port": "rejected"},
     {"from": "dr_failover", "to": "notify_failed_over"},
-    {"from": "notify_failed_over", "to": "approve_failback"},
-    {"from": "approve_failback", "to": "dr_failback", "from_port": "approved"},
+    {"from": "notify_failed_over", "to": "unsilence_failover"},
+    {"from": "unsilence_failover", "to": "approve_failback"},
+    {"from": "approve_failback", "to": "silence_failback", "from_port": "approved"},
+    {"from": "silence_failback", "to": "dr_failback"},
     {"from": "approve_failback", "to": "notify_failback_rejected", "from_port": "rejected"},
-    {"from": "dr_failback", "to": "notify_failed_back"}
+    {"from": "dr_failback", "to": "notify_failed_back"},
+    {"from": "notify_failed_back", "to": "unsilence_failback"}
   ]
 }

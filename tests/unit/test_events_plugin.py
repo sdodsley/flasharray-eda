@@ -49,6 +49,7 @@ class FakeClient:
         transfers=None,
         volumes_perf=None,
         tags=None,
+        pod_tags=None,
     ):
         self.alerts = alerts or []
         self.audits = audits or []
@@ -56,6 +57,7 @@ class FakeClient:
         self.transfers = transfers or []  # in the array's default (name) order
         self.volumes_perf = volumes_perf or []
         self.tags = tags or []  # (volume, key, value)
+        self.pod_tags = pod_tags or []  # (pod, key, value)
         self.calls = []
 
     # --- alerts / audits -------------------------------------------------
@@ -88,6 +90,14 @@ class FakeClient:
 
     def get_pods(self, **kw):
         return FakeResponse([])
+
+    def get_pods_tags(self, **kw):
+        return FakeResponse(
+            [
+                {"resource": {"name": p}, "namespace": "eda", "key": k, "value": v}
+                for p, k, v in self.pod_tags
+            ]
+        )
 
     def get_protection_groups(self, **kw):
         return FakeResponse(self.pgroups)
@@ -820,6 +830,64 @@ def test_signal_loop_counts_a_streak_and_escalates_at_the_threshold(events):
         (1, False),
     ]
     assert any("purefa_alert" in e for e in got)
+
+
+def test_replica_link_events_carry_planned_work_from_fresh_pod_tags(events):
+    import datetime
+
+    now = events._now_ms()
+    fresh = datetime.datetime.fromtimestamp(
+        now / 1000 - 120, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    client = FakeClient(
+        pod_tags=[
+            ("p1", "planned_work", fresh),
+            ("p1", "planned_work_note", "switchover a -> b"),
+            ("p2", "planned_work", "2026-01-01T00:00:00Z"),  # older than the max age
+            ("p3", "planned_work", "whenever"),  # not a time
+        ]
+    )
+
+    def link(name):
+        return {
+            "local_pod": {"name": name},
+            "remote_pod": {"name": "r"},
+            "remotes": [{"name": "array-b"}],
+            "status": "quiesced",
+            "direction": "outbound",
+            "paused": False,
+            "lag": 0,
+            "recovery_point": now,
+        }
+
+    client.get_pod_replica_links = lambda **kw: FakeResponse(
+        [link("p1"), link("p2"), link("p3")]
+    )
+    out = events.poll_replication(FakeArray(client), {}, {})
+    links = {
+        e["purefa_replica_link"]["local_pod"]: e["purefa_replica_link"]
+        for e in out
+        if "purefa_replica_link" in e
+    }
+    assert links["p1"]["planned"] is True
+    assert links["p1"]["planned_note"] == "switchover a -> b"
+    assert links["p2"]["planned"] is False
+    assert links["p3"]["planned"] is False
+    # a tag read that fails leaves nothing planned and the poll still runs
+    client.get_pods_tags = lambda **kw: FakeError("no tags for you")
+    state = {}
+    out = events.poll_replication(FakeArray(client), state, {})
+    flags = [
+        e["purefa_replica_link"]["planned"] for e in out if "purefa_replica_link" in e
+    ]
+    assert flags == [False, False, False]
+    assert state["replication"]["array-a"]["pod_tags_warned"] is True
+    # an array with no replica link never pays for the tag read
+    quiet = FakeClient(pod_tags=[("p1", "planned_work", fresh)])
+    calls = []
+    quiet.get_pods_tags = lambda **kw: calls.append(kw) or FakeResponse([])
+    events.poll_replication(FakeArray(quiet), {}, {})
+    assert calls == []
 
 
 def test_normal_polls_count_from_the_cap(events):

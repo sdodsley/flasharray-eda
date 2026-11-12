@@ -27,6 +27,14 @@
 # inside that delay runs into: with eradicate_undo_demote=true (the
 # orchestrator workflow sets it) the play on the source eradicates those
 # pods before the demotion, without it the play refuses and names them.
+# While it runs, both pods carry the tags eda/planned_work (an ISO time) and
+# eda/planned_work_note, which the plugin reads as planned work on the
+# replica-link events so the replication rulebook logs the link's quiescing
+# and quiesced states instead of paging; the plugin ignores a tag older
+# than its planned_work_max_age (default an hour), so a job that dies
+# between setting and clearing them cannot silence a link for good. The
+# orchestrator workflow adds an Alertmanager silence for the Prometheus
+# path around this template (playbooks/alertmanager_silence.yml).
 # This is the planned path; an unplanned failover, with the source array
 # unreachable, is dr_promote.yml on the target alone. The source pod's
 # volumes are read-only from the demotion
@@ -151,6 +159,96 @@
           from an earlier demotion, and a pod cannot be demoted again while its undo-demote pod exists; run with
           eradicate_undo_demote=true to have the pod(s) eradicated first (they hold the pod's state from before that
           demotion), or eradicate them by hand
+
+    # Planned work: both pods are tagged before anything changes (see the
+    # header). The target pod is tagged from this play because the demotion
+    # changes what the target sees before its own play starts; when neither
+    # the inventory nor the fleet credential has the target's credentials the
+    # target pod goes untagged rather than the switchover stopping over a marker.
+    - name: Find the target array in the fleet credential, if there is one
+      ansible.builtin.set_fact:
+        peer_entry: >-
+          {{ ((purefa_fleet_json | default([])) if ((purefa_fleet_json | default([])) is not string) else (purefa_fleet_json | from_json))
+             | selectattr('name', 'defined') | selectattr('name', 'equalto', target_array) | list | first | default({}) }}
+      no_log: true
+
+    - name: Take the target array's credentials from the inventory or the fleet credential
+      ansible.builtin.set_fact:
+        peer_fa_url: >-
+          {{ (hostvars[target_array].fa_url | default(peer_entry.fa_url | default(''), true))
+             if target_array in hostvars else (peer_entry.fa_url | default('')) }}
+        peer_api_token: >-
+          {{ (hostvars[target_array].api_token | default(peer_entry.api_token | default(''), true))
+             if target_array in hostvars else (peer_entry.api_token | default('')) }}
+        planned_work_stamp: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+        planned_work_note: "switchover {{ source_array }}/{{ source_pod }} -> {{ target_array }}/{{ target_pod }}"
+      no_log: true
+
+    - name: Keep the planned-work tag script in one place
+      ansible.builtin.set_fact:
+        planned_work_script: |
+          import os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          pod, mode = os.environ["POD"], os.environ["MODE"]
+          if mode == "set":
+              tags = [flasharray.Tag(namespace="eda", key="planned_work", value=os.environ["STAMP"]),
+                      flasharray.Tag(namespace="eda", key="planned_work_note", value=os.environ["NOTE"])]
+              r = c.put_pods_tags_batch(resource_names=[pod], tag=tags)
+          else:
+              r = c.delete_pods_tags(resource_names=[pod], namespaces=["eda"], keys=["planned_work", "planned_work_note"])
+          if r.status_code != 200:
+              msg = r.errors[0].message if getattr(r, "errors", None) else "HTTP %s" % r.status_code
+              if mode == "clear" and "not" in msg.lower():
+                  print("clear", pod, "nothing to clear:", msg)
+              else:
+                  raise SystemExit("%s %s: %s" % (mode, pod, msg))
+          else:
+              print(mode, pod)
+
+    - name: Mark the source pod as planned work
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ planned_work_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ source_pod }}"
+        MODE: set
+        STAMP: "{{ planned_work_stamp }}"
+        NOTE: "{{ planned_work_note }}"
+      register: marked_source
+      changed_when: true
+      failed_when: false
+      no_log: true
+    - name: Stop when the planned-work tag on the source pod could not be set
+      when: marked_source.rc | default(0) != 0
+      ansible.builtin.fail:
+        msg: "{{ marked_source.stderr_lines | default([]) | last | default('the tag script failed') }}"
+
+
+    - name: Mark the target pod as planned work
+      when: peer_fa_url | length > 0 and peer_api_token | length > 0
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ planned_work_script }}"
+      environment:
+        FA_HOST: "{{ peer_fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ peer_api_token }}"
+        POD: "{{ target_pod }}"
+        MODE: set
+        STAMP: "{{ planned_work_stamp }}"
+        NOTE: "{{ planned_work_note }}"
+      register: marked_target
+      changed_when: true
+      failed_when: false
+      no_log: true
+    - name: Stop when the planned-work tag on the target pod could not be set
+      when: marked_target.rc | default(0) != 0
+      ansible.builtin.fail:
+        msg: "{{ marked_target.stderr_lines | default([]) | last | default('the tag script failed') }}"
+
 
     - name: Eradicate the undo-demote pods the earlier demotion left
       everpure.flasharray.purefa_pod:
@@ -317,6 +415,48 @@
         | list | length > 0
       when: target_before.promotion_status != 'promoted'
 
+    # Planned work: the source pod's tags are cleared from this play once the
+    # promotion is done, so its credentials are looked up here the same way.
+    - name: Find the source array in the fleet credential, if there is one
+      ansible.builtin.set_fact:
+        peer_entry: >-
+          {{ ((purefa_fleet_json | default([])) if ((purefa_fleet_json | default([])) is not string) else (purefa_fleet_json | from_json))
+             | selectattr('name', 'defined') | selectattr('name', 'equalto', source_array) | list | first | default({}) }}
+      no_log: true
+
+    - name: Take the source array's credentials from the inventory or the fleet credential
+      ansible.builtin.set_fact:
+        peer_fa_url: >-
+          {{ (hostvars[source_array].fa_url | default(peer_entry.fa_url | default(''), true))
+             if source_array in hostvars else (peer_entry.fa_url | default('')) }}
+        peer_api_token: >-
+          {{ (hostvars[source_array].api_token | default(peer_entry.api_token | default(''), true))
+             if source_array in hostvars else (peer_entry.api_token | default('')) }}
+      no_log: true
+
+    - name: Keep the planned-work tag script in one place
+      ansible.builtin.set_fact:
+        planned_work_script: |
+          import os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          pod, mode = os.environ["POD"], os.environ["MODE"]
+          if mode == "set":
+              tags = [flasharray.Tag(namespace="eda", key="planned_work", value=os.environ["STAMP"]),
+                      flasharray.Tag(namespace="eda", key="planned_work_note", value=os.environ["NOTE"])]
+              r = c.put_pods_tags_batch(resource_names=[pod], tag=tags)
+          else:
+              r = c.delete_pods_tags(resource_names=[pod], namespaces=["eda"], keys=["planned_work", "planned_work_note"])
+          if r.status_code != 200:
+              msg = r.errors[0].message if getattr(r, "errors", None) else "HTTP %s" % r.status_code
+              if mode == "clear" and "not" in msg.lower():
+                  print("clear", pod, "nothing to clear:", msg)
+              else:
+                  raise SystemExit("%s %s: %s" % (mode, pod, msg))
+          else:
+              print(mode, pod)
+
     - name: Promote the target pod
       everpure.flasharray.purefa_pod:
         fa_url: "{{ fa_url }}"
@@ -386,6 +526,51 @@
           link from {{ target_pod }} now {{ link_after.direction | default('?') }} {{ link_after.status | default('?') }}
           {{ '(changed)' if ((source_state.undo_eradicated.changed | default(false)) or (source_state.demoted.changed | default(false))
                              or (promoted.changed | default(false))) else '(unchanged)' }}
+
+    # The switchover is done: clear the planned-work tags, never failing the
+    # job over it (the plugin stops honouring a tag after an hour anyway).
+    - name: Clear the planned-work tags on the target pod
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ planned_work_script }}"
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        POD: "{{ target_pod }}"
+        MODE: clear
+      register: cleared_target
+      changed_when: true
+      failed_when: false
+      no_log: true
+    - name: Say so when the tags on the target pod were not cleared
+      when: cleared_target.rc | default(0) != 0
+      ansible.builtin.debug:
+        msg: >-
+          planned-work tags on {{ target_pod }} not cleared ({{ cleared_target.stderr_lines | default([]) | last | default('') }});
+          the plugin stops honouring them after planned_work_max_age
+
+
+    - name: Clear the planned-work tags on the source pod
+      when: peer_fa_url | length > 0 and peer_api_token | length > 0
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: "{{ planned_work_script }}"
+      environment:
+        FA_HOST: "{{ peer_fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ peer_api_token }}"
+        POD: "{{ source_pod }}"
+        MODE: clear
+      register: cleared_source
+      changed_when: true
+      failed_when: false
+      no_log: true
+    - name: Say so when the tags on the source pod were not cleared
+      when: cleared_source.rc | default(0) != 0
+      ansible.builtin.debug:
+        msg: >-
+          planned-work tags on {{ source_pod }} not cleared ({{ cleared_source.stderr_lines | default([]) | last | default('') }});
+          the plugin stops honouring them after planned_work_max_age
+
 
     # Job artifacts for a workflow or orchestrator node that follows this one.
     - name: Publish the outcome as job artifacts
