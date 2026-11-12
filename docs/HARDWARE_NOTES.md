@@ -258,8 +258,20 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
   while after the id has left the activations list: a create with the
   same name inside that window answers 400 "activation with this name
   already exists". A tool that deletes and recreates waits out the name,
-  not just the id. The activations list also answers an occasional 500
-  while activations are restarting; retry it like a 502.
+  not just the id, and looks the name up after every failed create: while
+  activations restart the gateway also answers an occasional 5xx to a
+  create the controller has in fact carried out, so the retry's "already
+  exists" can be the activation it just made under a new id (seen live
+  2026-11-12), not the window. The controller hands extra_var back
+  re-serialised with sorted keys and without the credential-injected
+  vars, so compare parsed vars, never the text. A delete can lose its
+  answer the same way, and its retry is refused with 404 or 409; judge a
+  delete by the id leaving the list. The activations list answers the
+  same occasional 5xx then; retry it like a 502. An activation created
+  while several others are still starting can fail its readiness check
+  ("Activation is unresponsive. Readiness check for ansible-rulebook
+  timed out") a few times before it runs; the on-failure restart policy
+  carries it (the syslog activation took five instances once).
 - A decision environment created through the API defaults to the pull
   policy `always`; an activation on a locally loaded image then fails to
   start with "x509: certificate is valid for <platform host>, not

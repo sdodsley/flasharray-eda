@@ -34,7 +34,9 @@
   streak escalates, instead of a debug line nobody reads.
   `tools/activation_audit.py` compares every FlashArray activation's extra
   vars with what the seed would render, flags example placeholders and
-  disabled activations, and with `--recreate` recreates the drifted ones;
+  disabled activations, and with `--recreate` recreates the drifted ones,
+  keeping a create the gateway answered with an error but the controller
+  carried out;
   the seed refuses to
   render extra vars that would post the orchestrator handoff to the example
   URL. Found live: the capacity activation had carried

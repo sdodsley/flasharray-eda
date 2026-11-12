@@ -31,9 +31,11 @@ library plus PyYAML.
 """
 
 import argparse
+import http.client
 import json
 import os
 import pathlib
+import re
 import ssl
 import sys
 import time
@@ -58,6 +60,9 @@ PLACEHOLDER_MARKS = (
 ENV_TOKEN = "AAP_TOKEN"
 TIMEOUT_SECONDS = 60
 DELETE_WAIT_SECONDS = 120
+NAME_WAIT_SECONDS = 300
+NAME_TAKEN = "activation with this name already exists"
+BODY_UNREADABLE = "(body unreadable)"
 
 
 class AuditError(Exception):
@@ -176,15 +181,27 @@ class Client:
                     request, context=self.context, timeout=TIMEOUT_SECONDS
                 ) as response:
                     raw = response.read()
-                    return response.status, (json.loads(raw) if raw else None)
+                    status = response.status
             except urllib.error.HTTPError as exc:
                 if exc.code in (500, 502, 503, 504) and attempt + 1 < retries:
                     time.sleep(3)
                     continue
-                detail = exc.read()[:300].decode(errors="replace")
+                try:
+                    detail = exc.read()[:300].decode(errors="replace")
+                except (OSError, http.client.HTTPException):
+                    detail = BODY_UNREADABLE
                 raise AuditError(f"{method} {path}: HTTP {exc.code} {detail}") from None
-            except (urllib.error.URLError, OSError) as exc:
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 raise AuditError(f"{method} {path}: {exc}") from None
+            if not raw:
+                return status, None
+            try:
+                return status, json.loads(raw)
+            except ValueError:
+                raise AuditError(
+                    f"{method} {path}: HTTP {status} with a body that is not JSON: "
+                    f"{raw[:100]!r}"
+                ) from None
         raise AuditError(f"{method} {path}: gave up after {retries} attempts")
 
     def list_all(self, path):
@@ -250,32 +267,107 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
     say(f"deleting {name} (id {old_id}); its Rule Audit rows stay under that id")
     client.request("POST", f"/api/eda/v1/activations/{old_id}/disable/", {})
     time.sleep(5)
-    client.request("DELETE", f"/api/eda/v1/activations/{old_id}/")
+    delete_note = ""
+    try:
+        client.request("DELETE", f"/api/eda/v1/activations/{old_id}/")
+    except AuditError as exc:
+        # a delete the gateway answered with a 5xx may have been carried out, and
+        # its retry is then refused (404, or 409 while deleting): the list decides
+        delete_note = f" (the delete was answered {str(exc)[-100:]})"
+        say(f"the delete of {name} was answered {str(exc)[-100:]}; watching the list")
     deadline = time.monotonic() + DELETE_WAIT_SECONDS
+    list_error = None
     while time.monotonic() < deadline:
         time.sleep(5)
-        listed = client.list_all("/api/eda/v1/activations/?page_size=200")
+        try:
+            listed = client.list_all("/api/eda/v1/activations/?page_size=200")
+        except AuditError as exc:
+            list_error = exc
+            say(f"could not read the activations list ({exc}); trying again")
+            continue
+        list_error = None
         if not any(a.get("id") == old_id for a in listed):
             break
     else:
+        if list_error is not None:
+            raise AuditError(
+                f"{name}: the activations list could not be read for "
+                f"{DELETE_WAIT_SECONDS} s after the delete ({list_error})"
+                f"{delete_note}; check whether id {old_id} is gone, then run "
+                "aap/seed.yml to create it again"
+            )
         raise AuditError(
-            f"{name}: id {old_id} still listed {DELETE_WAIT_SECONDS} s after the delete; not recreating"
+            f"{name}: id {old_id} still listed {DELETE_WAIT_SECONDS} s after the delete{delete_note}; not recreating"
         )
-    created = None
-    for attempt in range(12):
+    expected = yaml.safe_load(extra_var_text) or {}
+    status = created = None
+    last_error = ""
+    deadline = time.monotonic() + NAME_WAIT_SECONDS
+    while True:
         try:
             status, created = client.request("POST", "/api/eda/v1/activations/", body)
-            break
+            if isinstance(created, dict) and created.get("id") is not None:
+                break
+            last_error = f"POST answered {status} with no activation in the body"
+            created = None
         except AuditError as exc:
-            # the controller keeps the name for a while after the delete
-            if "already exists" in str(exc) and attempt + 1 < 12:
-                say(f"the controller still holds the name {name}; waiting")
-                time.sleep(5)
-                continue
+            last_error = str(exc)
+        # The create did not come back whole. Either the controller still holds
+        # the name after the delete, or it carried the create out and the
+        # gateway lost the answer (a 5xx, a timeout, an empty body, then
+        # "already exists" on the retry): look the name up before deciding.
+        found = None
+        try:
+            same_name = [
+                a
+                for a in client.list_all("/api/eda/v1/activations/?page_size=200")
+                if a.get("name") == name and a.get("id") != old_id
+            ]
+            if same_name:
+                status, found = client.request(
+                    "GET", f"/api/eda/v1/activations/{same_name[0]['id']}/"
+                )
+        except AuditError as exc:
+            say(
+                f"could not look {name} up after the failed create ({exc}); trying again"
+            )
+        if isinstance(found, dict) and found.get("id") is not None:
+            if has_drift(found, expected):
+                raise AuditError(
+                    f"{name}: deleted (was id {old_id}) and an activation of that "
+                    f"name appeared as id {found['id']} with other extra vars; "
+                    "not touching it"
+                )
+            say(
+                f"the create of {name} had gone through as id {found['id']} "
+                "although the gateway answered an error; keeping it"
+            )
+            created = found
+            break
+        name_held = NAME_TAKEN in last_error
+        refused = (
+            re.match(r"POST \S+: HTTP 4\d\d ", last_error)
+            and not name_held
+            and BODY_UNREADABLE not in last_error
+        )
+        if refused:
+            # the controller refused the body; no amount of waiting changes that
             raise AuditError(
-                f"{name}: deleted (was id {old_id}) but the create failed: {exc}; "
+                f"{name}: deleted (was id {old_id}) and the controller refused the "
+                f"create: {last_error}; fix the cause, then run aap/seed.yml to "
+                "create it again"
+            )
+        if time.monotonic() >= deadline:
+            raise AuditError(
+                f"{name}: deleted (was id {old_id}) but no create went through in "
+                f"{NAME_WAIT_SECONDS} s (last answer: {last_error}); "
                 "run aap/seed.yml to create it again"
-            ) from None
+            )
+        if name_held:
+            say(f"the controller still holds the name {name}; waiting")
+        else:
+            say(f"the create of {name} failed ({last_error[-100:]}); trying again")
+        time.sleep(5)
     if not isinstance(created, dict) or "id" not in created:
         raise AuditError(
             f"{name}: deleted (was id {old_id}) but the create answered {status} "
@@ -287,7 +379,13 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
     state = created.get("status")
     while time.monotonic() < deadline:
         time.sleep(10)
-        status, current = client.request("GET", f"/api/eda/v1/activations/{new_id}/")
+        try:
+            status, current = client.request(
+                "GET", f"/api/eda/v1/activations/{new_id}/"
+            )
+        except AuditError as exc:
+            say(f"could not read {name} (id {new_id}) ({exc}); still waiting")
+            continue
         state = current.get("status") if isinstance(current, dict) else state
         if state == "running":
             break
@@ -378,6 +476,11 @@ def main(argv=None):
             status, detail = client.request(
                 "GET", f"/api/eda/v1/activations/{summary['id']}/"
             )
+            if not isinstance(detail, dict):
+                raise AuditError(
+                    f"GET /api/eda/v1/activations/{summary['id']}/: "
+                    "the answer is not an object"
+                )
             attached = orchestrator_attached(detail)
             expected = expected_extra_vars(example, site, args.organization, attached)
             problems = audit_activation(detail, expected, args.allow)

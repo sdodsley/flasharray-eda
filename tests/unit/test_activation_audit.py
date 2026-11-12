@@ -125,6 +125,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_empty(self, code):
+        self.send_response(code)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _send_truncated(self, code, head=b'{"id": 10'):
+        # the connection drops after a few body bytes
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "500")
+        self.end_headers()
+        self.wfile.write(head)
+        self.close_connection = True
+
+    def _send_raw(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _body(self):
         length = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(length) or b"{}") if length else {}
@@ -135,6 +156,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer tok":
             return self._send(401, {"detail": "no"})
         if self.path.startswith("/api/eda/v1/activations/?"):
+            if store.list_503:
+                store.list_503 -= 1
+                return self._send(503, {"detail": "gateway"})
             return self._send(
                 200,
                 {
@@ -146,6 +170,12 @@ class Handler(BaseHTTPRequestHandler):
             )
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
+                if store.detail_503:
+                    store.detail_503 -= 1
+                    return self._send(503, {"detail": "gateway"})
+                if a["id"] in store.detail_empty_ids:
+                    store.detail_empty_ids.discard(a["id"])
+                    return self._send_empty(200)
                 return self._send(200, a)
         self._send(404, {"detail": "not found"})
 
@@ -154,13 +184,34 @@ class Handler(BaseHTTPRequestHandler):
         store.calls.append(("POST", self.path))
         body = self._body()
         if self.path == "/api/eda/v1/activations/":
-            if store.name_held:
-                store.name_held -= 1
+            if store.refuse_vars:
+                return self._send(
+                    400,
+                    {
+                        "extra_var": [
+                            "Key: orchestrator_url already exists in extra vars."
+                        ]
+                    },
+                )
+            if store.truncate_400:
+                store.truncate_400 -= 1
+                return self._send_truncated(400, b'{"name": ["activation')
+            if store.answer_503:
+                store.answer_503 -= 1
+                return self._send(503, {"detail": "gateway"})
+            if store.answer_empty:
+                store.answer_empty -= 1
+                return self._send_empty(201)
+            taken = any(a["name"] == body.get("name") for a in store.activations)
+            if store.name_held or taken:
+                store.name_held = max(0, store.name_held - 1)
                 return self._send(
                     400, {"name": ["activation with this name already exists."]}
                 )
             store.next_id += 1
             created = dict(body, id=store.next_id, status="running")
+            # the controller hands extra_var back re-serialised, keys sorted
+            created["extra_var"] = yaml.safe_dump(yaml.safe_load(body["extra_var"]))
             created["eda_credentials"] = [
                 {"id": i, "name": f"cred-{i}"} for i in body.get("eda_credentials", [])
             ]
@@ -168,6 +219,24 @@ class Handler(BaseHTTPRequestHandler):
                 created[key] = {"id": body.get(key + "_id")}
             store.activations.append(created)
             store.created.append(body)
+            if store.ghost_create:
+                # the controller carried the create out; the gateway lost the answer
+                store.ghost_create -= 1
+                return self._send(503, {"detail": "gateway"})
+            if store.ghost_empty:
+                store.ghost_empty -= 1
+                return self._send_empty(201)
+            if store.ghost_truncate:
+                store.ghost_truncate -= 1
+                return self._send_truncated(201)
+            if store.ghost_html:
+                store.ghost_html -= 1
+                return self._send_raw(
+                    201, b"<html>Service restarting</html>", "text/html"
+                )
+            if store.detail_503_after_create:
+                store.detail_503 = store.detail_503_after_create
+                store.detail_503_after_create = 0
             return self._send(201, created)
         if self.path.endswith("/disable/"):
             return self._send(204, {})
@@ -182,6 +251,13 @@ class Handler(BaseHTTPRequestHandler):
             for a in store.activations
             if self.path != f"/api/eda/v1/activations/{a['id']}/"
         ]
+        if store.list_503_after_delete and len(store.activations) < before:
+            store.list_503 = store.list_503_after_delete
+            store.list_503_after_delete = 0
+        if store.delete_503 and len(store.activations) < before:
+            # carried out, but the gateway lost the answer
+            store.delete_503 -= 1
+            return self._send(503, {"detail": "gateway"})
         self._send(204 if len(store.activations) < before else 404, {})
 
 
@@ -192,6 +268,20 @@ class Store:
         self.created = []
         self.next_id = 100
         self.name_held = 0  # creates refused with 'already exists' before one succeeds
+        self.ghost_create = 0  # creates carried out but answered 503
+        self.answer_503 = 0  # creates answered 503 and not carried out
+        self.answer_empty = 0  # creates answered 201 with no body, not carried out
+        self.ghost_empty = 0  # creates carried out but answered 201 with no body
+        self.ghost_truncate = 0  # creates carried out but the answer cut short
+        self.refuse_vars = False  # every create refused 400 over the extra vars
+        self.delete_503 = 0  # deletes carried out but answered 503
+        self.truncate_400 = 0  # creates refused 400 with the body cut short
+        self.ghost_html = 0  # creates carried out but answered with an HTML page
+        self.list_503 = 0  # activations lists answered 503
+        self.list_503_after_delete = 0  # ... armed by the next delete
+        self.detail_503 = 0  # activation details answered 503
+        self.detail_503_after_create = 0  # ... armed by the next create
+        self.detail_empty_ids = set()  # details answered 200 with no body, once
         self.url = None
 
 
@@ -301,6 +391,344 @@ def test_recreate_touches_only_the_drifted_and_keeps_the_enabled_flag(
     # the stopped health activation still counts as wrong
     assert code == 1
     assert "3 activation(s), 1 wrong" in out.err
+
+
+def _run_recreate(audit, store, files, monkeypatch):
+    # a clock that only sleeps move, so every deadline in the tool is reached
+    # in one pass and a loop that should have stopped fails fast
+    clock = {"now": 1000.0}
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(
+        audit.time, "sleep", lambda s: clock.update(now=clock["now"] + s)
+    )
+    monkeypatch.setattr(audit.time, "monotonic", lambda: clock["now"])
+    return audit.main(["--url", store.url, *files, "--recreate"])
+
+
+def _posts(store):
+    return [c for c in store.calls if c == ("POST", "/api/eda/v1/activations/")]
+
+
+def test_recreate_keeps_a_create_that_went_through_behind_a_gateway_error(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(7, "FlashArray rulebook - alerts", good),
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.ghost_create = 1  # the controller creates it, the gateway answers 503
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    # one create reached the controller; the retry's "already exists" was it,
+    # recognised although the controller hands the vars back in another key order
+    assert len(store.created) == 1
+    names = [a["name"] for a in store.activations]
+    assert names.count("FlashArray rulebook - capacity") == 1
+    assert (
+        "the create of FlashArray rulebook - capacity had gone through as id 101 "
+        "although the gateway answered an error; keeping it"
+    ) in out.out
+    assert code == 0
+
+
+def test_recreate_finds_the_create_the_gateway_kept_answering_errors_to(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    # the client's first four attempts are answered 503 and do nothing; the
+    # fifth is carried out and answered 503 as well, so the client gives up
+    store.answer_503 = 4
+    store.ghost_create = 1
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert len(_posts(store)) == 5  # looked up by name, not posted again
+    assert len(store.created) == 1
+    assert "had gone through as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_keeps_a_create_answered_with_an_empty_body(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.ghost_empty = 1
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert len(_posts(store)) == 1
+    assert len(store.created) == 1
+    assert "had gone through as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_keeps_a_create_whose_answer_was_cut_short(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.ghost_truncate = 1
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    # a truncated answer is an audit error, not a traceback, and the lookup follows
+    assert len(_posts(store)) == 1
+    assert "had gone through as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_looks_an_empty_answer_up_and_tries_again(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.answer_empty = 1  # nothing was created behind that answer
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert len(_posts(store)) == 2
+    assert len(store.created) == 1
+    assert "answered 201 with no activation in the body); trying again" in out.out
+    assert "created FlashArray rulebook - capacity as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_stops_at_once_when_the_controller_refuses_the_vars(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.refuse_vars = True
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert len(_posts(store)) == 1  # "already exists in extra vars" is not the name
+    assert store.created == []
+    assert "the controller refused the create" in out.out + out.err
+    assert "already exists in extra vars" in out.out + out.err
+    assert "run aap/seed.yml" in out.out + out.err
+    assert code == 1
+
+
+def test_recreate_survives_a_delete_whose_answer_the_gateway_lost(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.delete_503 = 1  # the retry of the delete then meets a 404
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "the delete of FlashArray rulebook - capacity was answered" in out.out
+    assert "HTTP 404" in out.out
+    assert "created FlashArray rulebook - capacity as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_keeps_a_create_answered_with_an_html_page(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.ghost_html = 1
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    # the non-JSON answer became an audit error (not a traceback) and the
+    # lookup that follows found the activation
+    assert len(_posts(store)) == 1
+    assert "had gone through as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_treats_a_cut_short_refusal_as_unknown_and_tries_again(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.truncate_400 = 1  # a 400 whose body (the name conflict?) never arrived
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "HTTP 400 (body unreadable)); trying again" in out.out
+    assert len(_posts(store)) == 2
+    assert len(store.created) == 1
+    assert code == 0
+
+
+def test_recreate_waits_out_a_list_error_after_the_delete(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+        _activation(9, "FlashArray rulebook - health", dict(good, alerts_interval=31)),
+    ]
+    store.list_503_after_delete = 5  # the client's five attempts all fail once
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "could not read the activations list" in out.out
+    assert "created FlashArray rulebook - capacity as id 101" in out.out
+    assert "created FlashArray rulebook - health as id 102" in out.out
+    assert code == 0
+
+
+def test_recreate_says_so_when_the_list_stays_unreadable_after_the_delete(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.list_503_after_delete = 1000  # outlasts the delete wait
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert store.created == []
+    assert "the activations list could not be read for 120 s" in out.err
+    assert "still listed" not in out.err
+    assert "check whether id 8 is gone, then run aap/seed.yml" in out.err
+    assert code == 1
+
+
+def test_audit_reports_a_bodiless_detail_answer_and_keeps_the_ids_done(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+        _activation(9, "FlashArray rulebook - health", dict(good, alerts_interval=31)),
+    ]
+    store.detail_empty_ids = {9}
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "GET /api/eda/v1/activations/9/: the answer is not an object" in out.err
+    # the first recreation is still reported, beside the error
+    assert "recreated as id 101 (running); was id 8" in out.err
+    assert code == 1
+
+
+def test_recreate_waits_out_a_detail_error_after_the_create(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+        _activation(9, "FlashArray rulebook - health", dict(good, alerts_interval=31)),
+    ]
+    store.detail_503_after_create = 5
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "could not read FlashArray rulebook - capacity (id 101)" in out.out
+    assert "recreated as id 101 (running)" in out.out
+    assert "recreated as id 102 (running)" in out.out
+    assert code == 0
+
+
+def test_recreate_gives_up_when_the_controller_keeps_the_name(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.name_held = 50
+    monkeypatch.setattr(audit, "NAME_WAIT_SECONDS", 0)
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert store.created == []
+    assert "no create went through in 0 s" in out.out + out.err
+    assert "already exists" in out.out + out.err  # the last answer is quoted
+    assert "run aap/seed.yml" in out.out + out.err
+    assert code == 1
+
+
+def test_recreate_keeps_waiting_when_the_lookup_itself_fails(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+    ]
+    store.name_held = 1
+    real_list_all = audit.Client.list_all
+    calls = {"n": 0}
+
+    def flaky_list_all(self, path):
+        # the list answers 5xx once, right after the create was refused
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise audit.AuditError(f"GET {path}: gave up after 5 attempts")
+        return real_list_all(self, path)
+
+    monkeypatch.setattr(audit.Client, "list_all", flaky_list_all)
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "could not look FlashArray rulebook - capacity up" in out.out
+    assert "created FlashArray rulebook - capacity as id 101" in out.out
+    assert code == 0
+
+
+def test_recreate_leaves_a_same_named_activation_with_other_vars_alone(
+    audit, store, files, capsys, monkeypatch
+):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
+        ),
+        _activation(
+            9, "FlashArray rulebook - capacity", dict(good, alerts_interval=99)
+        ),
+    ]
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert store.created == []
+    assert [a["id"] for a in store.activations] == [9]
+    assert (
+        "appeared as id 9 with other extra vars; not touching it" in out.out + out.err
+    )
+    assert code == 1
 
 
 def test_recreate_refuses_while_the_expected_vars_carry_a_placeholder(

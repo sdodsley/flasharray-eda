@@ -318,7 +318,9 @@ default `aap_eda_activations_enabled: false` every activation is reported
 disabled and the audit exits 1 until they are enabled. `--recreate` deletes
 each activation whose vars differ from the expected ones and creates it
 again with those vars and the same project, rulebook, decision environment,
-credentials, policies and enabled flag, waiting for it to run; a
+credentials, policies and enabled flag, waiting for it to run (a create
+the gateway answers with an error but the controller carried out is
+found by name and kept); a
 placeholder-only, disabled or stopped activation is reported, not
 recreated, and nothing is recreated while the expected vars themselves
 still carry a placeholder (fix the site file first). Each delete and create
