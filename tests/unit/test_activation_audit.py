@@ -154,6 +154,11 @@ class Handler(BaseHTTPRequestHandler):
         store.calls.append(("POST", self.path))
         body = self._body()
         if self.path == "/api/eda/v1/activations/":
+            if store.name_held:
+                store.name_held -= 1
+                return self._send(
+                    400, {"name": ["activation with this name already exists."]}
+                )
             store.next_id += 1
             created = dict(body, id=store.next_id, status="running")
             created["eda_credentials"] = [
@@ -186,6 +191,7 @@ class Store:
         self.activations = []
         self.created = []
         self.next_id = 100
+        self.name_held = 0  # creates refused with 'already exists' before one succeeds
         self.url = None
 
 
@@ -274,6 +280,7 @@ def test_recreate_touches_only_the_drifted_and_keeps_the_enabled_flag(
         ),
         _activation(9, "FlashArray rulebook - health", good, status="stopped"),
     ]
+    store.name_held = 1  # the controller still holds the name right after the delete
     monkeypatch.setenv("AAP_TOKEN", "tok")
     monkeypatch.setattr(audit.time, "sleep", lambda s: None)
     code = audit.main(["--url", store.url, *files, "--recreate"])
@@ -290,6 +297,7 @@ def test_recreate_touches_only_the_drifted_and_keeps_the_enabled_flag(
     assert yaml.safe_load(created["extra_var"]) == good
     assert "deleting FlashArray rulebook - capacity (id 8)" in out.out
     assert "created FlashArray rulebook - capacity as id 101" in out.out
+    assert "still holds the name FlashArray rulebook - capacity" in out.out
     # the stopped health activation still counts as wrong
     assert code == 1
     assert "3 activation(s), 1 wrong" in out.err

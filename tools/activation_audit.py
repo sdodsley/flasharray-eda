@@ -178,7 +178,7 @@ class Client:
                     raw = response.read()
                     return response.status, (json.loads(raw) if raw else None)
             except urllib.error.HTTPError as exc:
-                if exc.code in (502, 503, 504) and attempt + 1 < retries:
+                if exc.code in (500, 502, 503, 504) and attempt + 1 < retries:
                     time.sleep(3)
                     continue
                 detail = exc.read()[:300].decode(errors="replace")
@@ -261,13 +261,21 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
         raise AuditError(
             f"{name}: id {old_id} still listed {DELETE_WAIT_SECONDS} s after the delete; not recreating"
         )
-    try:
-        status, created = client.request("POST", "/api/eda/v1/activations/", body)
-    except AuditError as exc:
-        raise AuditError(
-            f"{name}: deleted (was id {old_id}) but the create failed: {exc}; "
-            "run aap/seed.yml to create it again"
-        ) from None
+    created = None
+    for attempt in range(12):
+        try:
+            status, created = client.request("POST", "/api/eda/v1/activations/", body)
+            break
+        except AuditError as exc:
+            # the controller keeps the name for a while after the delete
+            if "already exists" in str(exc) and attempt + 1 < 12:
+                say(f"the controller still holds the name {name}; waiting")
+                time.sleep(5)
+                continue
+            raise AuditError(
+                f"{name}: deleted (was id {old_id}) but the create failed: {exc}; "
+                "run aap/seed.yml to create it again"
+            ) from None
     if not isinstance(created, dict) or "id" not in created:
         raise AuditError(
             f"{name}: deleted (was id {old_id}) but the create answered {status} "

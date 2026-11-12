@@ -414,6 +414,17 @@ names resolve to users and groups), and a platform user with the Approve
 role on the workflow; it polls both queues with them, and the orchestrator
 records each decision as that user with the Slack name in the notes.
 
+`tools/activation_audit.py` run against the platform found what it was
+written for: nine of the ten activations carried the vars of the day they
+were created (no orchestrator keys, no `syslog_programs`, one with the
+lab's 60-second drill interval), and `--recreate` rebuilt them with the
+current site vars, printing each old and new id. The controller refused
+one create with "activation with this name already exists" after the
+old id had left the list, which the tool now waits out; a second run
+finished the fleet, and a read-only run then reported all ten clean.
+`tools/ao_sync.py --check` against the live orchestrator exits 0 with the
+nine definitions unchanged.
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on an array:
