@@ -239,6 +239,12 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
 - The controller's task container and the activation workers keep image
   stores of their own, separate from the host user's command line; an
   image built on the host is loaded into them or pulled from a registry.
+- After an activation is deleted the EDA controller keeps its name for a
+  while after the id has left the activations list: a create with the
+  same name inside that window answers 400 "activation with this name
+  already exists". A tool that deletes and recreates waits out the name,
+  not just the id. The activations list also answers an occasional 500
+  while activations are restarting; retry it like a 502.
 - A decision environment created through the API defaults to the pull
   policy `always`; an activation on a locally loaded image then fails to
   start with "x509: certificate is valid for <platform host>, not
