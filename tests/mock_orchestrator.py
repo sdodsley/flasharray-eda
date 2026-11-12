@@ -196,20 +196,17 @@ class Handler(BaseHTTPRequestHandler):
         data, declared = self._read_body()
         auth = self.headers.get("Authorization", "")
         scheme, _, token = auth.partition(" ")
+        # decide first, note the call, then answer: a test that reads the
+        # call list as soon as it has the answer must find the call there
         if scheme.lower() != "bearer" or not self.server.token_valid(token.strip()):
-            status = 401
-            self._problem(status, "Unauthorized", "missing or invalid bearer token")
+            status, answer = 401, ("Unauthorized", "missing or invalid bearer token")
         elif path not in self.server.paths:
-            status = 403
-            self._problem(
-                status,
+            status, answer = 403, (
                 "Forbidden",
                 "service account is not authorized for this trigger",
             )
         elif declared > MAX_BODY_BYTES or len(data) > MAX_BODY_BYTES:
-            status = 413
-            self._problem(
-                status,
+            status, answer = 413, (
                 "Payload Too Large",
                 f"payload of {declared} bytes exceeds {MAX_BODY_BYTES} bytes",
             )
@@ -217,14 +214,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(data.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
-                status = 400
-                self._problem(status, "Bad Request", "body is not valid JSON")
+                status, answer = 400, ("Bad Request", "body is not valid JSON")
             else:
                 status = 202
-                self._send(
-                    status, {"execution_id": self.server.record_event(path, body)}
-                )
+                answer = {"execution_id": self.server.record_event(path, body)}
         self.server.note_call(path, status)
+        if status == 202:
+            self._send(status, answer)
+        else:
+            self._problem(status, *answer)
 
 
 def make_server(
