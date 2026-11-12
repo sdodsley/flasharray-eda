@@ -23,6 +23,22 @@
         debug:
           msg: "maintenance window on {{ event.purefa_alert.array }}: alert {{ event.purefa_alert.code }} {{ event.purefa_alert.summary }} not routed"
 
+    - name: Alert opened and resolved between polls - notify
+      condition: >-
+        event.purefa_alert.transition == "opened" and
+        event.purefa_alert.state == "closing"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ event.purefa_alert.severity_down }}"
+            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} opened and resolved: {{ event.purefa_alert.summary }}"
+            detail: "open for {{ event.purefa_alert.resolved_after_s }} s and resolved before the loop saw it open; {{ event.purefa_alert.action }}"
+            target_array: "{{ event.purefa_alert.array }}"
+            alert_id: "{{ event.purefa_alert.alert_id }}"
+            alert_code: "{{ event.purefa_alert.code }}"
+            alert_log: "{{ alert_log }}"
+
     - name: Alert opened - route through the runbook map
       condition: >-
         event.purefa_alert.transition == "opened" and

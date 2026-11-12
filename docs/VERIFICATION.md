@@ -52,7 +52,7 @@ snapshots.
 | config drift | adds a server to the NTP list (`tests/induce_ntp_drift.yml`) | the next poll emits the drift, `remediate_ntp.yml` reapplies the baseline (`changed: true`), the following poll is clean |
 | replication | pauses the pod replica link (`tests/replica_link_pause.yml`) | the paused rule fires on the source array and on the target (inbound view); the test resumes the link |
 | health, maintenance window | opens a window (`tests/maintenance_window.yml`) | the health event carries `maintenance_active: true` with the window's expiry |
-| health, hardware replay | replays three fixture events: a critical controller, an unhealthy bay inside a window, a controller failover | the identify LED lights on the named controller of the real array, the in-window bay is logged not actioned, the failover notifies; the test clears the LED |
+| health, hardware replay | replays four fixture events: a critical controller, an unhealthy bay inside a window, a controller failover, the controller recovered | the identify LED lights on the named controller of the real array, the in-window bay is logged not actioned, the failover notifies, the recovered event clears the LED (the helper clears it only as a fallback) |
 | audits | runs the audits signal with a lookback | every change made by the tests appears with user, command, subcommand and arguments |
 | test alert | runs `tests/send_test_alert.py` | the array sends its test alert to the configured watcher |
 | capacity, performance steady state | runs the telemetry signal on an idle array | events flow, nothing fires |
@@ -359,6 +359,36 @@ replication rulebook, polling the link, saw it quiesced during the planned
 demotion and posted a critical notify about it: to a monitor that does
 not know about it, a planned switchover looks like a stalled link.
 
+With the switchover marking its source pod as planned work and the
+replication plugin carrying the mark to the link's other side, the same
+failover and failback ran again on two Slack clicks (2026-11-12): the
+failover eradicated `test.undo-demote.6`, demoted the source and promoted
+the target, the failback did the same the other way, and for the whole
+window the replication rulebook recorded only "Replica link changing
+during planned work - log only", twice per poll, with no critical notify;
+the Alertmanager silence nodes ran before and after each step and
+recorded the Alertmanager as unreachable rather than failing, that
+instance listening on its loopback alone. The first attempt had tagged
+the target pod as well and stopped there: a demoted pod refuses tag
+writes (docs/HARDWARE_NOTES.md).
+
+The alert lifecycle ran against live alerts the same day. Array B's
+alert 13 went to `closing` after its NTP servers were set again and the
+alerts activation posted "alert 13 resolved" at info, one step below
+the alert's warning, for each of the two ntpd alerts that closed. A pod
+stretched from array A to B and back raised alerts 120 and 152 that
+opened and resolved within seconds, inside one poll: the activation
+routed them as opened (the critical runbook ran for an alert already
+resolving) and never saw them close, which is why the alerts rulebook
+now notifies once for an alert first seen in the `closing` state instead
+of routing it. Standalone replays against the arrays drove the two
+actuators: the health fixtures lit the identify LED on array A's CT1 at
+the critical event and cleared it at the recovered event (both reported
+as changed, the array reading the LED off afterwards), and an alert 13
+opened event for array B, with the site map routing code 13 to tasks,
+ran runbook 13 and put the baseline NTP servers back in place of the
+unroutable address the test had set.
+
 The overdue-replication route runs on the same orchestrator.
 `orchestrator/replication_overdue_approval.json` is imported and
 published, and the bridge playbook posts an overdue event for the
@@ -471,10 +501,9 @@ event takes the same path as a live one.
 - Packaging into `everpure.flasharray` and the Red Hat EDA certification
   track ([PACKAGING.md](PACKAGING.md)).
 
-The alert lifecycle rules (the resolved notice at `closing`, the second
-routing on a severity rise, the identify LED cleared when a component
-recovers, runbook 13 reapplying the NTP baseline) and the planned-work
-marker on the switchover's source pod are unit-tested and replayable but
-have not run against a live alert or a live switchover yet; the first
-switchover with the marker stopped at the target pod's tag, which a
-demoted pod refuses, before anything changed.
+The second routing of an alert whose severity rises, the routing of an
+alert the array sets back to open after `closing`, the resolved notice
+for an alert next seen already closed, and the second lighting of the LED
+for a component back in the issue set within the hour are unit-tested
+only; no live alert changed severity or reopened, and no component
+flapped, while watched.

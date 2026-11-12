@@ -94,7 +94,7 @@ Events (one dict per event, exactly one top-level key, always with `array`;
 alert, audit, hardware and replication events also carry
 `maintenance_active`, true while the array has an open maintenance window)
 -------------------------------------------------------------------------
-purefa_alert            transition: initial|opened|updated|closing|closed;
+purefa_alert            transition: initial|opened|updated|reopened|closing|closed;
                         alert_id, code, severity, state, component_type,
                         component_name, summary, description, issue, actual,
                         expected, action, knowledge_base_url, flagged,
@@ -116,7 +116,9 @@ purefa_health           hardware_issues[{component,type,status}],
                         open_alert_count, purity_version
 purefa_hardware         one per hardware component whose status is an issue:
                         component, type, status, details, slot, serial,
-                        identify_enabled
+                        identify_enabled, maintenance_active, episode (the
+                        n-th time the component entered the issue set in
+                        this process)
 purefa_controller_failover
                         previous_primary, primary,
                         controllers[{name,mode,status}]
@@ -687,19 +689,27 @@ def poll_alerts(arr, state, args):
             events.append(event(a, "opened"))
         elif seen[aid][:2] != key[:2]:
             previous = seen[aid][2] if len(seen[aid]) > 2 else None
-            events.append(
-                event(
-                    a,
-                    "closing" if a.get("state") == "closing" else "updated",
-                    previous=previous,
-                )
-            )
+            was, now_state = seen[aid][0], a.get("state")
+            # closing once, on the way in; back to open after closing is a
+            # reopening; anything else that moved the alert is an update
+            if now_state == "closing" and was != "closing":
+                transition = "closing"
+            elif now_state == "open" and was == "closing":
+                transition = "reopened"
+            else:
+                transition = "updated"
+            events.append(event(a, transition, previous=previous))
     if not first:
         for aid in set(seen) - set(current):
+            found = _items(c.get_alerts(names=[aid]), "alert")
             final = _first(
-                _items(c.get_alerts(names=[aid]), "alert"),
-                {"name": aid, "state": "closed"},
+                found, {"name": aid, "state": "closed", "severity": seen[aid][2]}
             )
+            if found and seen[aid][0] != "closing":
+                # resolved and closed between two polls (a day or more
+                # apart): the resolved notice first, then the closed line;
+                # an alert the array no longer lists at all gets the line only
+                events.append(event(final, "closing", previous=seen[aid][2]))
             events.append(event(final, "closed"))
     st["seen"] = current
     return events
@@ -866,6 +876,11 @@ def poll_health(arr, state, args):
             }
         }
     ]
+    previous_issues = st.get("issues", {})
+    episodes = st.setdefault("episodes", {})
+    for h in issues:
+        if h.get("name") not in previous_issues:
+            episodes[h.get("name")] = episodes.get(h.get("name"), 0) + 1
     for h in issues:
         events.append(
             {
@@ -879,12 +894,16 @@ def poll_health(arr, state, args):
                     "serial": h.get("serial"),
                     "identify_enabled": h.get("identify_enabled"),
                     "maintenance_active": bool(windows),
+                    # counts the times the component has entered the issue
+                    # set in this process: the rulebook keys its hourly
+                    # throttle on it, so a component back after recovering
+                    # is lit and recorded again at once
+                    "episode": episodes.get(h.get("name"), 1),
                 }
             }
         )
     # a component that was an issue last poll and is not one now has
     # recovered: the rulebook can clear the identify LED it lit
-    previous_issues = st.get("issues", {})
     current_issues = {h.get("name"): h for h in issues}
     by_name = {h.get("name"): h for h in hardware}
     for name, was in previous_issues.items():

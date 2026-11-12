@@ -115,10 +115,10 @@ Three things to get right on the first run:
 
 | Rulebook | Source | Fires on | Action |
 | --- | --- | --- | --- |
-| `alerts.yml` | alerts | alert opened / closed | routes through the alert-code runbook map: notify, ticket, or per-code tasks, with the array's own action text and KB link |
+| `alerts.yml` | alerts | alert opened, reopened or raised in severity; alert resolved (`closing`) | routes through the alert-code runbook map: notify, ticket, or per-code tasks, with the array's own action text and KB link |
 | `change_control.yml` | audits, webhook | a governed setting changed by anyone but the automation account; a destructive command by a human; a signed git push | reconcile from the git baseline (NTP, DNS) and report who; notify; apply the baseline forward |
 | `config_drift.yml` | config | NTP, DNS, LDAP, SafeMode/eradication, admin auth settings vs baseline (poll-based fallback) | NTP and DNS reapplied; the rest notify |
-| `health.yml` | health | hardware component not ok; drive not healthy; controller failover; maintenance window; remote assist | hardware component not ok: identify LED + notify, logged only inside a maintenance window; drive not healthy, controller failover: notify; maintenance window, remote assist: logged |
+| `health.yml` | health | hardware component not ok; drive not healthy; controller failover; maintenance window; remote assist | hardware component not ok: identify LED + notify, cleared again when it recovers, logged only inside a maintenance window; drive not healthy, controller failover: notify; maintenance window, remote assist: logged |
 | `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a schedule | notify; move host preferred arrays to the online side and back; replicate now (with `orchestrator_enabled`, an approval in the orchestrator first); DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
 | `capacity.yml` | telemetry, webhook | used % over threshold; days-to-full from the array's 7-day history; an approval (bearer token) | approval request with request id; reclaim pending-eradication objects only when approved |
 | `performance.yml` | telemetry | noisy neighbour on a hot array; capped volume back to normal; array write latency vs the same half hour last week | temporary IOPS cap with an `eda/qos_cap` tag on the array; cap lifted; notify |
@@ -189,7 +189,7 @@ interval; every REST call is bounded by `request_timeout` (default 30 s):
 
 | Signal | Endpoints | Events |
 | --- | --- | --- |
-| alerts | `/alerts` (state != closed), diffed locally | `purefa_alert` with transition initial / opened / updated / closing / closed |
+| alerts | `/alerts` (state != closed), diffed locally | `purefa_alert` with transition initial / opened / updated / reopened / closing / closed |
 | audits | `/audits` newest N, cut at a local time cursor | `purefa_audit` with user, command, subcommand, arguments, by_automation |
 | health | `/hardware`, `/drives`, `/controllers`, `/maintenance-windows`, `/support` | `purefa_health`, `purefa_hardware` per issue, `purefa_controller_failover` |
 | telemetry | `/arrays/space` (+ 7-day history), `/volumes/space` (growth tracked across the `growth_volumes`, default 500, largest live volumes), `/arrays/performance` (+ same half hour last week), `/volumes/performance` top N (plus any volume tagged `eda/qos_cap`, whatever its rank), volume QoS and tags | `purefa_capacity` (days_to_full, top growers, pending eradication, drr_drop, snapshot_surge), `purefa_array_performance` (baseline ratios, write_surge), `purefa_volume_performance` (streak counters, iops share, QoS limit, eda_capped) |
@@ -271,9 +271,9 @@ detail on the next line, escaped for Slack. A failed post is reported in
 the job and never fails the notification; the alert log is the record,
 Slack is the pager. Only records at or above `slack_min_severity` are
 posted (an extra var, else `SLACK_MIN_SEVERITY` in the environment, else
-warning): an alert that has finished its day in `closing`, or a request
-whose approval card the bot posts anyway, is record material and stays in
-the alert log and the job output. On the platform `aap/seed.yml` also
+warning): a warning alert's resolved notice at info, or a request whose
+approval card the bot posts anyway, is record material and stays in the
+alert log and the job output. On the platform `aap/seed.yml` also
 creates a Slack notification template (bot token, `chat:write`) that posts
 job failures and the controller-tier workflow's approval, success and
 failure events, each with its link into the platform

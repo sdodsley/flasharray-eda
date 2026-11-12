@@ -21,6 +21,7 @@
         delay: 1
 
   rules:
+
     - name: Hardware issue outside a maintenance window - identify LED and notify
       condition: >-
         event.purefa_hardware.status is defined and
@@ -30,6 +31,7 @@
         group_by_attributes:
           - event.purefa_hardware.array
           - event.purefa_hardware.component
+          - event.purefa_hardware.episode
       action:
         run_playbook:
           name: playbooks/identify_led.yml
@@ -51,29 +53,17 @@
         group_by_attributes:
           - event.purefa_hardware.array
           - event.purefa_hardware.component
+          - event.purefa_hardware.episode
       action:
         debug:
           msg: >-
             maintenance window active on {{ event.purefa_hardware.array }}:
             {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned
 
-    - name: Controller failover - notify
-      condition: event.purefa_controller_failover.primary is defined
-      action:
-        run_playbook:
-          name: playbooks/notify.yml
-          extra_vars:
-            severity: critical
-            subject: "Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}"
-            detail: "previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}"
-            target_array: "{{ event.purefa_controller_failover.array }}"
-            alert_log: "{{ alert_log }}"
-
     - name: Hardware recovered - clear the identify LED
       condition: >-
         event.purefa_hardware_recovered.component is defined and
-        event.purefa_hardware_recovered.identify_enabled == true and
-        event.purefa_hardware_recovered.maintenance_active == false
+        event.purefa_hardware_recovered.identify_enabled == true
       action:
         run_playbook:
           name: playbooks/identify_led.yml
@@ -85,4 +75,16 @@
             component_details: "recovered from {{ event.purefa_hardware_recovered.previous_status }}"
             led_state: false
             severity: info
+            alert_log: "{{ alert_log }}"
+
+    - name: Controller failover - notify
+      condition: event.purefa_controller_failover.primary is defined
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}"
+            detail: "previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}"
+            target_array: "{{ event.purefa_controller_failover.array }}"
             alert_log: "{{ alert_log }}"

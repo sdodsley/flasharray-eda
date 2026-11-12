@@ -9,8 +9,8 @@
 # shape when adding a playbook. A failed Slack post is reported and never
 # fails the notification: the alert log is the record, Slack is the pager.
 # Slack gets only records at or above slack_min_severity (an extra var, else
-# the SLACK_MIN_SEVERITY environment variable, else warning): an alert
-# finishing its day in "closing", or a request whose approval card the bot
+# the SLACK_MIN_SEVERITY environment variable, else warning): a warning
+# alert's resolved notice at info, or a request whose approval card the bot
 # posts anyway, is record material, not pager material.
 - name: Notify a human
   hosts: localhost

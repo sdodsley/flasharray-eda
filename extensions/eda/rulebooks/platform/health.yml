@@ -64,6 +64,7 @@
         group_by_attributes:
           - event.purefa_hardware.array
           - event.purefa_hardware.component
+          - event.purefa_hardware.episode
       action:
         run_job_template:
           name: FlashArray - identify LED
@@ -83,11 +84,12 @@
         group_by_attributes:
           - event.purefa_hardware.array
           - event.purefa_hardware.component
+          - event.purefa_hardware.episode
       action:
         debug:
           msg: 'maintenance window active on {{ event.purefa_hardware.array }}: {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned'
     - name: Hardware recovered - clear the identify LED
-      condition: event.purefa_hardware_recovered.component is defined and event.purefa_hardware_recovered.identify_enabled == true and event.purefa_hardware_recovered.maintenance_active == false
+      condition: event.purefa_hardware_recovered.component is defined and event.purefa_hardware_recovered.identify_enabled == true
       action:
         run_job_template:
           name: FlashArray - identify LED

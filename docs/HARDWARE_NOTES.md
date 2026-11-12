@@ -15,7 +15,8 @@ unless stated.
 - `/alerts/events` is not an event log: it answers "Must specify an alert
   ID(s)" on REST 2.46 and on REST 2.59 (Purity//FA 6.12.4) alike. The
   alerts signal diffs `/alerts` with `state!='closed'` on every version and
-  derives the opened / updated / closing / closed transitions itself.
+  derives the opened / updated / reopened / closing / closed transitions
+  itself.
   A resolved alert stays `closing` for 24 hours before the array marks it
   `closed` (its `closed` and `updated` fields are set when it resolves), so
   the closed transition, and anything a rulebook does with it, comes a day
@@ -60,10 +61,15 @@ unless stated.
   the marker goes on the promoted source pod and the plugin applies it to
   the link's other side itself; once the switchover has demoted that pod
   the tag cannot be cleared either, so the plugin stops honouring it after
-  `planned_work_max_age` (15 minutes). During a planned switchover both
-  arrays report the link `quiescing` and then `quiesced` for about a
-  minute, the state the replication rulebook pages on when nothing marks
-  the work as planned.
+  `planned_work_max_age` (15 minutes). Pod tags travel with the replica
+  link: after a failover and failback both pods carried the stamp and
+  note the last switchover wrote on its source pod, so the demoted side
+  shows the marker without being written, and clearing the tags on the
+  promoted pod clears the peer's copy within a minute. During a planned
+  switchover
+  both arrays report the link `quiescing` and then `quiesced` for about
+  a minute, the state the replication rulebook pages on when nothing
+  marks the work as planned.
 - Demoting a pod leaves `<pod>.undo-demote.<n>` behind: a destroyed pod
   holding the pod's state from before the demotion, found with
   `GET /pods?names=<pod>.undo-demote.*&destroyed=true` (a pattern that
@@ -90,7 +96,15 @@ unless stated.
   and resuming a pod replica link; array B raised alert 13 ("Time sync
   failure") hours later and keeps it open while a controller's ntpd is
   down. A test that needs a real alert now needs a fault the array treats
-  as one; the pod stretch above is the quick one.
+  as one; the pod stretch above is the quick one. Array B's alert 13
+  ("server not synchronized", open since 6 November 2026 with the baseline
+  servers configured and the clock 36 minutes behind) went to `closing`
+  within a minute of the NTP servers being set to another address and
+  back, which restarts ntpd; `purefa_ntp` makes no change when the servers
+  already match, so runbook 13 as written cannot give a stuck daemon that
+  kick. A pod stretch's alerts 120 ("offline on peer") and 152 ("resync
+  completed") open and resolve within seconds, inside one 30 s alerts
+  poll, so the plugin first sees them already `closing`.
 
 ## Syslog
 

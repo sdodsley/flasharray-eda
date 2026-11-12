@@ -6,6 +6,15 @@
 # passes baseline_ntp_servers_csv from the vars file. The config-drift
 # rulebook would reapply the same baseline on its next poll; this runs it
 # the moment the array says time is adrift.
+# A per-array credential attached to the template injects fa_url, api_token
+# and credential_array for its own array, over every host's vars: refuse
+# when that array is not the alert's.
+- name: Refuse to reapply NTP on another array than the alert's
+  ansible.builtin.assert:
+    that:
+      - credential_array is not defined or credential_array == target_array
+    fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ target_array }}"
+
 - name: Reapply the baseline NTP servers for alert 13
   when: baseline_ntp_servers_csv | default('') | length > 0
   everpure.flasharray.purefa_ntp:

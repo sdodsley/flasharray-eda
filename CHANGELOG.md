@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- An alert that opens and resolves between two polls is first seen already
+  resolving; the alerts rulebook now notifies once for it, at one severity
+  below its own, instead of routing it through the runbook map as if it
+  were still open. Seen live: a pod stretch's alerts open and resolve
+  inside one 30 s poll. From the review of the lifecycle: `closing` is
+  emitted once (a later touch of the resolving alert is an update, not a
+  second resolved notice, and an alert next seen already closed gets its
+  resolved notice before the closed line), an alert the array sets back to
+  open after closing is routed again as `reopened` (logged inside a
+  maintenance window), the identify LED is cleared on recovery inside a
+  maintenance window too, the hardware rules' hourly throttle is keyed on
+  the component's `episode` so one back after recovering is lit and
+  recorded at once, and runbook 13 refuses a credential for another array.
+
 - The alert lifecycle: `closing` is the resolved signal (the array holds a
   resolved alert there for a day before `closed`), so the alerts rulebook
   notifies once at one severity below the alert's with the time it was
@@ -49,10 +63,8 @@
 - `notify.yml` posts to Slack only at or above `slack_min_severity` (an
   extra var, else `SLACK_MIN_SEVERITY` in the environment, else warning);
   every record still reaches the alert log, and the job says when a record
-  stayed out of the channel. Purity keeps a resolved alert `closing` for
-  24 hours before it is `closed`, so the alerts rulebook's closed notices
-  arrive a day after the fault cleared; at info severity they no longer
-  page anyone.
+  stayed out of the channel: a resolved notice one severity below a
+  warning alert's is info and stays in the log.
 - `dr_demote.yml` eradicates the undo-demote pod an earlier demotion left
   when `eradicate_undo_demote` is true, as `dr_switchover.yml` does, and
   the DR failover test workflow's revert node passes it; without the flag

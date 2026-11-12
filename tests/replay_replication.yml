@@ -21,29 +21,6 @@
         delay: 20
 
   rules:
-    - name: Protection group replication overdue or stuck - replicate now
-      condition: >-
-        event.purefa_pg_replication.pgroup is defined and
-        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
-        event.purefa_pg_replication.maintenance_active == false and
-        vars.replication_auto_replicate_now == true and
-        vars.orchestrator_enabled == false
-      throttle:
-        once_within: 1 hour
-        group_by_attributes:
-          - event.purefa_pg_replication.array
-          - event.purefa_pg_replication.pgroup
-      action:
-        run_playbook:
-          name: playbooks/replicate_now.yml
-          extra_vars:
-            target_array: "{{ event.purefa_pg_replication.array }}"
-            pgroup: "{{ event.purefa_pg_replication.pgroup }}"
-            reason: "{{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
-            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s }}"
-            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms }}"
-            in_progress: "{{ event.purefa_pg_replication.in_progress }}"
-            alert_log: "{{ alert_log }}"
 
     - name: Stretched pod member offline - prefer the online array on its hosts
       condition: >-
@@ -80,4 +57,28 @@
             online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
             offline_arrays: []
             mode: restore
+            alert_log: "{{ alert_log }}"
+
+    - name: Protection group replication overdue or stuck - replicate now
+      condition: >-
+        event.purefa_pg_replication.pgroup is defined and
+        (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        event.purefa_pg_replication.maintenance_active == false and
+        vars.replication_auto_replicate_now == true and
+        vars.orchestrator_enabled == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
+      action:
+        run_playbook:
+          name: playbooks/replicate_now.yml
+          extra_vars:
+            target_array: "{{ event.purefa_pg_replication.array }}"
+            pgroup: "{{ event.purefa_pg_replication.pgroup }}"
+            reason: "{{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
+            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s }}"
+            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms }}"
+            in_progress: "{{ event.purefa_pg_replication.in_progress }}"
             alert_log: "{{ alert_log }}"

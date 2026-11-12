@@ -1,8 +1,10 @@
 ---
 # Recorded-shape alert events for replay through ansible.eda.generic:
 # a hardware failure (code 42, routed as a ticket), a code with per-code
-# runbook tasks (9999, fixture), an unknown code (default route) and one
-# opened inside a maintenance window (logged, not routed).
+# runbook tasks (9999, fixture), an unknown code (default route), one
+# opened inside a maintenance window (logged, not routed), the hardware
+# failure resolving (the resolved notice) and a pod alert first seen
+# already resolving (one notice, no runbook).
 fixture_events:
   - purefa_alert:
       array: "REPLAY_ARRAY"
@@ -76,3 +78,21 @@ fixture_events:
       knowledge_base_url: ""
       age_s: 300
       resolved_after_s: 300
+  - purefa_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000006"
+      code: 120
+      severity: critical
+      severity_down: warning
+      previous_severity: null
+      severity_raised: false
+      state: closing
+      component_type: pod
+      component_name: eda-alert-test
+      summary: "(pod:eda-alert-test): offline on peer"
+      action: ""
+      knowledge_base_url: ""
+      age_s: 70
+      resolved_after_s: 40

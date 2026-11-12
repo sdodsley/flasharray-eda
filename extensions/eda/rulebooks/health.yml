@@ -69,6 +69,8 @@
         debug:
           msg: "poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}"
 
+    # The hour is per episode: a component back in the issue set after
+    # recovering is a new episode, lit and recorded at once.
     - name: Hardware issue outside a maintenance window - identify LED and notify
       condition: >-
         event.purefa_hardware.status is defined and
@@ -78,6 +80,7 @@
         group_by_attributes:
           - event.purefa_hardware.array
           - event.purefa_hardware.component
+          - event.purefa_hardware.episode
       action:
         run_playbook:
           name: playbooks/identify_led.yml
@@ -99,6 +102,7 @@
         group_by_attributes:
           - event.purefa_hardware.array
           - event.purefa_hardware.component
+          - event.purefa_hardware.episode
       action:
         debug:
           msg: >-
@@ -106,13 +110,13 @@
             {{ event.purefa_hardware.component }} {{ event.purefa_hardware.status }} not actioned
 
     # A component that left the issue set has recovered: clear the identify
-    # LED the rule above lit, when it is still lit and nobody has declared
-    # work on the array.
+    # LED the rule above lit, when it is still lit; a maintenance window open
+    # at the time changes nothing, the part reads healthy and the event comes
+    # once.
     - name: Hardware recovered - clear the identify LED
       condition: >-
         event.purefa_hardware_recovered.component is defined and
-        event.purefa_hardware_recovered.identify_enabled == true and
-        event.purefa_hardware_recovered.maintenance_active == false
+        event.purefa_hardware_recovered.identify_enabled == true
       action:
         run_playbook:
           name: playbooks/identify_led.yml

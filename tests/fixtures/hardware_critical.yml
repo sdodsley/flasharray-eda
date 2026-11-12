@@ -1,7 +1,8 @@
 ---
 # Recorded-shape events for replay through ansible.eda.generic: a critical
-# controller, an unhealthy drive bay during a maintenance window and a
-# controller failover, as purefa_events would emit them. Real hardware cannot
+# controller, an unhealthy drive bay during a maintenance window, a
+# controller failover and the controller recovered, as purefa_events would
+# emit them. Real hardware cannot
 # be failed on demand, so the health rules are exercised from here.
 # REPLAY_ARRAY / REPLAY_COMPONENT are substituted with sed when the test builds
 # its vars file (a --vars file is not templated); REPLAY_COMPONENT is the

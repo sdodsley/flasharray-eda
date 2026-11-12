@@ -94,7 +94,7 @@ timeout 60 ./run.sh extensions/eda/rulebooks/change_control.yml -v > "$OUT/webho
 wait
 summary webhook.log 25
 
-echo "===== 4. alert runbook map: replay four alert fixtures (30s)"
+echo "===== 4. alert runbook map: replay six alert fixtures (30s)"
 { cat "$FAEDA_VARS"; sed "/^---$/d; s/REPLAY_ARRAY/$A/g" tests/fixtures/alerts.yml; } > "$OUT/vars_replay.yml"
 FAEDA_VARS="$OUT/vars_replay.yml" timeout 30 ./run.sh tests/replay_alerts.yml -v > "$OUT/replay_alerts.log" 2>&1
 summary replay_alerts.log 30

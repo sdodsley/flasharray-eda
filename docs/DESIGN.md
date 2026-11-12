@@ -35,7 +35,7 @@ The leverage is not drift polling. It is three ideas:
 
 | Signal | Endpoint(s) | Event fields | Min REST |
 | --- | --- | --- | --- |
-| Alerts | `/alerts` with `state != closed`, diffed locally on every Purity version (`/alerts/events` wants alert ids on REST 2.46 and 2.59 alike), the opened / updated / closing / closed transitions derived by the plugin | code, severity, state, component_type/name, actual, expected, issue, summary, action, knowledge_base_url | 2.0 |
+| Alerts | `/alerts` with `state != closed`, diffed locally on every Purity version (`/alerts/events` wants alert ids on REST 2.46 and 2.59 alike), the opened / updated / reopened / closing / closed transitions derived by the plugin | code, severity, state, component_type/name, actual, expected, issue, summary, action, knowledge_base_url | 2.0 |
 | Config changes | `/audits` (cursor on `time`) | user, user_interface, origin, command, subcommand, arguments, system_event | 2.0 |
 | Hardware | `/hardware`, `/drives`, `/controllers` | status != ok, temperature, voltage, speed, identify_enabled, controller mode/mode_since | 2.0 |
 | Capacity | `/arrays/space` (history), `/volumes/space` | used, data_reduction, snapshot space, per-volume delta | 2.0 |
@@ -133,8 +133,15 @@ design intent.
   rulebook notifies once at one severity below the alert's with the time
   it was open; an alert whose severity rises is routed again; a hardware
   component that leaves the issue set clears the identify LED the loop
-  lit. The map falls through from code to component type to default, and
+  lit, and one that comes back is a new episode with an hourly window of
+  its own, lit and recorded at once (a component flapping every poll is
+  reported every poll).
+  The map falls through from code to component type to default, and
   code 13 (NTP) reapplies the baseline servers through a per-code runbook.
+  The pairing of a lit LED with its fault lives in the plugin's memory: a
+  component that recovers while the activation is down keeps its LED until
+  the next recovered event or a hand; a ledger of the LEDs the loop lit,
+  held on the array, is the follow-up.
 - Time-boxed remote assist (`purefa_ra`): design intent; `health.yml` logs
   remote-assist events.
 - Controller failover or port down: `health.yml` notifies. Host-side checks
@@ -302,8 +309,8 @@ Each remediation passes the gates its event allows; the table in
   [HARDWARE_NOTES.md](HARDWARE_NOTES.md).
 - `/alerts/events` is not an event log on any tested Purity (REST 2.46 and
   2.59 both want alert ids): the alerts signal diffs `/alerts` with `state
-  != closed` and derives the opened / updated / closing / closed
-  transitions itself.
+  != closed` and derives the opened / updated / reopened / closing /
+  closed transitions itself.
 - Per-array tokens: a read-only role for the source plugin, a write role only
   for the remediation credential, both in the platform's credential store
   ([SECURITY.md](../SECURITY.md)).

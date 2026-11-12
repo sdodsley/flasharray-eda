@@ -84,6 +84,22 @@
         debug:
           msg: "maintenance window on {{ event.purefa_alert.array }}: alert {{ event.purefa_alert.code }} {{ event.purefa_alert.summary }} not routed"
 
+    - name: Alert opened and resolved between polls - notify
+      condition: >-
+        event.purefa_alert.transition == "opened" and
+        event.purefa_alert.state == "closing"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ event.purefa_alert.severity_down }}"
+            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} opened and resolved: {{ event.purefa_alert.summary }}"
+            detail: "open for {{ event.purefa_alert.resolved_after_s }} s and resolved before the loop saw it open; {{ event.purefa_alert.action }}"
+            target_array: "{{ event.purefa_alert.array }}"
+            alert_id: "{{ event.purefa_alert.alert_id }}"
+            alert_code: "{{ event.purefa_alert.code }}"
+            alert_log: "{{ alert_log }}"
+
     - name: Alert opened - route through the runbook map
       condition: >-
         event.purefa_alert.transition == "opened" and
@@ -122,6 +138,42 @@
             transition: updated
             previous_severity: "{{ event.purefa_alert.previous_severity }}"
             subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }}: {{ event.purefa_alert.summary }}"
+            component: "{{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}"
+            array_action: "{{ event.purefa_alert.action }}"
+            knowledge_base_url: "{{ event.purefa_alert.knowledge_base_url }}"
+            target_array: "{{ event.purefa_alert.array }}"
+            alert_id: "{{ event.purefa_alert.alert_id }}"
+            alert_code: "{{ event.purefa_alert.code }}"
+            alert_runbooks: "{{ alert_runbooks }}"
+            alert_runbooks_by_type: "{{ alert_runbooks_by_type | default({}) }}"
+            component_type: "{{ event.purefa_alert.component_type }}"
+            baseline_ntp_servers_csv: "{{ baseline_ntp_servers_csv | default('') }}"
+            alert_log: "{{ alert_log }}"
+
+    # An alert the array set back to open after it had been closing: the
+    # fault is back after the resolved notice went out, so it is routed as
+    # if new; inside a maintenance window it is logged like an opened one.
+    - name: Alert reopened during a maintenance window - log only
+      condition: >-
+        event.purefa_alert.transition == "reopened" and
+        event.purefa_alert.maintenance_active == true
+      action:
+        debug:
+          msg: >-
+            reopened during maintenance: {{ event.purefa_alert.array }} #{{ event.purefa_alert.alert_id }}
+            code {{ event.purefa_alert.code }} {{ event.purefa_alert.severity }} {{ event.purefa_alert.summary }}
+
+    - name: Alert reopened - route through the runbook map again
+      condition: >-
+        event.purefa_alert.transition == "reopened" and
+        event.purefa_alert.maintenance_active == false
+      action:
+        run_playbook:
+          name: playbooks/alert_runbook.yml
+          extra_vars:
+            severity: "{{ event.purefa_alert.severity }}"
+            transition: reopened
+            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} is back: {{ event.purefa_alert.summary }}"
             component: "{{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}"
             array_action: "{{ event.purefa_alert.action }}"
             knowledge_base_url: "{{ event.purefa_alert.knowledge_base_url }}"

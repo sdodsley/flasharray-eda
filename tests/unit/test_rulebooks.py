@@ -96,8 +96,14 @@ def test_replay_rules_match_the_real_rulebook(replay):
     real = pathlib.Path("extensions/eda/rulebooks") / replay.name.replace("replay_", "")
     assert real.exists(), f"no real rulebook for {replay.name}"
     real_rules = _rules_by_name(real)
-    for name, rule in _rules_by_name(replay).items():
+    copied = _rules_by_name(replay)
+    for name, rule in copied.items():
         assert name in real_rules, f"{replay.name}: rule '{name}' is not in {real.name}"
         assert (
             rule == real_rules[name]
         ), f"{replay.name}: rule '{name}' has drifted from {real.name}"
+    # first match wins: the copies must keep the real rulebook's order
+    real_order = [n for n in real_rules if n in copied]
+    assert (
+        list(copied) == real_order
+    ), f"{replay.name}: rules are not in {real.name}'s order"
