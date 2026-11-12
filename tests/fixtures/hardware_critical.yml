@@ -19,6 +19,7 @@ fixture_events:
       serial: "FIXTURE"
       identify_enabled: false
       maintenance_active: false
+      episode: 1
   - purefa_hardware:
       array: "REPLAY_ARRAY"
       component: CH0.BAY3
@@ -29,6 +30,7 @@ fixture_events:
       serial: "FIXTURE"
       identify_enabled: false
       maintenance_active: true
+      episode: 1
   - purefa_controller_failover:
       array: "REPLAY_ARRAY"
       previous_primary: CT1
