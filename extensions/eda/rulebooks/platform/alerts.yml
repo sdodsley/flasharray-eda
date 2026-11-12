@@ -18,6 +18,40 @@
           - alerts
         alerts_interval: '{{ alerts_interval }}'
   rules:
+    - name: Poll failing for many polls - escalate
+      condition: event.purefa_poll_error is defined and event.purefa_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefa_poll_error.array
+          - event.purefa_poll_error.signal
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: critical
+              subject: '{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row'
+              detail: '{{ event.purefa_poll_error.error }}'
+              target_array: '{{ event.purefa_poll_error.array }}'
+    - name: Poll failed - notify once
+      condition: event.purefa_poll_error is defined and event.purefa_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_poll_error.array
+          - event.purefa_poll_error.signal
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: info
+              subject: '{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed'
+              detail: '{{ event.purefa_poll_error.error }}'
+              target_array: '{{ event.purefa_poll_error.array }}'
     - name: Report poll errors without acting
       condition: event.purefa_poll_error is defined
       action:

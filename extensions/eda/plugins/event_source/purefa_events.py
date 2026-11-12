@@ -44,6 +44,9 @@ audit_lookback    seconds of audit history to replay at start-up (default 0)
 include_initial_alerts
                   emit alerts that are already open at start-up with
                   transition "initial" (default true)
+poll_error_escalate
+                  consecutive failed polls of one signal on one array after
+                  which purefa_poll_error carries escalate: true (default 10)
 hardware_ignore_status
                   hardware statuses that are not issues
                   (default: ok, not_installed, unused)
@@ -159,7 +162,9 @@ purefa_config           purity_version, ntp_servers(_csv), dns_domain,
                         min_password_length, sso_enabled,
                         syslog_servers(_csv), smtp_relay_host,
                         alert_watchers_enabled(_csv), phonehome_enabled
-purefa_poll_error       signal, error (one per failed poll; the audits
+purefa_poll_error       signal, error, consecutive (failed polls in a row on that
+                        array and signal; 0 for a poll that succeeded but
+                        dropped records), escalate (one per failed poll; the audits
                         signal also raises it on audit_batch overflow)
 """
 
@@ -243,6 +248,10 @@ options:
     description: Emit alerts already open at start-up with transition initial.
     type: bool
     default: true
+  poll_error_escalate:
+    description: Consecutive failed polls of one signal on one array after which purefa_poll_error carries escalate true.
+    type: int
+    default: 10
   hardware_ignore_status:
     description: Hardware statuses that are not issues.
     type: list
@@ -442,10 +451,25 @@ def _now_ms():
     return int(time.time() * 1000)
 
 
-def _poll_error(signal, array, error):
+def _poll_error(signal, array, error, consecutive=1, escalate=False):
     return {
-        "purefa_poll_error": {"signal": signal, "array": array, "error": str(error)}
+        "purefa_poll_error": {
+            "signal": signal,
+            "array": array,
+            "error": str(error),
+            "consecutive": consecutive,
+            "escalate": escalate,
+        }
     }
+
+
+def _poll_streak(state, signal, array, failed):
+    """Consecutive failed polls of one signal on one array: the count after
+    this poll, 0 after a success. Kept in the shared state so a rule can
+    tell a blip from an array nobody has reached for an hour."""
+    streaks = state.setdefault("poll_errors", {}).setdefault(signal, {})
+    streaks[array] = streaks.get(array, 0) + 1 if failed else 0
+    return streaks[array]
 
 
 def _maintenance(arr, state, max_age=20.0):
@@ -651,7 +675,9 @@ def poll_audits(arr, state, args):
             "since the last poll, the oldest were skipped; raise audit_batch"
         )
         logger.warning("purefa_events[audits]: %s: %s", arr.name, msg)
-        events.append(_poll_error("audits", arr.name, msg))
+        # a successful poll that dropped records: consecutive 0, so the
+        # poll-failure rules leave it to the debug rule
+        events.append(_poll_error("audits", arr.name, msg, 0, False))
     return events
 
 
@@ -1385,9 +1411,18 @@ async def _signal_loop(queue, signal, arrays, state, args, executor):
         for event in events:
             await queue.put(event)
 
+    escalate_after = int(args.get("poll_error_escalate", 10) or 10)
+
     def failed(arr, exc):
-        logger.warning("purefa_events[%s]: %s poll failed: %s", signal, arr.name, exc)
-        return [_poll_error(signal, arr.name, exc)]
+        count = _poll_streak(state, signal, arr.name, True)
+        logger.warning(
+            "purefa_events[%s]: %s poll failed (%d in a row): %s",
+            signal,
+            arr.name,
+            count,
+            exc,
+        )
+        return [_poll_error(signal, arr.name, exc, count, count >= escalate_after)]
 
     logger.info(
         "purefa_events[%s]: polling %s every %ss",
@@ -1405,6 +1440,7 @@ async def _signal_loop(queue, signal, arrays, state, args, executor):
                 try:
                     rows.append(await run(arr, _capacity_row))
                     await emit(await run(arr, _performance_events))
+                    _poll_streak(state, signal, arr.name, False)
                 except Exception as exc:  # noqa: BLE001 - report and keep polling
                     await emit(failed(arr, exc))
             await emit(_capacity_events(rows))
@@ -1412,6 +1448,7 @@ async def _signal_loop(queue, signal, arrays, state, args, executor):
             for arr in arrays:
                 try:
                     events = await run(arr, POLLERS[signal])
+                    _poll_streak(state, signal, arr.name, False)
                 except Exception as exc:  # noqa: BLE001 - report and keep polling
                     events = failed(arr, exc)
                 await emit(events)

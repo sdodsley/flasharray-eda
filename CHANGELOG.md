@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- The loop watches itself: the plugin counts consecutive failed polls per
+  array and signal and flags `escalate` on `purefa_poll_error` at its
+  `poll_error_escalate` argument (default 10); the health rulebook pages at
+  warning on the first failure of a streak, the other polling rulebooks
+  record theirs at info, and every rulebook pages at critical once its
+  streak escalates, instead of a debug line nobody reads.
+  `tools/activation_audit.py` compares every FlashArray activation's extra
+  vars with what the seed would render, flags example placeholders and
+  disabled activations, and with `--recreate` recreates the drifted ones;
+  the seed refuses to
+  render extra vars that would post the orchestrator handoff to the example
+  URL. Found live: the capacity activation had carried
+  `orchestrator.example.com` for two days after a tree push replaced the
+  site vars file.
+- `tools/ao_sync.py` ignores the canvas `position` the UI saves on a node
+  or trigger, so a dragged box no longer publishes a new version, and
+  `--check` exits 1 when any definition would be created, updated or
+  published, for CI and schedules.
 - `notify.yml` posts to Slack only at or above `slack_min_severity` (an
   extra var, else `SLACK_MIN_SEVERITY` in the environment, else warning);
   every record still reaches the alert log, and the job says when a record

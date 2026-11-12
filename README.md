@@ -156,6 +156,8 @@ orchestrator/                          workflow definitions for the automation o
                                        (orchestrator/README.md)
 tools/ao_lint.py                       offline linter for those definitions (`make lint-ao`)
 tools/ao_sync.py                       imports the definitions into an orchestrator (orchestrator/README.md, "Importing")
+tools/activation_audit.py              checks every FlashArray activation's extra vars against the vars files and,
+                                       with --recreate, recreates the drifted ones (aap/README.md, "Checking the activations")
 slack/approval_bot.py                  Slack Socket Mode bot: approval cards with Approve/Reject buttons for the orchestrator
                                        and the controller (slack/README.md)
 aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects;

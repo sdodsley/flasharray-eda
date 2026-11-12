@@ -57,6 +57,14 @@ snapshots.
 | test alert | runs `tests/send_test_alert.py` | the array sends its test alert to the configured watcher |
 | capacity, performance steady state | runs the telemetry signal on an idle array | events flow, nothing fires |
 
+The loop's own failure path, standalone: the alerts rulebook run against
+one array whose URL was a closed port, polling every two seconds, wrote a
+warning record on the first failed poll ("alerts poll failed") and a
+critical one at the tenth ("poll has failed 10 times in a row"), then
+nothing more across 38 failures in 75 seconds, the throttles holding; the
+plugin's `consecutive` count and `escalate` flag drove both. Slack was
+kept out of that run, so the records are the proof.
+
 ### Change control, suppression, runbook map
 
 | Area | Test | Result |

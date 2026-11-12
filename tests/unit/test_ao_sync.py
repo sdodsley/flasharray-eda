@@ -724,6 +724,43 @@ def test_substitute_touches_only_the_placeholders(ao_sync):
     assert ao_sync.normalise({"b": 1, "a": [1, 2]}) == '{"a":[1,2],"b":1}'
 
 
+def test_canvas_layout_is_not_a_change(ao_sync, store, env, capsys):
+    """Dragging a box in the UI stores a position on the node or trigger;
+    the export then differs from the file in nothing that matters, and the
+    tool must not publish a new version for it."""
+    doc = json.loads((ROOT / "orchestrator" / DRILL).read_text())
+    same = ao_sync.substitute(doc, "cred-1", "int-1", "sa-1")
+    moved = json.loads(json.dumps(same))
+    for i, node in enumerate(moved["nodes"]):
+        node["position"] = {"x": 360.0 * (i + 1), "y": 142.0}
+    for trigger in moved["triggers"]:
+        trigger["position"] = {"x": 0.0, "y": 142.0}
+    assert moved != same
+    assert ao_sync.normalise(moved) == ao_sync.normalise(same)
+    store.add_workflow(DRILL_NAME, "proj-1", moved)
+    code, lines, err = run(ao_sync, capsys, store, shown(DRILL))
+    assert code == 0, err
+    assert lines == [f"{shown(DRILL)}: unchanged, published v1"]
+    assert store.writes() == []
+
+
+def test_check_exits_one_on_drift_and_writes_nothing(ao_sync, store, env, capsys):
+    code, lines, err = run(ao_sync, capsys, store, "--check")
+    assert code == 1
+    assert lines == [
+        f"{shown(path.name)}: would create and publish" for path in DEFINITIONS
+    ]
+    assert store.writes() == []
+    assert f"{len(DEFINITIONS)} drifted" in err
+    assert run(ao_sync, capsys, store)[0] == 0
+    code, lines, err = run(ao_sync, capsys, store, "--check")
+    assert code == 0, err
+    assert "0 drifted" in err
+    assert lines == [
+        f"{shown(path.name)}: unchanged, published v1" for path in DEFINITIONS
+    ]
+
+
 def _cli(*args, env):
     return subprocess.run(
         [sys.executable, "-I", "tools/ao_sync.py", *args],

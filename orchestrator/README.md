@@ -224,7 +224,7 @@ every definition in this directory (standard library only, Python 3.9+):
 export AO_CLIENT_ID=nx_sa_... AO_CLIENT_SECRET=...
 python tools/ao_sync.py --url https://orchestrator.example.com \
     --aap-credential "AAP controller" --aap-integration aap-example \
-    --service-account eda-bridge [--project default] [--dry-run] [--insecure] \
+    --service-account eda-bridge [--project default] [--dry-run | --check] [--insecure] \
     [--only FILE]... [orchestrator/*.json]
 ```
 
@@ -251,7 +251,9 @@ create or when the current version has never been published. It prints
 one line per definition (`created`, `updated` or `unchanged`, and the
 published version) and `extra: <name>` for each workflow of the project that
 no file defines; `--dry-run` validates and reports the decisions without
-writing; `--only FILE`, with every file still on the command line, writes one definition without making the others
+writing; `--check` does the same and exits 1 when any definition would be
+created, updated or published, so a CI job or a schedule can say that the
+live orchestrator has drifted from the files; `--only FILE`, with every file still on the command line, writes one definition without making the others
 extras; the exit status is 1 when anything failed. Publishing a scheduled
 trigger is what creates its schedule; unpublishing deletes it.
 `GET /api/v1/workflows/{id}/versions/{version}/export` and the UI's export
@@ -343,7 +345,9 @@ sections above follow them:
   `credential_names`: the orchestrator resolves them when it publishes and
   keeps no copy, and an empty `extra_vars` is dropped as well, so a
   comparison of a file with its export leaves both out (`tools/ao_sync.py`
-  does). A node of a published definition that
+  does). The export carries a `position` on every node and trigger once
+  someone has dragged it on the canvas; the comparison ignores that too, so
+  a moved box is not a new version. A node of a published definition that
   reads `${<node>.artifacts.<key>}` fails at run time when the job did not
   publish that key, which validation cannot see.
 - An AAP node's result carries `job_id`, `job_url`, `job_status`,

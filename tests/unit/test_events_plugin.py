@@ -228,8 +228,28 @@ def test_as_list_and_truthy(events):
 def test_poll_error_shape(events):
     e = events._poll_error("audits", "array-a", RuntimeError("boom"))
     assert e == {
-        "purefa_poll_error": {"signal": "audits", "array": "array-a", "error": "boom"}
+        "purefa_poll_error": {
+            "signal": "audits",
+            "array": "array-a",
+            "error": "boom",
+            "consecutive": 1,
+            "escalate": False,
+        }
     }
+
+
+def test_poll_streak_counts_consecutive_failures_per_array_and_signal(events):
+    state = {}
+    assert events._poll_streak(state, "alerts", "a", True) == 1
+    assert events._poll_streak(state, "alerts", "a", True) == 2
+    assert events._poll_streak(state, "alerts", "b", True) == 1
+    assert events._poll_streak(state, "health", "a", True) == 1
+    # a success ends the streak; the next failure starts a new one
+    assert events._poll_streak(state, "alerts", "a", False) == 0
+    assert events._poll_streak(state, "alerts", "a", True) == 1
+    e = events._poll_error("alerts", "a", RuntimeError("x"), 10, True)
+    assert e["purefa_poll_error"]["consecutive"] == 10
+    assert e["purefa_poll_error"]["escalate"] is True
 
 
 def test_documentation_block_covers_every_argument(events):
@@ -718,6 +738,8 @@ def test_signal_loop_telemetry_polls_each_array_under_its_lock(events):
         "signal": "telemetry",
         "array": "array-b",
         "error": "arrays/space: array down",
+        "consecutive": 1,
+        "escalate": False,
     }
     assert bad.resets == 1 and good.resets == 0
     cap = got[3]["purefa_capacity"]
@@ -755,6 +777,49 @@ def test_signal_loop_other_signals_report_a_failed_array_and_carry_on(events):
     assert got[0]["purefa_poll_error"]["signal"] == "alerts"
     assert got[1]["purefa_alert"]["array"] == "array-a"
     assert bad.resets == 1
+
+
+def test_signal_loop_counts_a_streak_and_escalates_at_the_threshold(events):
+    # fail, fail, succeed, fail: the streak reaches the threshold on the
+    # second failure, the success ends it, and the next failure starts again
+    client = FakeClient(alerts=[alert("1")])
+    outcomes = iter([False, False, True, False])
+    real_get_alerts = client.get_alerts
+
+    def get_alerts(**kw):
+        return real_get_alerts(**kw) if next(outcomes, True) else FakeError("nope")
+
+    client.get_alerts = get_alerts
+    arr = LockedArray(client, "array-b")
+    got = []
+
+    async def go():
+        done = asyncio.Event()
+
+        class Q:
+            async def put(self, event):
+                got.append(event)
+                if len(got) >= 4:  # error, error, the initial alert, error
+                    done.set()
+
+        args = {"alerts_interval": 1, "poll_error_escalate": 2}
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            task = asyncio.create_task(
+                events._signal_loop(Q(), "alerts", [arr], {}, args, ex)
+            )
+            await asyncio.wait_for(done.wait(), 20)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(go())
+    errors = [e["purefa_poll_error"] for e in got if "purefa_poll_error" in e]
+    assert [(e["consecutive"], e["escalate"]) for e in errors] == [
+        (1, False),
+        (2, True),
+        (1, False),
+    ]
+    assert any("purefa_alert" in e for e in got)
 
 
 def test_normal_polls_count_from_the_cap(events):

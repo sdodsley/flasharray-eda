@@ -279,6 +279,55 @@ with the `sdodsley.flasharray_eda` collection in it, is in the activation
 workers' store, and keep it there: a later run with the example default
 disables every running activation.
 
+## Checking the activations
+
+An activation keeps the extra vars it was created with, and the seed
+renders them from the site file laid over `vars/example.yml`, so a key the
+site file has lost quietly takes the example default: the capacity
+activation carried `orchestrator.example.com` for two days that way, and
+the first handoff after the route was switched on posted to it, with
+nothing but a warning record in a job to show for it. Two things now stop
+the posting. The seed refuses to render extra vars whose
+`orchestrator_enabled` is true while `orchestrator_url` is still the
+example placeholder (unless the orchestrator credential injects it), and
+`tools/activation_audit.py` compares every `FlashArray rulebook - *`
+activation with what the seed would render today:
+
+```
+export AAP_TOKEN=...            # a platform token with EDA read (and write for --recreate)
+python tools/activation_audit.py --url https://<gateway> --vars vars/<site>.yml \
+    [--organization FlashArray] [--allow KEY]... [--recreate] [--insecure] [--json]
+```
+
+It prints one line per activation: `ok`, or the keys whose values differ,
+are missing or are extra, plus any value that is an example placeholder
+(`example.com`, documentation IP ranges, `REPLACE_AT_`) and any activation
+that is disabled or not running. `--allow KEY` accepts a placeholder a site
+means (a baseline that really is `example.com`). The exit status is 1 when
+anything is wrong, so a schedule can run it; on a platform seeded with the
+default `aap_eda_activations_enabled: false` every activation is reported
+disabled and the audit exits 1 until they are enabled. `--recreate` deletes
+each activation whose vars differ from the expected ones and creates it
+again with those vars and the same project, rulebook, decision environment,
+credentials, policies and enabled flag, waiting for it to run; a
+placeholder-only, disabled or stopped activation is reported, not
+recreated, and nothing is recreated while the expected vars themselves
+still carry a placeholder (fix the site file first). Each delete and create
+is printed as it happens, old id and new id, because the Rule Audit rows
+stay under the old id. Run it after the seed and after any change to the
+site file.
+
+The plugin counts consecutive failed polls per array and signal and sets
+`escalate: true` on `purefa_poll_error` once they reach its
+`poll_error_escalate` source argument (default 10). The health rulebook
+pages at warning on the first failure of a streak (once an hour per array);
+the other polling rulebooks record theirs at info, which the default Slack
+floor keeps in the alert log, so one unreachable array is one page rather
+than one per rulebook; every rulebook pages at critical once its own streak
+escalates (once every six hours), since a signal that fails on its own is
+worth a page. An unreachable array, a revoked token or a wrong URL reaches
+a person instead of a debug line.
+
 ## Re-running safely
 
 Run the same command again. Objects are matched by name and only

@@ -245,6 +245,22 @@ def test_seed_carries_the_fixed_job_template_names(repo_root):
     }
 
 
+def test_seed_refuses_the_orchestrator_placeholder_in_activation_vars(repo_root):
+    play = _seed(repo_root)[0]
+    names = [t.get("name", "") for t in play["tasks"]]
+    guard = next(
+        t
+        for t in play["tasks"]
+        if t.get("name", "").startswith("Refuse example placeholders")
+    )
+    that = "\n".join(guard["ansible.builtin.assert"]["that"])
+    for needle in ("orchestrator_enabled", "orchestrator_seeded", "example.com"):
+        assert needle in that
+    assert names.index(guard["name"]) < names.index(
+        "One rulebook activation per platform rulebook"
+    )
+
+
 def test_seed_workflow_has_request_approval_reclaim(repo_root):
     play = _seed(repo_root)[0]
     workflow = next(

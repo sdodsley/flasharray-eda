@@ -583,6 +583,21 @@
              | items2dict | combine({'aap_organization': aap_organization})
              | to_nice_yaml(indent=2, width=1000) }}
 
+    # A key the site file lacks takes the example default, and one of those
+    # defaults is a placeholder that an activation would act on: the capacity
+    # and replication rulebooks would post their handoffs to
+    # orchestrator.example.com. Refuse it rather than seed it.
+    - name: Refuse example placeholders in the extra vars the activations would carry
+      ansible.builtin.assert:
+        that:
+          - >-
+            not ((activation_extra_vars | from_yaml).orchestrator_enabled | default(false) | bool)
+            or (orchestrator_seeded | bool)
+            or ('example.com' not in ((activation_extra_vars | from_yaml).orchestrator_url | default('')))
+        fail_msg: >-
+          orchestrator_enabled is true but orchestrator_url is still the example placeholder:
+          set it in {{ aap_eda_vars_file }} or seed the orchestrator credential (AO_CLIENT_ID)
+
     # ansible.eda.rulebook_activation cannot update an activation and, in
     # 2.13, creates it enabled whatever `enabled` says; so existing ones are
     # skipped and the enabled flag is enforced through the API afterwards.

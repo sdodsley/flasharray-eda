@@ -292,10 +292,18 @@ def normalise(doc):
     at publish time and keeps no copy), so the field is left out of the
     comparison on both sides; a changed credential name alone does not
     count as a changed definition. An empty `extra_vars` is dropped from
-    the export as well."""
+    the export as well, and so is `position`, the canvas layout the UI
+    saves on a node or trigger once someone has dragged it: a moved box is
+    not a changed definition."""
     doc = json.loads(json.dumps(doc))
-    for node in doc.get("nodes", []) if isinstance(doc, dict) else []:
-        params = node.get("parameters") if isinstance(node, dict) else None
+    items = []
+    if isinstance(doc, dict):
+        items = list(doc.get("nodes") or []) + list(doc.get("triggers") or [])
+    for node in items:
+        if not isinstance(node, dict):
+            continue
+        node.pop("position", None)
+        params = node.get("parameters")
         if isinstance(params, dict):
             params.pop("credential_names", None)
             if params.get("extra_vars") == {}:
@@ -520,9 +528,16 @@ def main(argv=None):
         help="validate and report the create, update and publish decisions; write nothing",
     )
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="like --dry-run, and exit 1 when any definition would be created, "
+        "updated or published: for CI and schedules",
+    )
+    parser.add_argument(
         "--insecure", action="store_true", help="do not verify the TLS certificate"
     )
     args = parser.parse_args(argv)
+    dry_run = args.dry_run or args.check
 
     paths = _expand(parser, args.files or [DEFAULT_PATTERN])
     selected = _select(parser, paths, args.only)
@@ -581,7 +596,7 @@ def main(argv=None):
     for workflow in workflows:
         by_name.setdefault(workflow.get("name"), []).append(workflow)
 
-    done = failed = 0
+    done = failed = drift = 0
     for definition in definitions:
         if definition.path not in selected:
             continue
@@ -603,7 +618,7 @@ def main(argv=None):
                     project["id"],
                     by_name.get(definition.name, []),
                     doc,
-                    args.dry_run,
+                    dry_run,
                 )
             except ValidationError as exc:
                 definition.error = str(exc)
@@ -612,6 +627,8 @@ def main(argv=None):
                 definition.error = str(exc)
         if definition.error is None:
             done += 1
+            if "would " in text:
+                drift += 1
             print(f"{definition.path}: {text}")
         else:
             failed += 1
@@ -624,12 +641,13 @@ def main(argv=None):
     for name in extras:
         print(f"extra: {name} (in the project, no definition file; left alone)")
 
-    note = " (dry run, nothing written)" if args.dry_run else ""
+    note = " (dry run, nothing written)" if dry_run else ""
+    drifted = f", {drift} drifted" if args.check else ""
     print(
-        f"ao_sync: {done} ok, {failed} failed, {len(extras)} extra{note}",
+        f"ao_sync: {done} ok, {failed} failed, {len(extras)} extra{drifted}{note}",
         file=sys.stderr,
     )
-    return 1 if failed else 0
+    return 1 if failed or (args.check and drift) else 0
 
 
 if __name__ == "__main__":
