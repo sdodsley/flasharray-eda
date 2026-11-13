@@ -9,6 +9,23 @@ Approve and Reject buttons, and carries the click back as the decision, with
 the Slack user's name in the decision notes. Slack Socket Mode: the bot opens
 an outbound websocket, so it needs no public endpoint and no firewall change.
 
+The card follows the approval to its end. While it waits, the bot reminds the
+channel in the card's thread at half and at ninety percent of the decision
+window (the second reminder mentions the approvers, or SLACK_ESCALATE, and is
+shown in the channel too). When the approval leaves the queue the bot reads
+its final status and rewrites the card: approved or rejected by whom (a
+decision in a UI as much as a click here), cancelled, or expired. An expired
+orchestrator approval fails its execution with nothing done and nobody told,
+so it also gets a critical message in the channel and a critical notify
+record through the controller's notify template; a timed-out controller
+approval sends its workflow down the failure edge, whose own notify node is
+the record, so it gets the channel message only. A read of the final status
+that fails is retried on the next polls, and an approval still unreadable
+once its window has passed is treated as expired rather than forgotten. The
+cards are kept under STATE_DIR, so a restart edits the cards it posted
+instead of posting them again and still closes them when their approvals
+end.
+
 Environment
 -----------
 SLACK_BOT_TOKEN      bot token (xoxb-...) with chat:write; the bot must be a
@@ -18,6 +35,15 @@ SLACK_APP_TOKEN      app-level token (xapp-...) with connections:write;
 SLACK_CHANNEL        channel name or id the cards go to
 SLACK_APPROVERS      comma-separated Slack user ids allowed to click; empty
                      lets anyone in the channel decide (a lab setting)
+SLACK_ESCALATE       text put in front of the ninety-percent reminder and the
+                     expiry message, for example <!subteam^S0123> or <!here>;
+                     empty mentions SLACK_APPROVERS, or nobody
+STATE_DIR            directory for cards.json, the record of the cards the bot
+                     posted; unset keeps the record in memory only
+NOTIFY_TEMPLATE      the controller job template that writes the critical
+                     notify record of an expired orchestrator approval
+                     (default "FlashArray - notify"; empty = no record; needs
+                     AAP_HOST and a token with execute on it)
 POLL_SECONDS         how often the approval queues are read (default 30)
 AO_URL               orchestrator API base, e.g. https://orchestrator:18000;
                      unset = orchestrator approvals are not watched
@@ -30,7 +56,7 @@ AAP_HOST             platform gateway, e.g. https://aap.example.com; unset =
                      controller approvals are not watched
 AAP_UI_URL           where the controller "open" link points (default AAP_HOST)
 AAP_TOKEN / AAP_TOKEN_FILE        a controller token with approve rights on
-                     the workflows
+                     the workflows (and execute on NOTIFY_TEMPLATE)
 AAP_VERIFY_CERTS     true (default) or false
 
 Every *_FILE variable reads the value from a file, so a container can mount
@@ -40,17 +66,20 @@ logged.
 Run
 ---
     pip install slack_sdk
-    python slack/approval_bot.py
+    python slack/approval_bot.py [--state-dir DIR]
 
 or as a container beside the other listeners (slack/README.md). The Slack
 SDK is imported only by main(), so the card and decision logic can be unit
 tested without it.
 """
 
+import argparse
+import datetime
 import json
 import logging
 import os
 import pathlib
+import re
 import ssl
 import threading
 import time
@@ -64,22 +93,190 @@ APPROVE = "approve"
 REJECT = "reject"
 ACTION_PREFIX = "flasharray_eda_"
 
+# states of an approval, whichever system holds it
+PENDING = "pending"
+APPROVED = "approved"
+REJECTED = "rejected"
+EXPIRED = "expired"
+CANCELLED = "cancelled"
+UNKNOWN = "unknown"
+FINAL = (APPROVED, REJECTED, EXPIRED, CANCELLED)
+
+# fractions of the decision window at which the channel is reminded; the
+# last one mentions the approvers and is shown in the channel
+REMINDERS = (0.5, 0.9)
+ESCALATE_AT = REMINDERS[-1]
+# polls a final-status read may fail before the end is judged from the window
+CLOSE_TRIES = 3
+PAGE_LIMIT = 100
+MAX_PAGES = 50
+STATE_FILE = "cards.json"
+DEFAULT_NOTIFY_TEMPLATE = "FlashArray - notify"
+SLACK_NOTE = re.compile(r"via Slack by (.+?) \(")
+
+
+def parse_time(text):
+    """Seconds since the epoch for an ISO 8601 time with Z, an offset or a
+    fraction; None for anything else."""
+    if not text or not isinstance(text, str):
+        return None
+    value = text.strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    if "." in value:
+        head, _, tail = value.partition(".")
+        digits = ""
+        rest = ""
+        for i, ch in enumerate(tail):
+            if ch.isdigit():
+                digits += ch
+            else:
+                rest = tail[i:]
+                break
+        else:
+            rest = ""
+        value = f"{head}.{(digits + '000000')[:6]}{rest}"
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.timestamp()
+
+
+def _human(seconds):
+    seconds = max(0, int(seconds))
+    if seconds >= 7200:
+        return f"{seconds // 3600} h"
+    if seconds >= 120:
+        return f"{seconds // 60} min"
+    return f"{seconds} s"
+
 
 class Approval:
     """One pending approval, whichever system holds it."""
 
-    def __init__(self, system, ident, title, body, link="", expires="", workflow=""):
+    def __init__(
+        self,
+        system,
+        ident,
+        title,
+        body,
+        link="",
+        expires="",
+        workflow="",
+        created="",
+    ):
         self.system = system  # "orchestrator" or "controller"
         self.id = str(ident)
         self.title = title
         self.body = body
         self.link = link
-        self.expires = expires
+        self.expires = expires  # ISO text, the end of the decision window
         self.workflow = workflow
+        self.created = created  # ISO text, the start of the window
 
     @property
     def key(self):
         return f"{self.system}:{self.id}"
+
+    def window(self):
+        """(start, end) of the decision window as epoch seconds, or None when
+        the system gave no usable times."""
+        start, end = parse_time(self.created), parse_time(self.expires)
+        if start is None or end is None or end <= start:
+            return None
+        return start, end
+
+    def to_dict(self):
+        return {
+            "system": self.system,
+            "id": self.id,
+            "title": self.title,
+            "body": self.body,
+            "link": self.link,
+            "expires": self.expires,
+            "workflow": self.workflow,
+            "created": self.created,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            data.get("system", ""),
+            data.get("id", ""),
+            data.get("title", ""),
+            data.get("body", ""),
+            link=data.get("link", ""),
+            expires=data.get("expires", ""),
+            workflow=data.get("workflow", ""),
+            created=data.get("created", ""),
+        )
+
+
+class Card:
+    """A card the bot posted: where it is, what it is about, what has been
+    said in its thread, and how many times its end could not be read."""
+
+    def __init__(self, ts, channel, approval, posted_at=0.0, reminded=None, closing=0):
+        self.ts = ts
+        self.channel = channel
+        self.approval = approval
+        self.posted_at = posted_at
+        self.reminded = list(reminded or [])
+        self.closing = int(closing or 0)
+
+    def to_dict(self):
+        return {
+            "ts": self.ts,
+            "channel": self.channel,
+            "approval": self.approval.to_dict(),
+            "posted_at": self.posted_at,
+            "reminded": self.reminded,
+            "closing": self.closing,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            data.get("ts", ""),
+            data.get("channel", ""),
+            Approval.from_dict(data.get("approval") or {}),
+            posted_at=float(data.get("posted_at") or 0.0),
+            reminded=data.get("reminded") or [],
+            closing=data.get("closing") or 0,
+        )
+
+
+class CardStore:
+    """The posted cards as a JSON file, rewritten whole on every change
+    (a temporary file renamed over the old one). A missing or unreadable
+    file is an empty record."""
+
+    def __init__(self, directory):
+        self.path = pathlib.Path(directory) / STATE_FILE
+
+    def load(self):
+        try:
+            data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        cards = {}
+        for key, value in data.items():
+            try:
+                cards[key] = Card.from_dict(value)
+            except (AttributeError, TypeError, ValueError):
+                logger.warning("state: card %s is unreadable; dropped", key)
+        return cards
+
+    def save(self, cards):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({k: c.to_dict() for k, c in cards.items()}, indent=1))
+        os.replace(tmp, self.path)
 
 
 def _read(value_env, file_env=None):
@@ -130,7 +327,10 @@ def http_json(
 
 
 class Orchestrator:
-    """Pending approvals of the automation orchestrator and the decision call."""
+    """Pending approvals of the automation orchestrator, their final status
+    and the decision call (API 1.3.1: an approval carries name, prompt,
+    execution_id, created_at, timeout_at, status, decided_by and
+    decision_notes; the list pages with limit and cursor)."""
 
     def __init__(
         self,
@@ -151,6 +351,7 @@ class Orchestrator:
         self.http = http
         self.token = ""
         self.token_at = 0.0
+        self.workflows = {}  # execution id -> workflow name
 
     name = "orchestrator"
 
@@ -184,29 +385,76 @@ class Orchestrator:
         self._login()
         return {"Authorization": "Bearer " + self.token}
 
+    def _workflow_name(self, execution_id):
+        """The workflow an execution runs, read once per execution; the
+        execution id's first characters when the read fails."""
+        if not execution_id:
+            return ""
+        if execution_id not in self.workflows:
+            status, body = self.http(
+                f"{self.base}/api/v1/executions/{execution_id}",
+                headers=self._headers(),
+                verify=self.verify,
+            )
+            name = body.get("workflow_name") if isinstance(body, dict) else None
+            self.workflows[execution_id] = (
+                name if status == 200 and name else execution_id[:8]
+            )
+            if len(self.workflows) > 1000:  # a long-lived bot forgets old executions
+                self.workflows.pop(next(iter(self.workflows)))
+        return self.workflows[execution_id]
+
     def pending(self):
+        out = []
+        cursor = ""
+        for _ in range(MAX_PAGES):
+            url = f"{self.base}/api/v1/approvals?status=pending&limit={PAGE_LIMIT}"
+            if cursor:
+                url += "&cursor=" + urllib.parse.quote(cursor)
+            status, body = self.http(url, headers=self._headers(), verify=self.verify)
+            if status != 200 or not isinstance(body, dict):
+                raise RuntimeError(f"orchestrator approvals: HTTP {status}")
+            for a in body.get("resources", []):
+                out.append(
+                    Approval(
+                        "orchestrator",
+                        a.get("id"),
+                        a.get("name") or a.get("node_name") or "Approval",
+                        a.get("prompt") or "",
+                        link=f"{self.ui}/approvals",
+                        expires=a.get("timeout_at") or a.get("expires_at") or "",
+                        workflow=a.get("workflow_name")
+                        or self._workflow_name(a.get("execution_id") or ""),
+                        created=a.get("created_at") or "",
+                    )
+                )
+            cursor = body.get("next_cursor") or ""
+            if not cursor:
+                break
+        return out
+
+    def final(self, ident):
+        """How an approval ended: {status, who, note, at}. PENDING when the
+        orchestrator still holds it open, UNKNOWN when it answers a state the
+        bot does not know; a read that fails raises."""
         status, body = self.http(
-            self.base + "/api/v1/approvals?status=pending&limit=100",
+            f"{self.base}/api/v1/approvals/{ident}",
             headers=self._headers(),
             verify=self.verify,
         )
         if status != 200 or not isinstance(body, dict):
-            raise RuntimeError(f"orchestrator approvals: HTTP {status}")
-        out = []
-        for a in body.get("resources", []):
-            out.append(
-                Approval(
-                    "orchestrator",
-                    a.get("id"),
-                    a.get("node_name") or a.get("name") or "Approval",
-                    a.get("prompt") or "",
-                    link=f"{self.ui}/approvals",
-                    expires=a.get("expires_at") or a.get("decision_deadline") or "",
-                    workflow=a.get("workflow_name")
-                    or (a.get("execution_id") or "")[:8],
-                )
-            )
-        return out
+            raise RuntimeError(f"orchestrator approval {ident}: HTTP {status}")
+        state = str(body.get("status") or "").lower()
+        if state == "canceled":
+            state = CANCELLED
+        who = body.get("decided_by")
+        who = who.get("name", "") if isinstance(who, dict) else str(who or "")
+        return {
+            "status": state if state in FINAL or state == PENDING else UNKNOWN,
+            "who": who,
+            "note": body.get("decision_notes") or "",
+            "at": body.get("decided_at") or "",
+        }
 
     def decide(self, ident, approve, note):
         status, body = self.http(
@@ -227,14 +475,25 @@ class Orchestrator:
 
 
 class Controller:
-    """Pending workflow approvals of automation controller and the decision call."""
+    """Pending workflow approvals of automation controller, their final
+    status, the decision call and the notify launch."""
 
-    def __init__(self, base, token, verify=True, http=http_json, ui_url=""):
+    def __init__(
+        self,
+        base,
+        token,
+        verify=True,
+        http=http_json,
+        ui_url="",
+        notify_template=DEFAULT_NOTIFY_TEMPLATE,
+    ):
         self.base = base.rstrip("/")
         self.token = token
         self.verify = verify
         self.http = http
         self.ui_url = (ui_url or base).rstrip("/")
+        self.notify_template = notify_template
+        self.notify_template_id = None
 
     name = "controller"
 
@@ -242,33 +501,68 @@ class Controller:
         return {"Authorization": "Bearer " + self.token}
 
     def pending(self):
+        out = []
+        url = (
+            f"{self.base}/api/controller/v2/workflow_approvals/"
+            f"?status=pending&page_size={PAGE_LIMIT}"
+        )
+        for _ in range(MAX_PAGES):
+            status, body = self.http(url, headers=self._headers(), verify=self.verify)
+            if status != 200 or not isinstance(body, dict):
+                raise RuntimeError(f"controller approvals: HTTP {status}")
+            for a in body.get("results", []):
+                wj = (a.get("summary_fields") or {}).get("workflow_job") or {}
+                out.append(
+                    Approval(
+                        "controller",
+                        a.get("id"),
+                        a.get("name") or "Workflow approval",
+                        a.get("description") or "",
+                        link=(
+                            f"{self.ui_url}/execution/jobs/workflow/{wj.get('id')}/output"
+                            if wj.get("id")
+                            else f"{self.ui_url}/execution/jobs"
+                        ),
+                        expires=a.get("approval_expiration") or "",
+                        workflow=wj.get("name") or "",
+                        created=a.get("created") or "",
+                    )
+                )
+            nxt = body.get("next")
+            if not nxt:
+                break
+            url = nxt if str(nxt).startswith("http") else self.base + str(nxt)
+        return out
+
+    def final(self, ident):
+        """How a workflow approval ended: successful is approved, failed is
+        expired when it timed out and rejected otherwise, canceled is
+        cancelled, pending is still open; a read that fails raises."""
         status, body = self.http(
-            self.base
-            + "/api/controller/v2/workflow_approvals/?status=pending&page_size=100",
+            f"{self.base}/api/controller/v2/workflow_approvals/{ident}/",
             headers=self._headers(),
             verify=self.verify,
         )
         if status != 200 or not isinstance(body, dict):
-            raise RuntimeError(f"controller approvals: HTTP {status}")
-        out = []
-        for a in body.get("results", []):
-            wj = (a.get("summary_fields") or {}).get("workflow_job") or {}
-            out.append(
-                Approval(
-                    "controller",
-                    a.get("id"),
-                    a.get("name") or "Workflow approval",
-                    a.get("description") or "",
-                    link=(
-                        f"{self.ui_url}/execution/jobs/workflow/{wj.get('id')}/output"
-                        if wj.get("id")
-                        else f"{self.ui_url}/execution/jobs"
-                    ),
-                    expires=a.get("approval_expiration") or "",
-                    workflow=wj.get("name") or "",
-                )
-            )
-        return out
+            raise RuntimeError(f"controller approval {ident}: HTTP {status}")
+        state = str(body.get("status") or "")
+        if state == "successful":
+            outcome = APPROVED
+        elif state == "failed":
+            outcome = EXPIRED if body.get("timed_out") else REJECTED
+        elif state == "canceled":
+            outcome = CANCELLED
+        elif state == "pending":
+            outcome = PENDING
+        else:
+            outcome = UNKNOWN
+        who = (body.get("summary_fields") or {}).get("approved_or_denied_by") or {}
+        return {
+            "status": outcome,
+            "who": who.get("username", "") if isinstance(who, dict) else "",
+            "note": "",
+            "at": body.get("finished") or "",
+        }
 
     def decide(self, ident, approve, note):
         verb = "approve" if approve else "deny"
@@ -284,15 +578,67 @@ class Controller:
                 f"controller {verb} refused: HTTP {status} {str(body)[:120]}"
             )
 
+    def notify(self, subject, detail, severity="critical", target_array=""):
+        """Launch the notify template with one record; the job id. Raises
+        RuntimeError when the template is unknown or the launch refused."""
+        if not self.notify_template:
+            raise RuntimeError("no notify template configured")
+        if self.notify_template_id is None:
+            status, body = self.http(
+                self.base
+                + "/api/controller/v2/job_templates/?name="
+                + urllib.parse.quote(self.notify_template),
+                headers=self._headers(),
+                verify=self.verify,
+            )
+            results = body.get("results") if isinstance(body, dict) else None
+            if status != 200 or not results:
+                raise RuntimeError(
+                    f"notify template {self.notify_template!r} not found: HTTP {status}"
+                )
+            self.notify_template_id = results[0]["id"]
+        status, body = self.http(
+            f"{self.base}/api/controller/v2/job_templates/{self.notify_template_id}/launch/",
+            "POST",
+            {
+                "extra_vars": {
+                    "severity": severity,
+                    "subject": subject[:200],
+                    "detail": detail[:2000],
+                    "target_array": target_array,
+                }
+            },
+            headers=self._headers(),
+            verify=self.verify,
+        )
+        if status >= 300 or not isinstance(body, dict):
+            raise RuntimeError(
+                f"notify launch refused: HTTP {status} {str(body)[:120]}"
+            )
+        return body.get("id")
 
-def build_card(approval):
-    """Slack blocks for a pending approval: title, prompt, context and the two buttons."""
-    value = json.dumps({"system": approval.system, "id": approval.id})
+
+def expiry_outcome(approval):
+    """What an expiry meant, per system: the orchestrator fails the execution
+    at the node; the controller marks the node failed and the workflow takes
+    its failure edge."""
+    if approval.system == Controller.name:
+        return "the approval node timed out and the workflow took its failure edge"
+    return "the execution failed at this node and nothing was done"
+
+
+def _context_line(approval):
     context = [f"*{approval.system}*"]
     if approval.workflow:
         context.append(f"workflow: {approval.workflow}")
     if approval.expires:
         context.append(f"expires: {approval.expires}")
+    return " | ".join(context) + (f" | <{approval.link}|open>" if approval.link else "")
+
+
+def build_card(approval):
+    """Slack blocks for a pending approval: title, prompt, context and the two buttons."""
+    value = json.dumps({"system": approval.system, "id": approval.id})
     body = approval.body[:2900] or "(no prompt)"
     blocks = [
         {
@@ -305,13 +651,7 @@ def build_card(approval):
         {"type": "section", "text": {"type": "mrkdwn", "text": body}},
         {
             "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": " | ".join(context)
-                    + (f" | <{approval.link}|open>" if approval.link else ""),
-                }
-            ],
+            "elements": [{"type": "mrkdwn", "text": _context_line(approval)}],
         },
         {
             "type": "actions",
@@ -367,6 +707,61 @@ def decided_card(approval, decision, who, note=""):
     ]
 
 
+def closed_card(approval, status, who="", note=""):
+    """The card after the approval ended without a click here: expired,
+    cancelled, or ended in a way the system did not say."""
+    if status == EXPIRED:
+        head = f"Expired: {approval.title}"
+        line = f":rotating_light: nobody decided within the window; {expiry_outcome(approval)}"
+    elif status == CANCELLED:
+        head = f"Cancelled: {approval.title}"
+        line = ":heavy_multiplication_x: the execution was cancelled"
+    else:
+        head = f"Decided elsewhere: {approval.title}"
+        line = "decided outside Slack or expired"
+    if who:
+        line += f" ({who})"
+    if note and status != EXPIRED:
+        line += f": {note[:200]}"
+    return [
+        {"type": "header", "text": {"type": "plain_text", "text": head[:150]}},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": approval.body[:2900] or "(no prompt)"},
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"{line} | *{approval.system}*"}],
+        },
+    ]
+
+
+def reminder_text(approval, fraction, remaining, mention=""):
+    """The thread reply at a fraction of the window."""
+    lead = f"{mention} " if mention and fraction >= ESCALATE_AT else ""
+    verb = "Still waiting" if fraction < ESCALATE_AT else "Last call"
+    text = (
+        f"{lead}{verb}: *{approval.title}* ({approval.system}"
+        + (f", {approval.workflow}" if approval.workflow else "")
+        + f") has {_human(remaining)} left before it expires."
+    )
+    if approval.link:
+        text += f" <{approval.link}|open>"
+    return text
+
+
+def expiry_text(approval, mention=""):
+    """The channel message for an approval nobody decided."""
+    lead = f"{mention} " if mention else ""
+    return (
+        f"{lead}:rotating_light: *Approval expired, nobody decided*: {approval.title}"
+        f" ({approval.system}"
+        + (f", {approval.workflow}" if approval.workflow else "")
+        + f"). {expiry_outcome(approval).capitalize()}."
+        + (f" <{approval.link}|open>" if approval.link else "")
+    )
+
+
 def parse_action(payload):
     """(system, id, decision, user_id, user_name, channel, message_ts) from a
     Slack block_actions payload, or None when it is not one of our buttons."""
@@ -402,70 +797,243 @@ def allowed(user_id, approvers):
 
 
 class Bot:
-    """Poll the systems, post cards for new approvals, carry decisions back."""
+    """Poll the systems, post cards for new approvals, remind, carry
+    decisions back and close the cards when their approvals end."""
 
-    def __init__(self, web, channel, systems, approvers=(), poll_seconds=30):
+    def __init__(
+        self,
+        web,
+        channel,
+        systems,
+        approvers=(),
+        poll_seconds=30,
+        store=None,
+        escalate="",
+        now=time.time,
+    ):
         self.web = web
         self.channel = channel
         self.systems = {s.name: s for s in systems}
         self.approvers = set(approvers)
         self.poll_seconds = poll_seconds
-        self.posted = {}  # approval key -> (message ts, Approval)
+        self.store = store
+        self.escalate = escalate
+        self.now = now
+        self.posted = store.load() if store else {}  # approval key -> Card
+        self.store_error = ""
         self.lock = threading.Lock()
+        if self.posted:
+            logger.info("state: %d card(s) remembered", len(self.posted))
+
+    def _save(self):
+        """Write the record; called with the lock held. A failure is said
+        once per streak, not on every change."""
+        if self.store is None:
+            return
+        try:
+            self.store.save(self.posted)
+        except OSError as exc:
+            if str(exc) != self.store_error:
+                logger.warning("state: could not write %s: %s", self.store.path, exc)
+            self.store_error = str(exc)
+            return
+        if self.store_error:
+            logger.info("state: %s is written again", self.store.path)
+        self.store_error = ""
+
+    def _mention(self):
+        if self.escalate:
+            return self.escalate
+        return " ".join(f"<@{u}>" for u in sorted(self.approvers))
+
+    def _controller(self):
+        return self.systems.get(Controller.name)
 
     def poll_once(self):
-        seen = set()
         for system in self.systems.values():
             try:
                 pending = system.pending()
             except Exception as exc:  # the other system still gets polled
                 logger.warning("%s: %s", system.name, exc)
                 continue
+            seen = set()
             for approval in pending:
                 seen.add(approval.key)
                 with self.lock:
-                    if approval.key in self.posted:
-                        continue
-                    response = self.web.chat_postMessage(
-                        channel=self.channel,
-                        text=f"Approval needed: {approval.title}",
-                        blocks=build_card(approval),
-                    )
-                    # chat.update wants the channel id, which the post returns
-                    self.posted[approval.key] = (
-                        response["ts"],
-                        approval,
-                        response.get("channel") or self.channel,
-                    )
-                    logger.info("posted %s", approval.key)
-            # approvals decided elsewhere (the UI, a timeout) lose their buttons
+                    card = self.posted.get(approval.key)
+                    if card is None:
+                        response = self.web.chat_postMessage(
+                            channel=self.channel,
+                            text=f"Approval needed: {approval.title}",
+                            blocks=build_card(approval),
+                        )
+                        # chat.update wants the channel id, which the post returns
+                        card = Card(
+                            response["ts"],
+                            response.get("channel") or self.channel,
+                            approval,
+                            posted_at=self.now(),
+                        )
+                        self.posted[approval.key] = card
+                        self._save()
+                        logger.info("posted %s", approval.key)
+                    else:
+                        # a window the system gave us later (or a restart) is kept
+                        if approval.expires and not card.approval.expires:
+                            card.approval.expires = approval.expires
+                        if approval.created and not card.approval.created:
+                            card.approval.created = approval.created
+                self._remind(card)
+            # approvals that left the queue: read how they ended
             with self.lock:
-                stale = [
+                gone = [
                     k
                     for k in self.posted
                     if k.startswith(system.name + ":") and k not in seen
                 ]
-                for key in stale:
-                    ts, approval, channel = self.posted.pop(key)
-                    try:
-                        self.web.chat_update(
-                            channel=channel,
-                            ts=ts,
-                            text=f"Decided elsewhere: {approval.title}",
-                            blocks=[
-                                {
-                                    "type": "section",
-                                    "text": {
-                                        "type": "mrkdwn",
-                                        "text": f"*{approval.title}* ({approval.system}) was decided outside Slack or expired.",
-                                    },
-                                },
-                            ],
-                        )
-                    except (
-                        Exception
-                    ) as exc:  # the card keeps its buttons; a click is refused by the system
-                        logger.warning("could not update the card for %s: %s", key, exc)
+            for key in gone:
+                self._close(system, key)
+
+    def _remind(self, card):
+        """One thread reply per poll at most: the latest REMINDERS fraction
+        that is due and not yet said; every fraction passed is recorded, so a
+        card first seen late says one thing, not two."""
+        window = card.approval.window()
+        if window is None:
+            return
+        start, end = window
+        now = self.now()
+        if now >= end:
+            return
+        elapsed = (now - start) / (end - start)
+        due = [f for f in REMINDERS if f not in card.reminded and elapsed >= f]
+        if not due:
+            return
+        fraction = due[-1]
+        escalate = fraction >= ESCALATE_AT
+        try:
+            self.web.chat_postMessage(
+                channel=card.channel,
+                thread_ts=card.ts,
+                reply_broadcast=escalate,
+                text=reminder_text(card.approval, fraction, end - now, self._mention()),
+            )
+        except Exception as exc:
+            logger.warning("reminder for %s failed: %s", card.approval.key, exc)
+            return
+        with self.lock:
+            card.reminded.extend(due)
+            self._save()
+        logger.info(
+            "reminded %s at %d%% of its window", card.approval.key, fraction * 100
+        )
+
+    def _close(self, system, key):
+        """Rewrite the card of an approval that is no longer in the queue
+        after reading how it ended. A read that fails leaves the card for the
+        next poll, CLOSE_TRIES times; after that an approval past its window
+        is treated as expired, any other as unknown. A detail that still says
+        pending (a page boundary, a hiccup in the list) keeps the card as it
+        is. The card is forgotten only once the outcome is known, and an
+        expired one is paged."""
+        with self.lock:
+            card = self.posted.get(key)
+        if card is None:
+            return
+        approval = card.approval
+        try:
+            final = system.final(approval.id)
+        except Exception as exc:
+            card.closing += 1
+            logger.warning(
+                "final status of %s (try %d of %d): %s",
+                key,
+                card.closing,
+                CLOSE_TRIES,
+                exc,
+            )
+            if card.closing < CLOSE_TRIES:
+                with self.lock:
+                    self._save()
+                return
+            window = approval.window()
+            status = EXPIRED if window and self.now() >= window[1] else UNKNOWN
+            logger.warning("%s: its end cannot be read; treated as %s", key, status)
+            final = {"status": status, "who": "", "note": "", "at": ""}
+        if final["status"] == PENDING:
+            logger.warning(
+                "%s is still pending although the list left it out; kept", key
+            )
+            return
+        status = final["status"]
+        if status in (APPROVED, REJECTED):
+            decision = APPROVE if status == APPROVED else REJECT
+            clicked = SLACK_NOTE.match(final["note"] or "")
+            if clicked:
+                who, note = clicked.group(1), "Slack"
+            else:
+                who = final["who"] or f"someone in the {approval.system}"
+                note = f"the {approval.system}"
+            text = f"{status} {approval.title} by {who}"
+            blocks = decided_card(approval, decision, who, note)
+        else:
+            head = status.capitalize() if status != UNKNOWN else "Decided elsewhere"
+            text = f"{head}: {approval.title}"
+            blocks = closed_card(approval, status, final["who"], final["note"])
+        try:
+            self.web.chat_update(
+                channel=card.channel, ts=card.ts, text=text, blocks=blocks
+            )
+        except (
+            Exception
+        ) as exc:  # the card keeps its buttons; a click is refused by the system
+            logger.warning("could not update the card for %s: %s", key, exc)
+        with self.lock:
+            self.posted.pop(key, None)
+            self._save()
+        logger.info(
+            "%s ended: %s%s", key, status, f" by {final['who']}" if final["who"] else ""
+        )
+        if status == EXPIRED:
+            self._page_expiry(card)
+
+    def _page_expiry(self, card):
+        """A critical message in the channel for an approval nobody decided,
+        and for an orchestrator approval a critical notify record as well
+        (a controller workflow's own failure-edge notify is its record)."""
+        approval = card.approval
+        try:
+            self.web.chat_postMessage(
+                channel=card.channel,
+                text=expiry_text(approval, self._mention()),
+                thread_ts=card.ts,
+                reply_broadcast=True,
+            )
+        except Exception as exc:
+            logger.warning("expiry message for %s failed: %s", approval.key, exc)
+        if approval.system == Controller.name:
+            return
+        controller = self._controller()
+        if controller is None or not controller.notify_template:
+            logger.warning(
+                "no notify record for the expired %s: no controller or no template",
+                approval.key,
+            )
+            return
+        detail = (
+            f"{approval.system} approval '{approval.title}'"
+            + (f" of workflow {approval.workflow}" if approval.workflow else "")
+            + (f" expired at {approval.expires}" if approval.expires else " expired")
+            + f": nobody decided within the window, so {expiry_outcome(approval)}."
+            + (f" {approval.link}" if approval.link else "")
+        )
+        try:
+            job = controller.notify(
+                f"approval expired, nobody decided: {approval.title}", detail
+            )
+            logger.info("notify record for %s: job %s", approval.key, job)
+        except Exception as exc:
+            logger.warning("notify record for %s failed: %s", approval.key, exc)
 
     def handle_action(self, payload):
         parsed = parse_action(payload)
@@ -485,8 +1053,10 @@ class Bot:
             logger.warning("refused %s by %s", key, user_id)
             return "refused"
         with self.lock:
-            entry = self.posted.get(key)
-        approval = entry[1] if entry else Approval(system_name, ident, "approval", "")
+            card = self.posted.get(key)
+        approval = (
+            card.approval if card else Approval(system_name, ident, "approval", "")
+        )
         note = f"via Slack by {user_name} ({user_id})"
         try:
             system.decide(ident, decision == APPROVE, note)
@@ -498,14 +1068,20 @@ class Bot:
             )
             logger.warning("decision failed for %s: %s", key, exc)
             return "failed"
-        self.web.chat_update(
-            channel=channel or (entry[2] if entry else self.channel),
-            ts=ts or (entry[0] if entry else None),
-            text=f"{decision} {approval.title} by {user_name}",
-            blocks=decided_card(approval, decision, user_name, "Slack"),
-        )
+        # decided: the card is ours to rewrite, so the poller's sweep must
+        # not see it any more
         with self.lock:
             self.posted.pop(key, None)
+            self._save()
+        try:
+            self.web.chat_update(
+                channel=channel or (card.channel if card else self.channel),
+                ts=ts or (card.ts if card else None),
+                text=f"{decision} {approval.title} by {user_name}",
+                blocks=decided_card(approval, decision, user_name, "Slack"),
+            )
+        except Exception as exc:  # the decision stands; the card keeps its buttons
+            logger.warning("could not update the card for %s: %s", key, exc)
         logger.info("%s %s by %s", decision, key, user_id)
         return decision
 
@@ -541,12 +1117,26 @@ def systems_from_env():
                 _read("AAP_TOKEN", "AAP_TOKEN_FILE"),
                 verify=_truthy(os.environ.get("AAP_VERIFY_CERTS")),
                 ui_url=os.environ.get("AAP_UI_URL", ""),
+                notify_template=os.environ.get(
+                    "NOTIFY_TEMPLATE", DEFAULT_NOTIFY_TEMPLATE
+                ),
             )
         )
     return systems
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="approval_bot", description="Slack approval bot for flasharray-eda"
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=os.environ.get("STATE_DIR", ""),
+        metavar="DIR",
+        help="directory for cards.json, the record of the posted cards "
+        "(default: STATE_DIR in the environment; unset keeps it in memory)",
+    )
+    args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
@@ -574,6 +1164,8 @@ def main():
         systems,
         approvers,
         int(os.environ.get("POLL_SECONDS", "30")),
+        store=CardStore(args.state_dir) if args.state_dir else None,
+        escalate=os.environ.get("SLACK_ESCALATE", ""),
     )
 
     def on_request(client, req):
@@ -590,9 +1182,10 @@ def main():
     poller.start()
     socket.connect()
     logger.info(
-        "connected; watching %s; approvers %s",
+        "connected; watching %s; approvers %s; state %s",
         ", ".join(bot.systems),
         "anyone in the channel" if not approvers else len(approvers),
+        args.state_dir or "in memory",
     )
     try:
         threading.Event().wait()

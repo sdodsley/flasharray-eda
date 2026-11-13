@@ -282,7 +282,10 @@ failure events, each with its link into the platform
 Deciding from the channel is `slack/approval_bot.py`: a Socket Mode bot
 that posts every pending orchestrator and controller approval as a card
 with Approve and Reject buttons and carries the click back with the Slack
-user's name ([slack/README.md](slack/README.md)).
+user's name; it reminds the channel at half and ninety percent of the
+decision window, rewrites the card with the outcome when the approval
+ends, and pages and records an approval nobody decided, which otherwise
+fails its execution in silence ([slack/README.md](slack/README.md)).
 
 ## Decision environment and Ansible Automation Platform
 

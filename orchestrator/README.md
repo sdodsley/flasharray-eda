@@ -216,7 +216,11 @@ approval takes; the shipped definitions leave it unset, so an approval
 nobody decides within the window is recorded as expired (decided by the
 orchestrator's worker, note "Approval decision window expired") and the
 execution fails at the approval node with neither port taken, which is
-the loud outcome wanted for an action nobody asked for. `fallback_decision`
+the right outcome for an action nobody asked for, and a silent one: the
+orchestrator tells nobody. `slack/approval_bot.py` makes it loud, with
+reminders at half and ninety percent of the window, a critical message in
+the channel and a critical notify record when the approval expires
+(slack/README.md). `fallback_decision`
 is accepted by the schema and ignored by the engine of this release: with
 `reject` set and a one-minute window, a throwaway copy expired the same
 way and its rejected branch was skipped, so the field stays out of the
@@ -399,7 +403,9 @@ sections above follow them:
   notes, which is how `slack/approval_bot.py` carries a Slack click back.
   An approval nobody decides within `decision_window` is recorded as
   expired by the worker service and fails the execution at that node,
-  whatever `fallback_decision` says.
+  whatever `fallback_decision` says; `GET /api/v1/approvals/{id}` then
+  answers `status` `expired`, `decided_by` the worker and the note, which
+  is how the bot tells an expiry from a decision made in the UI.
 
 Verified with a run of the capacity workflow (docs/ORCHESTRATOR.md,
 "Verified against a live orchestrator"): a full-span `${...}` expression

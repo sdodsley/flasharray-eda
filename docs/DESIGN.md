@@ -286,7 +286,11 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
   controller identity, with the Slack user in the orchestrator's decision
   notes (the controller's approval call has no notes field; the bot's log
   records the user) and an allow-list of who may click
-  ([SECURITY.md](../SECURITY.md)). Mail and
+  ([SECURITY.md](../SECURITY.md)). The bot also keeps the approval from
+  dying quietly: reminders in the card's thread at half and ninety percent
+  of the window, the card rewritten with the outcome when the approval
+  ends, and a critical message plus a critical notify record when nobody
+  decided and the execution failed; its cards survive a restart. Mail and
   ServiceNow are design intent; the notify playbook is where they go.
 
 ## 5. Gates
