@@ -1199,26 +1199,27 @@ def test_module_has_no_slack_sdk_import_at_module_level():
 
 
 def test_routes_send_another_projects_cards_to_its_channel_and_template(bot):
-    assert bot.parse_routes("FlashBlade=#fb-eda, FlashArray = #fa-eda,,bad,=x,y=") == [
-        ("FlashBlade", "#fb-eda"),
+    assert bot.parse_routes("Other=#other-eda, FlashArray = #fa-eda,,bad,=x,y=") == [
+        ("Other", "#other-eda"),
         ("FlashArray", "#fa-eda"),
     ]
     assert bot.parse_routes("") == [] and bot.parse_routes(None) == []
-    fb = bot.Approval(
-        "orchestrator", "1", "Approve the grow", "x", workflow="FlashBlade - grow fs"
+    other = bot.Approval(
+        "orchestrator", "1", "Approve the grow", "x", workflow="Other - grow"
     )
     fa = bot.Approval("orchestrator", "2", "Approve", "x", workflow="FlashArray - DR")
     by_title = bot.Approval(
-        "controller", "3", "FlashBlade - capacity reclaim (controller tier)", "x"
+        "controller", "3", "Other - capacity reclaim (controller tier)", "x"
     )
-    routes = [("flashblade", "#fb")]
+    routes = [("other", "#other")]
     assert (
-        bot.route_for(fb, routes) == "#fb" and bot.route_for(by_title, routes) == "#fb"
+        bot.route_for(other, routes) == "#other"
+        and bot.route_for(by_title, routes) == "#other"
     )
     assert bot.route_for(fa, routes) is None
     answers = {
         ("POST", "/api/v1/auth/login"): (200, {"access_token": "u-tok"}),
-        ("GET", "/api/v1/approvals/ap-fb"): (
+        ("GET", "/api/v1/approvals/ap-other"): (
             200,
             {
                 "status": "expired",
@@ -1231,7 +1232,7 @@ def test_routes_send_another_projects_cards_to_its_channel_and_template(bot):
             {
                 "resources": [
                     {
-                        "id": "ap-fb",
+                        "id": "ap-other",
                         "name": "Approve the grow",
                         "prompt": "x",
                         "execution_id": "e1",
@@ -1247,11 +1248,11 @@ def test_routes_send_another_projects_cards_to_its_channel_and_template(bot):
         ),
         ("GET", "/api/v1/executions/e1"): (
             200,
-            {"workflow_name": "FlashBlade - grow fs"},
+            {"workflow_name": "Other - grow"},
         ),
         ("GET", "/api/v1/executions/e2"): (200, {"workflow_name": "FlashArray - x"}),
         ("GET", "/api/controller/v2/workflow_approvals/"): (200, {"results": []}),
-        ("GET", "/api/controller/v2/job_templates/?name=FlashBlade"): (
+        ("GET", "/api/controller/v2/job_templates/?name=Other"): (
             200,
             {"results": [{"id": 20}]},
         ),
@@ -1276,14 +1277,14 @@ def test_routes_send_another_projects_cards_to_its_channel_and_template(bot):
             bot.Orchestrator("https://ao", username="a", password="p", http=http),
             bot.Controller("https://aap", "tok", http=http),
         ],
-        routes=[("FlashBlade", "#fb")],
-        notify_routes=[("FlashBlade", "FlashBlade - notify")],
+        routes=[("Other", "#other")],
+        notify_routes=[("Other", "Other - notify")],
     )
     b.poll_once()
-    assert [p["channel"] for p in web.posted] == ["#fb", "#fa"]
-    assert b.posted["orchestrator:ap-fb"].channel == "#FB"
-    # the FlashBlade approval expires: the page goes to its card's channel and
-    # the record through the FlashBlade template
+    assert [p["channel"] for p in web.posted] == ["#other", "#fa"]
+    assert b.posted["orchestrator:ap-other"].channel == "#OTHER"
+    # the other project's approval expires: the page goes to its card's
+    # channel and the record through that project's template
     answers[("GET", "/api/v1/approvals")] = (
         200,
         {
@@ -1293,12 +1294,12 @@ def test_routes_send_another_projects_cards_to_its_channel_and_template(bot):
         },
     )
     b.poll_once()
-    assert web.updated[-1]["channel"] == "#FB"
-    assert web.posted[-1]["channel"] == "#FB" and "expired" in web.posted[-1]["text"]
+    assert web.updated[-1]["channel"] == "#OTHER"
+    assert web.posted[-1]["channel"] == "#OTHER" and "expired" in web.posted[-1]["text"]
     launch = next(c for c in http.calls if c[1].endswith("/launch/"))
     assert "/job_templates/20/launch/" in launch[1]
     lookup = next(c for c in http.calls if "job_templates/?name=" in c[1])
-    assert "FlashBlade%20-%20notify" in lookup[1]
+    assert "Other%20-%20notify" in lookup[1]
 
 
 def test_a_channel_the_bot_cannot_post_to_does_not_block_the_other_cards(bot):
@@ -1310,7 +1311,7 @@ def test_a_channel_the_bot_cannot_post_to_does_not_block_the_other_cards(bot):
                 {
                     "resources": [
                         {
-                            "id": "ap-fb",
+                            "id": "ap-other",
                             "name": "Approve",
                             "prompt": "x",
                             "execution_id": "e1",
@@ -1326,7 +1327,7 @@ def test_a_channel_the_bot_cannot_post_to_does_not_block_the_other_cards(bot):
             ),
             ("GET", "/api/v1/executions/e1"): (
                 200,
-                {"workflow_name": "FlashBlade - grow fs"},
+                {"workflow_name": "Other - grow"},
             ),
             ("GET", "/api/v1/executions/e2"): (
                 200,
@@ -1337,7 +1338,7 @@ def test_a_channel_the_bot_cannot_post_to_does_not_block_the_other_cards(bot):
 
     class NotInChannelWeb(FakeWeb):
         def chat_postMessage(self, **kw):
-            if kw["channel"] == "#fb":
+            if kw["channel"] == "#other":
                 raise RuntimeError("not_in_channel")
             return super().chat_postMessage(**kw)
 
@@ -1346,10 +1347,10 @@ def test_a_channel_the_bot_cannot_post_to_does_not_block_the_other_cards(bot):
         web,
         "#fa",
         [bot.Orchestrator("https://ao", username="a", password="p", http=http)],
-        routes=[("FlashBlade", "#fb")],
+        routes=[("Other", "#other")],
     )
     b.poll_once()
     assert [p["channel"] for p in web.posted] == ["#fa"]
-    assert "orchestrator:ap-fa" in b.posted and "orchestrator:ap-fb" not in b.posted
+    assert "orchestrator:ap-fa" in b.posted and "orchestrator:ap-other" not in b.posted
     b.poll_once()  # tried again, still refused, still no card and no crash
     assert len(web.posted) == 1

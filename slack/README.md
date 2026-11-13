@@ -130,7 +130,7 @@ the same app would lose the clicks meant for the other; instead the one
 instance polls both systems (its identities need the approve rights on
 both projects' workflows and execute on both notify templates) and
 `SLACK_ROUTES` sends each project's cards to its own channel by the prefix
-of the workflow name, for example `FlashBlade=#flashblade-eda`, with
+of the workflow name, for example `Other=#other-project`, with
 `NOTIFY_ROUTES` naming that project's notify template for the expiry
 record. A second Slack app, with its own tokens and bot instance, is the
 other way to keep the projects apart.
