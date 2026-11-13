@@ -146,8 +146,15 @@ purefa_volume_performance
                         volume, usec_per_read_op, usec_per_write_op,
                         reads_per_sec, writes_per_sec, iops_share_pct,
                         high_latency_polls, normal_polls, qos_iops_limit,
-                        qos_bw_limit, eda_capped (volume carries the
-                        eda/qos_cap tag set by the QoS playbook),
+                        qos_bw_limit, volume_group ("" outside a group),
+                        volume_group_qos (the group carries its own limit,
+                        which the array keeps exclusive of volume limits),
+                        volume_group_capped (the group carries the
+                        eda/qos_cap tag of a group cap), eda_capped (the
+                        volume carries the eda/qos_cap tag set by the QoS
+                        playbook, or is the member a group cap names as
+                        the hot one, whose lift counter the lift rule
+                        reads), eda_cap_scope (volume | vgroup | ""),
                         eda_cap_since, array_usec_per_read_op,
                         array_usec_per_write_op
 purefa_array_connection remote, status, type, replication_transport,
@@ -1192,8 +1199,29 @@ def _performance_events(arr, state, args):
     for t in _items(c.get_volumes_tags(namespaces=["eda"]), "volume tags"):
         if t.get("key") == "qos_cap":
             capped[_name(t.get("resource"))] = t.get("value")
-    for vp in _volumes_performance(c, [n for n in capped if n not in active]):
+    # A cap on a volume group (qos_cap_scope vgroup) is tagged on the group,
+    # with qos_cap_volume naming the member that was hot; that member is
+    # reported like a capped volume so the lift rule keeps counting for it.
+    # Arrays before volume group tags have no such caps.
+    group_caps = {}
+    if hasattr(c, "get_volume_groups_tags"):
+        for t in _items(
+            c.get_volume_groups_tags(namespaces=["eda"]), "volume group tags"
+        ):
+            group_caps.setdefault(_name(t.get("resource")), {})[t.get("key")] = t.get(
+                "value"
+            )
+    group_caps = {g: v for g, v in group_caps.items() if "qos_cap" in v}
+    capped_members = {
+        v["qos_cap_volume"]: v["qos_cap"]
+        for v in group_caps.values()
+        if v.get("qos_cap_volume")
+    }
+    always = [n for n in list(capped) + list(capped_members) if n not in active]
+    for vp in _volumes_performance(c, always):
         active[vp.get("name")] = vp
+    capped_all = dict(capped_members)
+    capped_all.update(capped)
     # The lift rule's "normal for M polls" counts from the cap: a volume that
     # was capped by hand (the day-2 route) while its latency was already
     # normal would otherwise be lifted at the next poll.
@@ -1201,18 +1229,32 @@ def _performance_events(arr, state, args):
         "capped_last_poll"
     )  # None on the first poll: nothing is "new" then
     newly_capped = (
-        set() if was_capped is None else {n for n in capped if n not in set(was_capped)}
+        set()
+        if was_capped is None
+        else {n for n in capped_all if n not in set(was_capped)}
     )
-    st["capped_last_poll"] = sorted(capped)
-    # QoS limits for the volumes about to be reported
+    st["capped_last_poll"] = sorted(capped_all)
+    # QoS limits and volume groups for the volumes about to be reported, and
+    # whether each group carries its own limit (then the array refuses a
+    # limit on the member, and the rulebook routes by qos_cap_scope)
     qos = {}
+    groups = {}
     if active:
         for v in _items(c.get_volumes(names=list(active)), "volumes"):
             q = v.get("qos") or {}
             qos[v.get("name")] = {
                 "iops": q.get("iops_limit"),
                 "bw": q.get("bandwidth_limit"),
+                "group": _name(v.get("volume_group")) or "",
             }
+    wanted = sorted({q["group"] for q in qos.values() if q["group"]})
+    if wanted:
+        for g in _items(c.get_volume_groups(names=wanted), "volume groups"):
+            gq = g.get("qos") or {}
+            groups[g.get("name")] = (
+                gq.get("iops_limit") is not None
+                or gq.get("bandwidth_limit") is not None
+            )
     array_iops = (perf.get("reads_per_sec") or 0) + (perf.get("writes_per_sec") or 0)
     for name, vp in active.items():
         iops = (vp.get("reads_per_sec") or 0) + (vp.get("writes_per_sec") or 0)
@@ -1242,8 +1284,21 @@ def _performance_events(arr, state, args):
                     "normal_polls": normal[name],
                     "qos_iops_limit": qos.get(name, {}).get("iops"),
                     "qos_bw_limit": qos.get(name, {}).get("bw"),
-                    "eda_capped": name in capped,
-                    "eda_cap_since": capped.get(name),
+                    "volume_group": qos.get(name, {}).get("group", ""),
+                    "volume_group_qos": bool(
+                        groups.get(qos.get(name, {}).get("group", ""), False)
+                    ),
+                    # the lift rule follows the member the group cap names;
+                    # the other members only know their group is capped
+                    "volume_group_capped": qos.get(name, {}).get("group", "")
+                    in group_caps,
+                    "eda_capped": name in capped or name in capped_members,
+                    "eda_cap_scope": (
+                        "volume"
+                        if name in capped
+                        else ("vgroup" if name in capped_members else "")
+                    ),
+                    "eda_cap_since": capped.get(name) or capped_members.get(name),
                     "array_usec_per_read_op": perf.get("usec_per_read_op"),
                     "array_usec_per_write_op": perf.get("usec_per_write_op"),
                 }

@@ -234,6 +234,16 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   in namespace `eda` (`qos_cap` = when it was applied, `qos_prev_iops` = the
   limit before), the telemetry signal reads them back as `eda_capped`, and
   the lift removes them, so a rulebook restart loses nothing.
+- A member of a volume group that carries its own limit cannot take one:
+  the array keeps volume and group QoS exclusive, and that is exactly where
+  sites put the workloads that matter (database, VMware, Cinder groups).
+  The telemetry signal stamps `volume_group` and `volume_group_qos` on the
+  event, so the rulebook routes before launching anything, and
+  `qos_cap_scope` says what happens: notify (the default), cap the group
+  instead (the same tags on the group plus the hot member's name, lifted
+  the same way: the lift follows that member's quiet polls, and the other
+  members only learn that their group is capped), or try the volume and
+  record the array's refusal.
 - Cinder-backed volumes: retype to another backend instead. Design intent.
 
 ### 4.7 Composite rule for the bad day

@@ -2,7 +2,7 @@
 # Apply or lift a temporary IOPS cap on a volume and keep the state on the
 # array as tags (namespace eda: qos_cap = when it was applied, qos_prev_iops =
 # the limit before). Called by the performance rulebook with target_array,
-# volume, mode (cap | lift), cap_iops, reason and alert_log.
+# volume, mode (cap | lift), cap_iops, reason, qos_cap_scope and alert_log.
 #
 # The cap uses everpure.flasharray.purefa_volume (iops_qos) and the tags
 # everpure.flasharray.purefa_volume_tags. The pre-read of the volume's QoS
@@ -16,16 +16,31 @@
 # one value the array takes as "no limit" (the module's 0 sends the
 # 100000000 maximum through everpure.flasharray 1.46, which reads back as
 # a limit and shows as 100M; the collection's master clears properly), so
-# a volume that had no limit before the cap has none after the lift. Both
-# modes
-# are idempotent: a cap on a volume that already carries the qos_cap tag
-# and a lift on a volume without it change nothing, so a duplicate launch
-# (two polls in the gap between a lift's restore and its tag removal, or
-# a retried launch) is harmless; the second of two lifts once found the
-# tags gone and cleared the limit the first had just restored.
+# a volume that had no limit before the cap has none after the lift.
+#
+# Volume groups. The array refuses a rate limit on a member of a volume
+# group that carries its own limit (volume and group QoS are exclusive), so
+# a member of such a group is handled by qos_cap_scope: `notify` (the
+# default) records the refusal and changes nothing, the performance rulebook
+# having already notified; `vgroup` caps the group instead, with the same
+# tags on the group (plus qos_cap_volume, the member that was hot, which the
+# plugin keeps reporting) and the same tightening and restore rules, through
+# the API, since the group tags and the clearing value have no module; and
+# `volume` tries the volume cap anyway and records the array's refusal. A
+# member of a group without its own limit is capped as a volume. A lift
+# reads where the cap is from the tags and needs no scope.
+#
+# Both modes are idempotent: a cap on a volume or group that already
+# carries the qos_cap tag and a lift on one without it change nothing, so a
+# duplicate launch (two polls in the gap between a lift's restore and its
+# tag removal, or a retried launch) is harmless; the second of two lifts
+# once found the tags gone and cleared the limit the first had just
+# restored.
 - name: Volume QoS cap with hysteresis
   hosts: "{{ target_array }}"
   gather_facts: false
+  vars:
+    qos_cap_scope: notify
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
       ansible.builtin.include_tasks:
@@ -42,7 +57,16 @@
           - credential_array is not defined or credential_array == inventory_hostname
         fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
 
-    - name: Read the volume's current QoS and cap tags
+    - name: Refuse an unknown scope
+      ansible.builtin.assert:
+        that:
+          - qos_cap_scope in ['notify', 'vgroup', 'volume']
+        fail_msg: "qos_cap_scope must be notify, vgroup or volume, not {{ qos_cap_scope }}"
+        quiet: true
+
+    # One SDK read of everything the decision needs: the volume's limit and
+    # eda tags, its volume group, that group's own limit and eda tags.
+    - name: Read the volume's QoS, its cap tags, its volume group and the group's QoS and tags
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
@@ -54,7 +78,18 @@
           v = list(c.get_volumes(names=[os.environ["VOL"]]).items)[0].to_dict()
           q = v.get("qos") or {}
           tags = {t.key: t.value for t in c.get_volumes_tags(resource_names=[os.environ["VOL"]], namespaces=["eda"]).items}
-          print(json.dumps({"iops_limit": q.get("iops_limit"), "bw_limit": q.get("bandwidth_limit"), "tags": tags}))
+          group = (v.get("volume_group") or {}).get("name") or ""
+          group_qos, group_tags = {}, {}
+          if group:
+              g = list(c.get_volume_groups(names=[group]).items)[0].to_dict()
+              gq = g.get("qos") or {}
+              group_qos = {"iops_limit": gq.get("iops_limit"), "bw_limit": gq.get("bandwidth_limit")}
+              if hasattr(c, "get_volume_groups_tags"):
+                  r = c.get_volume_groups_tags(resource_names=[group], namespaces=["eda"])
+                  group_tags = {t.key: t.value for t in r.items} if r.status_code == 200 else {}
+          print(json.dumps({"iops_limit": q.get("iops_limit"), "bw_limit": q.get("bandwidth_limit"), "tags": tags,
+                            "volume_group": group, "group_qos": group_qos, "group_tags": group_tags,
+                            "group_has_qos": bool(group) and (group_qos.get("iops_limit") is not None or group_qos.get("bw_limit") is not None)}))
       environment:
         FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
         FA_TOKEN: "{{ api_token }}"
@@ -67,12 +102,22 @@
       ansible.builtin.set_fact:
         before: "{{ before_cmd.stdout | from_json }}"
 
+    # Where the cap goes, or sits: the volume, its group, or nowhere. A cap
+    # on a member of a group with its own limit follows the scope; a lift
+    # follows the tags.
+    - name: Decide the target of this run
+      ansible.builtin.set_fact:
+        cap_target: >-
+          {{ ('vgroup' if before.group_tags.qos_cap is defined else 'volume') if mode == 'lift'
+             else ('volume' if not (before.group_has_qos | bool)
+                   else {'notify': 'none', 'vgroup': 'vgroup', 'volume': 'volume'}[qos_cap_scope]) }}
+
     - name: Show the volume before the change
       ansible.builtin.debug:
-        var: before
+        msg: "{{ before | combine({'cap_target': cap_target, 'scope': qos_cap_scope, 'mode': mode}) }}"
 
     - name: Apply the cap
-      when: mode == 'cap'
+      when: mode == 'cap' and cap_target == 'volume'
       block:
         - name: Tag the volume first so the plugin and operators can see the cap
           everpure.flasharray.purefa_volume_tags:
@@ -85,7 +130,9 @@
               - "qos_cap:{{ now(utc=true).isoformat(timespec='seconds') }}"
               - "qos_prev_iops:{{ before.iops_limit | default('none', true) }}"
           register: tagged
-          when: before.tags.qos_cap is not defined
+          when:
+            - before.tags.qos_cap is not defined
+            - not (before.group_has_qos | bool)
 
         - name: Set the IOPS limit, unless the volume's own limit is already tighter
           everpure.flasharray.purefa_volume:
@@ -97,13 +144,68 @@
           register: capped
           when:
             - before.tags.qos_cap is not defined
+            - not (before.group_has_qos | bool)
             - >-
               before.iops_limit is none or
               (before.iops_limit | int) in [0, 100000000] or
               (before.iops_limit | int) > (cap_iops | int)
 
+        # scope volume on a member of a rate-limited group: the array says no
+        # ("Cannot set rate limits on individual volumes inside volume groups
+        # with rate limit."); the refusal is recorded, not a failed job, and
+        # no tag is written because nothing was capped
+        - name: Try the volume cap anyway and record the array's refusal
+          everpure.flasharray.purefa_volume:
+            fa_url: "{{ fa_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            name: "{{ volume }}"
+            iops_qos: "{{ cap_iops }}"
+          register: refused_cap
+          failed_when: false
+          when:
+            - before.tags.qos_cap is not defined
+            - before.group_has_qos | bool
+
+    # The group is tagged first (qos_cap, qos_prev_iops, qos_cap_volume), then
+    # its limit set unless its own is already tighter; the API does both,
+    # because volume group tags and the clearing value have no module.
+    - name: Cap the volume group instead
+      when: mode == 'cap' and cap_target == 'vgroup' and before.group_tags.qos_cap is not defined
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import datetime, json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          group, cap, prev = os.environ["GROUP"], int(os.environ["CAP"]), os.environ["PREV"]
+          now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+          tags = [flasharray.Tag(namespace="eda", key="qos_cap", value=now),
+                  flasharray.Tag(namespace="eda", key="qos_prev_iops", value=prev or "none"),
+                  flasharray.Tag(namespace="eda", key="qos_cap_volume", value=os.environ["VOL"])]
+          r = c.put_volume_groups_tags_batch(resource_names=[group], tag=tags)
+          if r.status_code != 200:
+              raise SystemExit("tagging the volume group failed: %s" % (r.errors[0].message if getattr(r, "errors", None) else r.status_code))
+          tighten = not prev or prev in ("none", "0", "100000000") or int(prev) > cap
+          if tighten:
+              r = c.patch_volume_groups(names=[group], volume_group=flasharray.VolumeGroupPatch(qos=flasharray.Qos(iops_limit=cap)))
+              if r.status_code != 200:
+                  raise SystemExit("setting the group limit failed: %s" % (r.errors[0].message if getattr(r, "errors", None) else r.status_code))
+          print(json.dumps({"tagged": True, "capped": tighten, "applied_iops": cap if tighten else int(prev)}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        GROUP: "{{ before.volume_group }}"
+        VOL: "{{ volume }}"
+        CAP: "{{ cap_iops }}"
+        PREV: "{{ before.group_qos.iops_limit | default('none', true) }}"
+      register: group_capped
+      changed_when: true
+      no_log: true
+
     - name: Lift the cap
-      when: mode == 'lift'
+      when: mode == 'lift' and cap_target == 'volume'
       block:
         - name: Restore the previous IOPS limit
           everpure.flasharray.purefa_volume:
@@ -157,46 +259,112 @@
           register: untagged
           when: before.tags.qos_cap is defined
 
+    # The group's previous limit comes back from its tag (a number restored,
+    # none cleared with the empty string), then the group tags go. Only the
+    # member the cap named lifts it: a launch for another member of the
+    # group changes nothing.
+    - name: Lift the volume group's cap
+      when:
+        - mode == 'lift' and cap_target == 'vgroup'
+        - (before.group_tags.qos_cap_volume | default(volume)) == volume
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          group, prev = os.environ["GROUP"], os.environ["PREV"]
+          restore = prev not in ("", "none", "None", "100000000")
+          qos = flasharray.Qos(iops_limit=int(prev)) if restore else flasharray.Qos.construct(iops_limit="")
+          r = c.patch_volume_groups(names=[group], volume_group=flasharray.VolumeGroupPatch(qos=qos))
+          if r.status_code != 200:
+              raise SystemExit("restoring the group limit failed: %s" % (r.errors[0].message if getattr(r, "errors", None) else r.status_code))
+          r = c.delete_volume_groups_tags(resource_names=[group], namespaces=["eda"], keys=["qos_cap", "qos_prev_iops", "qos_cap_volume"])
+          if r.status_code != 200:
+              raise SystemExit("removing the group tags failed: %s" % (r.errors[0].message if getattr(r, "errors", None) else r.status_code))
+          print(json.dumps({"restored": restore, "applied_iops": int(prev) if restore else 0}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        GROUP: "{{ before.volume_group }}"
+        PREV: "{{ before.group_tags.qos_prev_iops | default('none') }}"
+      register: group_lifted
+      changed_when: true
+      no_log: true
+
+    # What the array says now, in plain words: why nothing was capped, or
+    # what the array answered to the attempt it refuses (a task under
+    # failed_when false reports failed as false, so the refusal shows as a
+    # run that changed nothing and carries the module's message).
+    - name: Note a refusal
+      ansible.builtin.set_fact:
+        refused: >-
+          {{ ('volume ' ~ volume ~ ' is a member of volume group ' ~ before.volume_group ~ ', which carries its own QoS; the array refuses a volume limit there and qos_cap_scope is notify, so nothing was capped')
+             if mode == 'cap' and cap_target == 'none'
+             else ((refused_cap.msg | default('the array refused the volume limit'))
+                   if refused_cap is defined and refused_cap is not skipped and not (refused_cap.changed | default(false))
+                   else '') }}
+
+    # The limit in force after this run on whatever was capped: for the
+    # volume, the cap or its own tighter limit, or what a lift restored (0 =
+    # no limit) or left; for the group, what the group script reports.
+    - name: Work out the limit in force
+      ansible.builtin.set_fact:
+        applied_iops: >-
+          {{ (group_capped.stdout | from_json).applied_iops if group_capped is defined and group_capped is not skipped
+             else ((group_lifted.stdout | from_json).applied_iops if group_lifted is defined and group_lifted is not skipped
+             else (before.group_qos.iops_limit | default(0, true) if cap_target == 'vgroup'
+             else ((before.iops_limit if before.tags.qos_cap is defined or cap_target == 'none' or refused | length > 0
+                    else ([cap_iops | int, before.iops_limit | int] | min
+                          if before.iops_limit is not none and (before.iops_limit | int) not in [0, 100000000]
+                          else cap_iops | int)) if mode == 'cap'
+                   else (before.iops_limit if before.tags.qos_cap is not defined
+                         else (0 if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
+                               else before.tags.qos_prev_iops | int))))) }}
+
     - name: Record the action
       ansible.builtin.lineinfile:
         path: "{{ alert_log }}"
         create: true
         mode: "0600"
         line: >-
-          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'qos_cap', 'severity': 'warning' if mode == 'cap' else 'info',
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'qos_cap',
+              'severity': 'warning' if mode == 'cap' else 'info',
               'array': inventory_hostname, 'volume': volume, 'mode': mode,
+              'volume_group': before.volume_group, 'scope': qos_cap_scope, 'cap_target': cap_target,
               'cap_iops': cap_iops | default(''), 'previous_iops_limit': before.iops_limit,
+              'previous_group_iops_limit': before.group_qos.iops_limit | default(none),
+              'refused': refused | trim,
               'reason': reason | default('') | trim,
-              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)) or (cleared.changed | default(false)),
-              'tag_changed': (tagged.changed | default(false)) or (untagged.changed | default(false))} | to_json }}
+              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)) or (cleared.changed | default(false))
+                         or (group_capped.changed | default(false)) or (group_lifted.changed | default(false)),
+              'tag_changed': (tagged.changed | default(false)) or (untagged.changed | default(false))
+                             or (group_capped.changed | default(false)) or (group_lifted.changed | default(false))} | to_json }}
       delegate_to: localhost
 
     - name: Show the action
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }}/{{ volume }}: QoS {{ mode }}
+          {{ inventory_hostname }}/{{ volume }}: QoS {{ mode }} on {{ cap_target }}
           {{ '(' ~ cap_iops ~ ' IOPS)' if mode == 'cap' else '' }} :: {{ reason | default('') | trim }}
+          {{ ('REFUSED: ' ~ refused) if refused | length > 0 else '' }}
 
-    # Job artifacts for a workflow or orchestrator node that follows this one.
-    # applied_iops is the limit the volume has after this run: the cap, or the
-    # volume's own tighter limit it kept, or on a lift the limit restored from
-    # the tag (0 = no limit, as the lift task sets it), or the limit read when
-    # the run changed nothing (already tagged, or nothing to lift);
-    # previous_iops is the limit read before the change.
+    # Job artifacts for a workflow or orchestrator node that follows this one:
+    # applied_iops is the limit in force after this run on the cap's target
+    # (see above), previous_iops the volume's limit read before the change,
+    # cap_target where the cap went (volume, vgroup, none), volume_group the
+    # volume's group, refused the array's or the scope's refusal text.
     - name: Publish the outcome as job artifacts
       ansible.builtin.set_stats:
         aggregate: false
         per_host: false
         data: >-
           {{ {'array': inventory_hostname, 'volume': volume, 'mode': mode,
-              'applied_iops': ((before.iops_limit if before.tags.qos_cap is defined
-                                else ([cap_iops | int, before.iops_limit | int] | min
-                                      if before.iops_limit is not none and (before.iops_limit | int) not in [0, 100000000]
-                                      else cap_iops | int)) if mode == 'cap'
-                               else (before.iops_limit if before.tags.qos_cap is not defined
-                                     else (0 if before.tags.qos_prev_iops | default('none') in ['none', 'None', '', '100000000']
-                                           else before.tags.qos_prev_iops | int))),
+              'applied_iops': applied_iops | int,
               'previous_iops': before.iops_limit,
-              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)) or (cleared.changed | default(false))} }}
+              'cap_target': cap_target, 'volume_group': before.volume_group, 'refused': refused | trim,
+              'changed': (capped.changed | default(false)) or (lifted.changed | default(false)) or (cleared.changed | default(false))
+                         or (group_capped.changed | default(false)) or (group_lifted.changed | default(false))} }}
       run_once: true
       delegate_to: localhost

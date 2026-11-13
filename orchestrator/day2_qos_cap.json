@@ -10,9 +10,16 @@
         "input_schema": {
           "$schema": "http://json-schema.org/draft-07/schema#",
           "type": "object",
-          "required": ["array", "volume", "iops_limit"],
+          "required": ["array", "volume", "iops_limit", "scope"],
           "additionalProperties": false,
           "properties": {
+            "scope": {
+              "type": "string",
+              "title": "If the volume is in a volume group with its own QoS",
+              "description": "The array refuses a volume limit inside a rate-limited volume group: notify records the refusal and changes nothing, vgroup caps the whole group instead (lifted the same way), volume tries the volume cap anyway and records the array's refusal",
+              "enum": ["notify", "vgroup", "volume"],
+              "default": "notify"
+            },
             "array": {
               "type": "string",
               "title": "Array",
@@ -80,6 +87,7 @@
           "volume": "${trigger.volume}",
           "mode": "cap",
           "cap_iops": "${trigger.iops_limit}",
+          "qos_cap_scope": "${trigger.scope}",
           "reason": "requested through the orchestrator (FlashArray - QoS cap (day 2))"
         }
       }
@@ -94,8 +102,8 @@
         "credential_id": "REPLACE_AT_SYNC",
         "extra_vars": {
           "severity": "warning",
-          "subject": "Capped ${trigger.volume} on ${trigger.array} at ${qos_cap.artifacts.applied_iops} IOPS",
-          "detail": "Previous IOPS limit: ${qos_cap.artifacts.previous_iops} (changed: ${qos_cap.artifacts.changed}). The volume carries the eda/qos_cap tag until the cap is lifted. AAP job: ${qos_cap.job_url}",
+          "subject": "QoS cap for ${trigger.volume} on ${trigger.array}: ${qos_cap.artifacts.cap_target} at ${qos_cap.artifacts.applied_iops} IOPS",
+          "detail": "Cap target: ${qos_cap.artifacts.cap_target} (volume group: ${qos_cap.artifacts.volume_group}; refused: ${qos_cap.artifacts.refused}). Previous IOPS limit: ${qos_cap.artifacts.previous_iops} (changed: ${qos_cap.artifacts.changed}). The volume or its group carries the eda/qos_cap tag until the cap is lifted. AAP job: ${qos_cap.job_url}",
           "target_array": "${trigger.array}"
         }
       }

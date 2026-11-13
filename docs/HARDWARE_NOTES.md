@@ -208,6 +208,14 @@ The native exporter the Prometheus rules are written for, as served on
 
 - `purefa_pgsnap` forbids `now` together with `remote`; `remote: true` on
   its own is the immediate replicated snapshot.
+- Volume QoS and volume group QoS are exclusive. A member of a group with
+  a limit is refused its own ("Cannot set rate limits on individual volumes
+  inside volume groups with rate limit."), a group with a limited member
+  cannot be given one, and a limited volume cannot move into a limited
+  group; an explicit 100000000 counts as a limit, unlimited reads back as
+  null. `/volume-groups/tags` exists at REST 2.54 (the SDK has get, put
+  batch and delete for them), so a group cap keeps its state on the group
+  the way a volume cap does on the volume.
 - `purefa_volume` takes `iops_qos: 0` to clear a limit and rejects the
   array's own "no limit" value 100000000; through 1.46 what it sends for
   0 is that maximum, so the volume reads `iops_limit: 100000000` (100M in

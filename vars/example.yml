@@ -188,6 +188,12 @@ qos_auto_cap: true                # noisy neighbour on a hot array -> temporary 
 qos_cap_iops: 20000               # the cap applied
 qos_cap_min_iops_share_pct: 40    # only volumes holding at least this share of the array's IOPS
 qos_lift_normal_polls: 5          # lift after this many consecutive normal polls
+# A noisy neighbour inside a volume group that carries its own QoS cannot
+# take a volume limit (the array keeps the two exclusive): notify (a warning,
+# nothing capped), vgroup (cap the whole group instead, tags on the group,
+# lifted the same way) or volume (try the volume cap anyway, the refusal
+# recorded). Also passed to the day-2 QoS cap through its form.
+qos_cap_scope: notify
 
 # --- anomaly (composite rule) --------------------------------------------
 anomaly_drr_drop_pct: 10          # data reduction this far below a week ago

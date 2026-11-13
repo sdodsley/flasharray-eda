@@ -62,7 +62,7 @@
         debug:
           msg: 'poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}'
     - name: Noisy neighbour on a hot array - apply a temporary QoS cap
-      condition: "event.purefa_volume_performance.high_latency_polls is defined and event.purefa_volume_performance.high_latency_polls >= vars.hotspot_consecutive_polls and event.purefa_volume_performance.iops_share_pct >= vars.qos_cap_min_iops_share_pct and event.purefa_volume_performance.eda_capped == false and (event.purefa_volume_performance.array_usec_per_read_op >= vars.array_hot_latency_usec or\n event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec) and\nvars.qos_auto_cap == true"
+      condition: "event.purefa_volume_performance.high_latency_polls is defined and event.purefa_volume_performance.high_latency_polls >= vars.hotspot_consecutive_polls and event.purefa_volume_performance.iops_share_pct >= vars.qos_cap_min_iops_share_pct and event.purefa_volume_performance.eda_capped == false and event.purefa_volume_performance.volume_group_capped == false and (event.purefa_volume_performance.array_usec_per_read_op >= vars.array_hot_latency_usec or\n event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec) and\nvars.qos_auto_cap == true and (event.purefa_volume_performance.volume_group_qos == false or vars.qos_cap_scope != \"notify\")"
       throttle:
         once_within: 10 minutes
         group_by_attributes:
@@ -78,7 +78,25 @@
               volume: '{{ event.purefa_volume_performance.volume }}'
               mode: cap
               cap_iops: '{{ qos_cap_iops }}'
+              qos_cap_scope: '{{ qos_cap_scope }}'
               reason: read={{ event.purefa_volume_performance.usec_per_read_op }}us write={{ event.purefa_volume_performance.usec_per_write_op }}us iops={{ event.purefa_volume_performance.reads_per_sec }}r/{{ event.purefa_volume_performance.writes_per_sec }}w ({{ event.purefa_volume_performance.iops_share_pct }}% of the array) for {{ event.purefa_volume_performance.high_latency_polls }} polls; array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us write={{ event.purefa_volume_performance.array_usec_per_write_op }}us
+    - name: Noisy neighbour inside a volume group with its own QoS - notify
+      condition: "event.purefa_volume_performance.high_latency_polls is defined and event.purefa_volume_performance.high_latency_polls >= vars.hotspot_consecutive_polls and event.purefa_volume_performance.iops_share_pct >= vars.qos_cap_min_iops_share_pct and event.purefa_volume_performance.eda_capped == false and event.purefa_volume_performance.volume_group_capped == false and (event.purefa_volume_performance.array_usec_per_read_op >= vars.array_hot_latency_usec or\n event.purefa_volume_performance.array_usec_per_write_op >= vars.array_hot_latency_usec) and\nvars.qos_auto_cap == true and event.purefa_volume_performance.volume_group_qos == true and vars.qos_cap_scope == \"notify\""
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefa_volume_performance.array
+          - event.purefa_volume_performance.volume
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: Noisy neighbour {{ event.purefa_volume_performance.array }}/{{ event.purefa_volume_performance.volume }} sits in volume group {{ event.purefa_volume_performance.volume_group }}, which has its own QoS
+              detail: The array refuses a volume limit inside a rate-limited volume group, so no cap was applied. read={{ event.purefa_volume_performance.usec_per_read_op }}us write={{ event.purefa_volume_performance.usec_per_write_op }}us iops={{ event.purefa_volume_performance.reads_per_sec }}r/{{ event.purefa_volume_performance.writes_per_sec }}w ({{ event.purefa_volume_performance.iops_share_pct }}% of the array) for {{ event.purefa_volume_performance.high_latency_polls }} polls; array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us write={{ event.purefa_volume_performance.array_usec_per_write_op }}us. Set qos_cap_scope to vgroup to cap the group instead.
+              target_array: '{{ event.purefa_volume_performance.array }}'
     - name: Capped volume back to normal - lift the cap
       condition: event.purefa_volume_performance.eda_capped == true and event.purefa_volume_performance.normal_polls >= vars.qos_lift_normal_polls
       throttle:

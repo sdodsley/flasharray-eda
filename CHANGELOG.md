@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The QoS cap knows about volume groups. The array refuses a volume limit
+  on a member of a group that has its own (the two are exclusive), which is
+  where sites keep the workloads that matter, so the telemetry signal now
+  stamps `volume_group` and `volume_group_qos` on `purefa_volume_performance`
+  and `qos_cap_scope` decides what the loop does with such a member: notify
+  (default, a warning instead of a failed job), `vgroup` (cap the whole
+  group, its state in tags on the group, lifted the same way) or `volume`
+  (try the volume and record the refusal); the day-2 form takes the same
+  scope, and the cap's artifacts say where it went.
 - The Slack approval bot remembers its cards (`STATE_DIR`, `cards.json`),
   so a restart edits them instead of posting again; it reads how an
   approval ended when it leaves the queue (orchestrator `timeout_at`,

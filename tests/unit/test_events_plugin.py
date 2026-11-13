@@ -51,6 +51,9 @@ class FakeClient:
         tags=None,
         pod_tags=None,
         hardware=None,
+        volume_groups=None,
+        groups=None,
+        vg_tags=None,
     ):
         self.alerts = alerts or []
         self.audits = audits or []
@@ -60,6 +63,9 @@ class FakeClient:
         self.tags = tags or []  # (volume, key, value)
         self.pod_tags = pod_tags or []  # (pod, key, value)
         self.hardware = hardware or []  # /hardware rows
+        self.volume_groups = volume_groups or {}  # volume -> its group
+        self.groups = groups or {}  # group -> its qos dict
+        self.vg_tags = vg_tags or []  # (group, key, value)
         self.calls = []
 
     # --- alerts / audits -------------------------------------------------
@@ -200,8 +206,31 @@ class FakeClient:
         self.calls.append(("get_volumes", kw))
         return FakeResponse(
             [
-                {"name": n, "qos": {"iops_limit": 20000, "bandwidth_limit": None}}
+                {
+                    "name": n,
+                    "qos": {"iops_limit": 20000, "bandwidth_limit": None},
+                    "volume_group": (
+                        {"name": self.volume_groups[n]}
+                        if n in self.volume_groups
+                        else None
+                    ),
+                }
                 for n in kw.get("names", [])
+            ]
+        )
+
+    def get_volume_groups(self, **kw):
+        self.calls.append(("get_volume_groups", kw))
+        return FakeResponse(
+            [{"name": g, "qos": self.groups.get(g) or {}} for g in kw.get("names", [])]
+        )
+
+    def get_volume_groups_tags(self, **kw):
+        self.calls.append(("get_volume_groups_tags", kw))
+        return FakeResponse(
+            [
+                {"key": k, "value": v, "namespace": "eda", "resource": {"name": g}}
+                for g, k, v in self.vg_tags
             ]
         )
 
@@ -560,6 +589,107 @@ def test_capped_volume_outside_top_n_is_still_reported(events):
         if e.get("purefa_volume_performance", {}).get("volume") == "capped"
     )
     assert capped["normal_polls"] == 2
+
+
+def test_volume_group_members_are_stamped_and_a_group_cap_is_read(events):
+    """A member of a volume group carries the group's name and whether the
+    group has its own limit (then the array refuses a volume limit); a cap
+    tagged on the group marks its members capped with scope vgroup and the
+    member the tag names is reported like a capped volume."""
+    client = FakeClient(
+        volumes_perf=[
+            vol_perf("db/data", 5000, 500),
+            vol_perf("plain", 4000, 400),
+            vol_perf("free/one", 3000, 300),
+            vol_perf("db/log", 100, 0),  # idle: outside the top 3
+        ],
+        volume_groups={"db/data": "db", "db/log": "db", "free/one": "free"},
+        groups={
+            "db": {"iops_limit": 50000, "bandwidth_limit": None},
+            "free": {"iops_limit": None, "bandwidth_limit": None},
+        },
+        vg_tags=[
+            ("db", "qos_cap", "2026-11-13T10:00:00Z"),
+            ("db", "qos_prev_iops", "50000"),
+            ("db", "qos_cap_volume", "db/log"),
+        ],
+    )
+    out = events._performance_events(
+        FakeArray(client), {}, {"top_volumes": 3, "min_iops": 1, "baseline": False}
+    )
+    vols = {
+        e["purefa_volume_performance"]["volume"]: e["purefa_volume_performance"]
+        for e in out
+        if "purefa_volume_performance" in e
+    }
+    assert set(vols) == {"db/data", "plain", "free/one", "db/log"}
+    assert (vols["db/data"]["volume_group"], vols["db/data"]["volume_group_qos"]) == (
+        "db",
+        True,
+    )
+    assert (vols["free/one"]["volume_group"], vols["free/one"]["volume_group_qos"]) == (
+        "free",
+        False,
+    )
+    assert (vols["plain"]["volume_group"], vols["plain"]["volume_group_qos"]) == (
+        "",
+        False,
+    )
+    # the member the group cap names is the capped one (its lift counter is
+    # the one the lift rule reads); the other member only knows its group is
+    # capped, which keeps it out of both cap rules
+    assert vols["db/log"]["eda_capped"] is True
+    assert vols["db/log"]["eda_cap_scope"] == "vgroup"
+    assert vols["db/log"]["eda_cap_since"] == "2026-11-13T10:00:00Z"
+    assert vols["db/data"]["eda_capped"] is False
+    assert vols["db/data"]["eda_cap_scope"] == ""
+    assert vols["db/data"]["eda_cap_since"] is None
+    assert vols["db/data"]["volume_group_capped"] is True
+    assert vols["db/log"]["volume_group_capped"] is True
+    assert vols["plain"]["eda_capped"] is False and vols["plain"]["eda_cap_scope"] == ""
+    assert vols["plain"]["volume_group_capped"] is False
+    assert vols["free/one"]["eda_capped"] is False
+    assert vols["free/one"]["volume_group_capped"] is False
+    # the groups seen are read once, by name; the group's hot member by name
+    assert [kw for n, kw in client.calls if n == "get_volume_groups"] == [
+        {"names": ["db", "free"]}
+    ]
+    assert [
+        kw["names"]
+        for n, kw in client.calls
+        if n == "get_volumes_performance" and "names" in kw
+    ] == [["db/log"]]
+
+
+def test_a_quiet_sibling_of_a_capped_group_does_not_become_the_lift(events):
+    """A member that was quiet all along keeps its normal_polls but is not
+    capped by the group's tag, so the lift rule (eda_capped and normal
+    polls) cannot fire for it; the named member's counter restarts at the
+    cap."""
+    client = FakeClient(
+        volumes_perf=[vol_perf("db/hot", 5000, 500), vol_perf("db/quiet", 100, 50)],
+        volume_groups={"db/hot": "db", "db/quiet": "db"},
+        groups={"db": {"iops_limit": 50000, "bandwidth_limit": None}},
+    )
+    state = {}
+    args = {"top_volumes": 5, "min_iops": 1, "baseline": False}
+    for _ in range(3):
+        events._performance_events(FakeArray(client), state, args)
+    client.vg_tags = [
+        ("db", "qos_cap", "2026-11-13T10:00:00Z"),
+        ("db", "qos_prev_iops", "50000"),
+        ("db", "qos_cap_volume", "db/hot"),
+    ]
+    out = events._performance_events(FakeArray(client), state, args)
+    vols = {
+        e["purefa_volume_performance"]["volume"]: e["purefa_volume_performance"]
+        for e in out
+        if "purefa_volume_performance" in e
+    }
+    assert vols["db/quiet"]["normal_polls"] == 4
+    assert vols["db/quiet"]["eda_capped"] is False
+    assert vols["db/quiet"]["volume_group_capped"] is True
+    assert vols["db/hot"]["eda_capped"] is True and vols["db/hot"]["normal_polls"] == 0
 
 
 def test_cap_tag_on_a_missing_volume_does_not_fail_the_poll(events):
