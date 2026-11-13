@@ -7,8 +7,9 @@
 # aap/seed.yml creates for that playbook (organization aap_organization;
 # alert_log, request_dir and baseline_dir come from the templates), the
 # project's event sources named by their collection FQCN, and the
-# webhook-only rulesets left out (event streams or the controller workflow
-# take their place on the platform).
+# webhook-only and tick-only rulesets left out (event streams, the
+# controller workflow and the controller's schedules take their place on
+# the platform).
 - name: FlashArray replication
   hosts: all
   sources:
@@ -268,18 +269,3 @@
               subject: Protection group {{ event.purefa_pg_replication.pgroup }} on {{ event.purefa_pg_replication.array }} is {{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}
               detail: last completed {{ event.purefa_pg_replication.since_last_completed_s }}s ago, schedule every {{ event.purefa_pg_replication.frequency_ms }}ms, in progress={{ event.purefa_pg_replication.in_progress }}, targets={{ event.purefa_pg_replication.targets }}
               target_array: '{{ event.purefa_pg_replication.array }}'
-- name: FlashArray DR drill
-  hosts: all
-  sources:
-    - ansible.eda.tick:
-        delay: '{{ dr_drill_interval_s }}'
-  rules:
-    - name: Drill every replicated protection group on its target
-      condition: event.i is defined
-      action:
-        run_job_template:
-          name: FlashArray - DR drill
-          organization: '{{ aap_organization }}'
-          job_args:
-            extra_vars:
-              dr_drills: '{{ dr_drills }}'

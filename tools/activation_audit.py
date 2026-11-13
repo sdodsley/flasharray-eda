@@ -9,6 +9,13 @@ drifted ones.
     python tools/activation_audit.py --url https://aap.example.com --vars vars/local-site.yml
     python tools/activation_audit.py --url ... --vars ... --recreate
 
+In a platform job the built-in "Red Hat Ansible Automation Platform"
+credential type injects the token as AAP_TOKEN, the gateway as AAP_HOSTNAME
+and the TLS setting as AAP_VALIDATE_CERTS (CONTROLLER_HOST and
+CONTROLLER_VERIFY_SSL as well); --url and --insecure default to those, so
+the nightly definitions check (playbooks/definitions_check.yml) runs this
+tool with no address on its command line.
+
 An activation keeps the extra vars it was created with. aap/seed.yml renders
 them from the site vars file laid over vars/example.yml, minus the keys the
 attached credentials inject (purefa_arrays and config_arrays from the fleet
@@ -58,6 +65,10 @@ PLACEHOLDER_MARKS = (
     "changeme",
 )
 ENV_TOKEN = "AAP_TOKEN"
+# the gateway and the TLS setting as the platform's own credential type
+# injects them into a job (the first set wins)
+ENV_URL = ("AAP_HOSTNAME", "CONTROLLER_HOST")
+ENV_VERIFY = ("AAP_VALIDATE_CERTS", "CONTROLLER_VERIFY_SSL")
 TIMEOUT_SECONDS = 60
 DELETE_WAIT_SECONDS = 120
 NAME_WAIT_SECONDS = 300
@@ -67,6 +78,25 @@ BODY_UNREADABLE = "(body unreadable)"
 
 class AuditError(Exception):
     """The platform could not be read or written as asked."""
+
+
+def env_url():
+    """The gateway from the environment, without an /api/... path the
+    credential's host may carry; empty when unset."""
+    for name in ENV_URL:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return re.sub(r"/api/.*$", "", value.rstrip("/"))
+    return ""
+
+
+def env_insecure():
+    """True when the environment says not to verify the certificate."""
+    for name in ENV_VERIFY:
+        value = os.environ.get(name, "").strip().lower()
+        if value:
+            return value in ("false", "0", "no", "off")
+    return False
 
 
 # ---------------------------------------------------------------- the maths
@@ -407,8 +437,9 @@ def main(argv=None):
     )
     parser.add_argument(
         "--url",
-        required=True,
-        help="the platform gateway, e.g. https://aap.example.com",
+        default="",
+        help="the platform gateway, e.g. https://aap.example.com (default: "
+        "AAP_HOSTNAME or CONTROLLER_HOST in the environment)",
     )
     parser.add_argument(
         "--vars",
@@ -440,7 +471,10 @@ def main(argv=None):
         help="delete and recreate every activation whose vars differ from the expected ones",
     )
     parser.add_argument(
-        "--insecure", action="store_true", help="do not verify the TLS certificate"
+        "--insecure",
+        action="store_true",
+        help="do not verify the TLS certificate (default: AAP_VALIDATE_CERTS or "
+        "CONTROLLER_VERIFY_SSL false in the environment)",
     )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
@@ -448,6 +482,10 @@ def main(argv=None):
     token = os.environ.get(ENV_TOKEN, "")
     if not token:
         parser.error(f"set {ENV_TOKEN} in the environment")
+    url = args.url or env_url()
+    if not url:
+        parser.error(f"give --url or set {ENV_URL[0]} in the environment")
+    insecure = args.insecure or env_insecure()
     try:
         example = yaml.safe_load(pathlib.Path(args.example).read_text()) or {}
         site = yaml.safe_load(pathlib.Path(args.vars).read_text()) or {}
@@ -458,7 +496,7 @@ def main(argv=None):
     def say(text):
         print(text, file=sys.stderr if args.json else sys.stdout)
 
-    client = Client(args.url, token, insecure=args.insecure)
+    client = Client(url, token, insecure=insecure)
     report = []
     try:
         activations = [

@@ -26,14 +26,32 @@
 
     # Job artifacts for a workflow or orchestrator node that follows this one:
     # one {target_array, source_array, pgroup, result, error} per drill
-    # (collected by dr_drill_one.yml) and how many failed.
-    - name: Publish the drills as job artifacts
-      ansible.builtin.set_stats:
-        aggregate: false
-        per_host: false
-        data: >-
-          {{ {'drills': drills_done | default([]),
-              'failed_count': drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length,
-              'skipped_count': drills_done | default([]) | selectattr('result', 'equalto', 'skipped') | list | length} }}
-      run_once: true
-      delegate_to: localhost
+    # (collected by dr_drill_one.yml) and how many failed or were skipped.
+    # With dr_drill_fail_job true the job then fails when any drill failed,
+    # so a schedule's failure notification reaches a person ("FlashArray -
+    # DR drill (nightly)" passes it); the orchestrator's nightly definition
+    # judges failed_count itself and leaves it false. The artifacts are
+    # published either way.
+    - name: Publish the drills, and fail the job when told and a drill failed
+      block:
+        - name: Fail the job when a drill failed
+          when: >-
+            dr_drill_fail_job | default(false) | bool
+            and (drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length) > 0
+          ansible.builtin.fail:
+            msg: >-
+              {{ drills_done | selectattr('result', 'equalto', 'failed') | list | length }} drill(s) failed:
+              {{ drills_done | selectattr('result', 'equalto', 'failed')
+                 | map(attribute='pgroup') | zip(drills_done | selectattr('result', 'equalto', 'failed') | map(attribute='error'))
+                 | map('join', ': ') | join('; ') }}
+      always:
+        - name: Publish the drills as job artifacts
+          ansible.builtin.set_stats:
+            aggregate: false
+            per_host: false
+            data: >-
+              {{ {'drills': drills_done | default([]),
+                  'failed_count': drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length,
+                  'skipped_count': drills_done | default([]) | selectattr('result', 'equalto', 'skipped') | list | length} }}
+          run_once: true
+          delegate_to: localhost

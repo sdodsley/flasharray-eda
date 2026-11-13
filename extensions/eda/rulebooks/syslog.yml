@@ -70,11 +70,23 @@
             target_array: "{{ event.purefa_syslog.array }}"
             alert_log: "{{ alert_log }}"
 
-    - name: Test message - log
+    # The line /syslog-servers/test sends (the self-check asks for one every
+    # week): recorded at info, with the array's time and the receipt time,
+    # so the alert log holds both ends of the round trip.
+    - name: Test message - record
       condition: event.purefa_syslog.kind == "test"
       action:
-        debug:
-          msg: "syslog path from {{ event.purefa_syslog.array }} is working: {{ event.purefa_syslog.message }}"
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefa_syslog.array }}: syslog test line received"
+            detail: >-
+              purity.test from {{ event.purefa_syslog.source }},
+              array time {{ event.purefa_syslog.fields.utc_time | default(event.purefa_syslog.time) }} UTC,
+              received {{ event.meta.received_at }}: {{ event.purefa_syslog.message }}
+            target_array: "{{ event.purefa_syslog.array }}"
+            alert_log: "{{ alert_log }}"
 
     - name: Anything else from the array - log
       condition: event.purefa_syslog.kind == "other"

@@ -1,0 +1,185 @@
+---
+# Definitions drift check: what the platform runs against what the
+# repository says. Two comparisons, each made only when its credential is at
+# hand: the automation orchestrator's published workflow definitions against
+# orchestrator/*.json (tools/ao_sync.py --check, as the service account the
+# "Orchestrator service account" credential injects; orchestrator_url comes
+# from the same credential), and every FlashArray activation's extra vars
+# against the site vars the seed read (tools/activation_audit.py with the
+# platform token the "Red Hat Ansible Automation Platform" credential
+# injects as AAP_TOKEN and AAP_HOSTNAME; expected_activation_vars is the
+# site file laid over the example file, which aap/seed.yml puts on the job
+# template, and the audit renders each activation's vars from it exactly
+# as the seed does). One record of
+# kind definitions_check sums it up: critical when anything drifted or a
+# comparison could not be made, warning when neither comparison was
+# possible, info otherwise; and the job fails on critical unless
+# definitions_check_fail_job is false, so the nightly schedule's failure
+# notification reaches a person. Nothing is written to the orchestrator or
+# the platform.
+- name: Definitions drift check
+  hosts: localhost
+  gather_facts: false
+  vars:
+    definitions_check_fail_job: true
+    orchestrator_project: default
+    orchestrator_aap_credential: ""
+    orchestrator_aap_integration: ""
+    orchestrator_service_account: ""
+    expected_activation_vars: {}
+    activation_organization: FlashArray
+    tools_dir: "{{ playbook_dir }}/../tools"
+    definitions_glob: "{{ playbook_dir }}/../orchestrator/*.json"
+    # the TLS setting the rulebook vars use for the orchestrator applies here
+    # too, unless the launch says otherwise
+    orchestrator_tls_verify: "{{ orchestrator_validate_certs | default(expected_activation_vars.orchestrator_validate_certs | default(true)) }}"
+  tasks:
+    - name: Note which comparisons can be made
+      ansible.builtin.set_fact:
+        check_orchestrator: >-
+          {{ lookup('env', 'AO_CLIENT_ID') | length > 0 and lookup('env', 'AO_CLIENT_SECRET') | length > 0
+             and (orchestrator_url | default('') | length) > 0 }}
+        check_activations: >-
+          {{ lookup('env', 'AAP_TOKEN') | length > 0
+             and (lookup('env', 'AAP_HOSTNAME') | length > 0 or lookup('env', 'CONTROLLER_HOST') | length > 0)
+             and expected_activation_vars | length > 0 }}
+
+    - name: Say what is skipped
+      when: not (check_orchestrator | bool) or not (check_activations | bool)
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'the orchestrator comparison is skipped (no service account credential or no orchestrator_url); '
+             if not (check_orchestrator | bool) else '' }}{{ 'the activation comparison is skipped (no platform token credential or no expected_activation_vars)'
+             if not (check_activations | bool) else '' }}
+
+    # --check reports every definition that would be created, updated or
+    # published, the workflows of the project no file defines, and exits 1
+    # on drift or failure; it writes nothing. The glob is expanded by the
+    # tool, not a shell.
+    - name: Compare the orchestrator's published definitions with the files
+      when: check_orchestrator | bool
+      ansible.builtin.command:
+        argv: >-
+          {{ [ansible_playbook_python, tools_dir ~ '/ao_sync.py', '--url', orchestrator_url, '--project', orchestrator_project, '--check']
+             + (['--aap-credential', orchestrator_aap_credential] if orchestrator_aap_credential | length > 0 else [])
+             + (['--aap-integration', orchestrator_aap_integration] if orchestrator_aap_integration | length > 0 else [])
+             + (['--service-account', orchestrator_service_account] if orchestrator_service_account | length > 0 else [])
+             + ([] if orchestrator_tls_verify | bool else ['--insecure'])
+             + [definitions_glob] }}
+      register: sync_check
+      changed_when: false
+      failed_when: false
+
+    - name: Write the site vars the seed read for the audit
+      when: check_activations | bool
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .yml
+      register: expected_file
+
+    - name: Fill it
+      when: check_activations | bool
+      ansible.builtin.copy:
+        dest: "{{ expected_file.path }}"
+        content: "{{ expected_activation_vars | to_nice_yaml(indent=2, width=1000) }}"
+        mode: "0600"
+
+    # The audit lays the file over vars/example.yml and removes what each
+    # activation's credentials inject, exactly as the seed did; it takes the
+    # gateway and the token from the credential's environment and prints
+    # its report as JSON.
+    - name: Compare every FlashArray activation's extra vars with the site vars
+      when: check_activations | bool
+      ansible.builtin.command:
+        argv: >-
+          {{ [ansible_playbook_python, tools_dir ~ '/activation_audit.py', '--vars', expected_file.path, '--json',
+              '--organization', activation_organization] }}
+      register: audit_check
+      changed_when: false
+      failed_when: false
+
+    - name: Remove the file
+      when: check_activations | bool
+      ansible.builtin.file:
+        path: "{{ expected_file.path }}"
+        state: absent
+
+    # one expression per report, so its numbers and flags keep their types
+    - name: Read the orchestrator report
+      ansible.builtin.set_fact:
+        definitions_report: >-
+          {{ {'checked': check_orchestrator | bool,
+              'exit': (sync_check.rc | default(-1)) if check_orchestrator | bool else -1,
+              'drifted': sync_check.stdout_lines | default([]) | select('search', ': .*would ')
+                         | map('regex_replace', ':.*$', '') | map('basename') | list,
+              'extra': sync_check.stdout_lines | default([]) | select('match', '^extra: ')
+                       | map('regex_replace', '^extra: ', '') | map('regex_replace', ' .*$', '') | list,
+              'errors': sync_check.stdout_lines | default([]) | select('search', ': error: ') | list,
+              'summary': sync_check.stderr_lines | default([]) | select('match', '^ao_sync: ') | list | last | default('')} }}
+
+    - name: Read the activation report
+      vars:
+        audit_report: >-
+          {{ (audit_check.stdout | default('') | trim | from_json)
+             if (audit_check.stdout | default('') | trim) is match('^[[]') else [] }}
+      ansible.builtin.set_fact:
+        activations_report: >-
+          {{ {'checked': check_activations | bool,
+              'exit': (audit_check.rc | default(-1)) if check_activations | bool else -1,
+              'wrong': audit_report | selectattr('problems') | map(attribute='name') | list,
+              'problems': audit_report | selectattr('problems') | map(attribute='problems') | flatten | list,
+              'summary': audit_check.stderr_lines | default([]) | select('match', '^activation_audit: ') | list | last | default('')} }}
+
+    # critical: a comparison made and not clean (drift, an extra workflow is
+    # not drift, an error is); warning: nothing could be compared
+    - name: Judge
+      ansible.builtin.set_fact:
+        definitions_check_broken: >-
+          {{ (check_orchestrator | bool and sync_check.rc | default(1) != 0)
+             or (check_activations | bool and audit_check.rc | default(1) != 0) }}
+        definitions_check_severity: >-
+          {{ 'critical' if ((check_orchestrator | bool and sync_check.rc | default(1) != 0)
+                            or (check_activations | bool and audit_check.rc | default(1) != 0))
+             else ('warning' if not (check_orchestrator | bool or check_activations | bool) else 'info') }}
+
+    - name: Record the check
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'definitions_check',
+              'severity': definitions_check_severity, 'array': '',
+              'definitions': definitions_report, 'activations': activations_report} | to_json }}
+
+    - name: Show the check
+      ansible.builtin.debug:
+        msg:
+          - "orchestrator definitions: {{ (definitions_report.summary or 'not compared') if definitions_report.checked | bool else 'not compared' }}{{ (' drifted: ' ~ (definitions_report.drifted | join(', '))) if definitions_report.drifted else '' }}{{ (' extra: ' ~ (definitions_report.extra | join(', '))) if definitions_report.extra else '' }}"
+          - "activations: {{ (activations_report.summary or 'not compared') if activations_report.checked | bool else 'not compared' }}{{ (' wrong: ' ~ (activations_report.wrong | join(', '))) if activations_report.wrong else '' }}"
+          - "{{ sync_check.stdout_lines | default([]) + audit_check.stderr_lines | default([]) }}"
+
+    # The artifacts are published whether or not the job is then failed.
+    - name: Publish the check, and fail the job on drift when told
+      block:
+        - name: Fail the job when anything drifted or could not be compared
+          when: definitions_check_fail_job | bool and definitions_check_broken | bool
+          ansible.builtin.fail:
+            msg: >-
+              {{ definitions_report.summary }} {{ activations_report.summary }}
+              {{ ('definitions: ' ~ ((definitions_report.drifted + definitions_report.errors) | join(', '))) if definitions_report.drifted or definitions_report.errors else '' }}
+              {{ ('activations: ' ~ (activations_report.problems | join('; '))) if activations_report.problems else '' }}
+      always:
+        - name: Publish the check as job artifacts
+          ansible.builtin.set_stats:
+            aggregate: false
+            per_host: false
+            data: >-
+              {{ {'result': 'drift' if definitions_check_broken | bool else definitions_check_severity | replace('info', 'ok') | replace('warning', 'skipped'),
+                  'definitions_drifted': definitions_report.drifted,
+                  'definitions_extra': definitions_report.extra,
+                  'activations_wrong': activations_report.wrong,
+                  'orchestrator_checked': definitions_report.checked | bool,
+                  'activations_checked': activations_report.checked | bool} }}
+          run_once: true
+          delegate_to: localhost

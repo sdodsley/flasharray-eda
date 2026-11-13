@@ -119,11 +119,11 @@ Three things to get right on the first run:
 | `change_control.yml` | audits, webhook | a governed setting changed by anyone but the automation account; a destructive command by a human; a signed git push | reconcile from the git baseline (NTP, DNS) and report who; notify; apply the baseline forward |
 | `config_drift.yml` | config | NTP, DNS, LDAP, SafeMode/eradication, admin auth settings vs baseline (poll-based fallback) | NTP and DNS reapplied; the rest notify |
 | `health.yml` | health | hardware component not ok; drive not healthy; controller failover; maintenance window; remote assist | hardware component not ok: identify LED + notify, cleared again when it recovers, logged only inside a maintenance window; drive not healthy, controller failover: notify; maintenance window, remote assist: logged |
-| `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a schedule | notify; move host preferred arrays to the online side and back; replicate now (with `orchestrator_enabled`, an approval in the orchestrator first); DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
+| `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a tick (standalone; on the platform the seed's nightly schedule) | notify; move host preferred arrays to the online side and back; replicate now (with `orchestrator_enabled`, an approval in the orchestrator first); DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
 | `capacity.yml` | telemetry, webhook | used % over threshold; days-to-full from the array's 7-day history; an approval (bearer token) | approval request with request id; reclaim pending-eradication objects only when approved |
 | `performance.yml` | telemetry | noisy neighbour on a hot array; capped volume back to normal; array write latency vs the same half hour last week | temporary IOPS cap with an `eda/qos_cap` tag on the array; cap lifted; notify |
 | `anomaly.yml` | telemetry + audits | data reduction drop + snapshot or write surge + a human destroying snapshots, all on one array inside 15 minutes | snapshot every local protection group now, lengthen the eradication delay, page |
-| `syslog.yml` | purefa_syslog | `purity.audit` / `purity.alert` / `purity.test` lines pushed by the array | fast notification seconds after the fact |
+| `syslog.yml` | purefa_syslog | `purity.audit` / `purity.alert` / `purity.test` lines pushed by the array | fast notification seconds after the fact; a test line (the weekly self-check's) is recorded on receipt |
 | `alertmanager.yml` | ansible.eda.alertmanager | alerts from `prometheus/flasharray.rules.yml` on the native OpenMetrics exporter | the same playbooks, no custom code on the array side |
 
 The gates are what each event allows. `maintenance_active` (one cached
@@ -150,7 +150,7 @@ extensions/eda/plugins/event_source/   purefa_events.py (REST pull, six signals)
 extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN
 playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now, dr_promote, dr_demote,
                                        preferred_array, dr_drill, dr_switchover, alertmanager_silence, capacity_request/reclaim, qos_cap, protect_now,
-                                       expand_volume, orchestrator_post,
+                                       expand_volume, orchestrator_post, self_check, definitions_check,
                                        alert_runbook (+ runbooks/<code>.yml, included relative to the playbook)
 orchestrator/                          workflow definitions for the automation orchestrator and job_templates.txt
                                        (orchestrator/README.md)
@@ -160,7 +160,8 @@ tools/activation_audit.py              checks every FlashArray activation's extr
                                        with --recreate, recreates the drifted ones (aap/README.md, "Checking the activations")
 slack/approval_bot.py                  Slack Socket Mode bot: approval cards with Approve/Reject buttons for the orchestrator
                                        and the controller (slack/README.md)
-aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects;
+aap/                                   seed.yml, vars, inventory and credential types that build the AAP 2.7 objects
+                                       (credentials, templates, workflow, schedules, activations);
                                        execution and decision environment definitions (aap/README.md)
 baseline/                              schema of the git baseline (README); the real files live in a separate checkout
 prometheus/                            flasharray.rules.yml (alert rules for the native exporter, for the Prometheus
@@ -307,14 +308,19 @@ the rulebooks name theirs by FQCN, so an activation on this image resolves
 On the platform the rulebooks run as the generated variants under
 `extensions/eda/rulebooks/platform/` (`tools/platform_rulebooks.py`): the
 same rules, with `run_playbook` replaced by `run_job_template` against the
-seeded job templates and the webhook rulesets left out, because approvals
+seeded job templates, the webhook rulesets left out, because approvals
 and git pushes arrive through the controller workflow and event streams
-there. `aap/seed.yml` creates the organization, the credential types
-(`FlashArray API`, one credential per array; `FlashArray fleet`, whose
-single credential carries every array; `Orchestrator service account`;
-`Slack webhook`),
+there, and the tick-driven DR drill left out, because the platform drills
+from a schedule. `aap/seed.yml` creates the organization, the credential
+types (`FlashArray API`, one credential per array; `FlashArray fleet`,
+whose single credential carries every array; `Orchestrator service
+account`; `Slack webhook`; the built-in platform type for a token),
 the credentials, inventory, project, job templates, the controller-tier
-approval workflow and one rulebook activation per platform rulebook
+approval workflow, three schedules (the nightly DR drill, the weekly
+notification-path self-check in which every array tests its alert
+watchers, syslog servers and phone home, and the nightly check of the
+orchestrator's definitions and the activations' vars against the
+repository) and one rulebook activation per platform rulebook
 ([aap/README.md](aap/README.md)). The seed, the job templates and
 the controller-tier approval workflow (request, human approval, reclaim)
 and the activations (running, polling both arrays and launching job
@@ -392,8 +398,9 @@ covers every linter rule with a fixture and checks that every
 template's playbook, `test_ao_sync.py` drives the create, update, publish
 and dry-run paths, `test_approval_bot.py` the cards, the decision routing
 and both approval APIs, `test_playbook_artifacts.py` the `set_stats`
-artifacts, the credential guard and the seed. GitHub Actions runs the same
-on every push.
+artifacts, the credential guard and the seed, `test_schedules.py` the
+seed's schedules and the playbooks they launch. GitHub Actions runs the
+same on every push.
 
 `tests/replay_*.yml` are copies of the live rules driven by
 `ansible.eda.generic` from the fixtures under `tests/fixtures/`, or from

@@ -4,8 +4,8 @@
 are exactly what tools/platform_rulebooks.py generates from the standalone
 rulebooks beside them, every job template they name is listed in
 orchestrator/job_templates.txt, and the generated form keeps the contract
-the generator documents (FQCN sources, no webhook-only ruleset, no
-run_playbook, no template-carried extra var)."""
+the generator documents (FQCN sources, no webhook-only or tick-only
+ruleset, no run_playbook, no template-carried extra var)."""
 
 import importlib.util
 import pathlib
@@ -71,12 +71,13 @@ def test_committed_platform_file_equals_the_generators_output(name, generated):
 def test_platform_file_keeps_the_generators_contract(name, generator):
     doc = yaml.safe_load((PLATFORM / name).read_text(encoding="utf-8"))
     standalone = yaml.safe_load((RULEBOOKS / name).read_text(encoding="utf-8"))
-    kept = [rs for rs in standalone if not generator.webhook_only(rs)]
+    kept = [rs for rs in standalone if not generator.platform_omits(rs)]
     assert [rs["name"] for rs in doc] == [rs["name"] for rs in kept]
     for ruleset in doc:
         for entry in ruleset["sources"]:
             source = generator.source_type(entry)
             assert source != generator.WEBHOOK_SOURCE, f"{name}: webhook source kept"
+            assert source != generator.TICK_SOURCE, f"{name}: tick source kept"
             assert source not in generator.SOURCE_FQCN, f"{name}: bare {source}"
     for action in _actions(doc):
         assert "run_playbook" not in action, f"{name}: run_playbook left"
@@ -119,7 +120,7 @@ def test_rules_survive_the_conversion_unchanged_but_for_the_action(generator):
     for name in STANDALONE:
         standalone = yaml.safe_load((RULEBOOKS / name).read_text(encoding="utf-8"))
         platform = yaml.safe_load((PLATFORM / name).read_text(encoding="utf-8"))
-        kept = [rs for rs in standalone if not generator.webhook_only(rs)]
+        kept = [rs for rs in standalone if not generator.platform_omits(rs)]
         for before, after in zip(kept, platform):
             assert len(before["rules"]) == len(after["rules"])
             for rule_before, rule_after in zip(before["rules"], after["rules"]):

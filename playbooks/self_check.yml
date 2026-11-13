@@ -1,0 +1,186 @@
+---
+# Notification-path self-check: every array in the play runs its own tests
+# of the paths its alerts travel, and one record per destination is written.
+# The array sends a test e-mail to its alert watchers (/alert-watchers/test:
+# the watchers named in self_check_alert_watchers, else every enabled one), a
+# purity.test line to each syslog server (/syslog-servers/test; the syslog
+# rulebook records the line when it arrives, the other half of that round
+# trip) and runs its phone-home test (/support/test). self_check_tests picks
+# the tests and may add ntp (/arrays/ntp/test) and snmp_managers
+# (/snmp-managers/test). A destination that fails is recorded critical; one
+# the array has nothing to test (no enabled watcher, no syslog server) is a
+# warning. An outbound hiccup is not a broken path, so the tests that failed
+# are run once more after self_check_retry_s before they count. With
+# self_check_fail_job (default true) the job fails when a path is broken, so
+# a schedule's failure notification reaches a person: the weekly schedule
+# "FlashArray - self check (weekly)" (aap/seed.yml) proves the pager paths
+# before a real alert needs them. The play spans every array of the
+# inventory unless the launch limits it.
+- name: Notification-path self-check
+  hosts: all:!localhost
+  gather_facts: false
+  vars:
+    self_check_tests: [alert_watchers, syslog_servers, support]
+    self_check_alert_watchers: []
+    self_check_retry_s: 30
+    self_check_fail_job: true
+  tasks:
+    # With one array's FlashArray API credential attached, hostvars[<any
+    # array>].fa_url is that array's: the other hosts end here rather than
+    # fail every multi-array launch (the guard apply_baseline.yml uses).
+    - name: Skip the arrays whose credential is not attached
+      when: credential_array is defined and credential_array != inventory_hostname
+      ansible.builtin.meta: end_host
+
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    # One row per destination the array tested: test, destination, the
+    # controller that ran it, pass/fail, the array's text and a severity.
+    # REST 2.x answers a test with TestResult rows (success, result_details,
+    # destination, component_name, test_type; older releases say result);
+    # an answer that is not 200 is one failed row carrying the array's
+    # message. The failed tests are run a second time after RETRY_S seconds
+    # and the second answer is the one recorded.
+    - name: Ask the array to test its notification paths
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, time, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          tests = [t for t in os.environ["TESTS"].split(",") if t]
+          watchers = [w for w in os.environ["WATCHERS"].split(",") if w]
+          retry_s = int(os.environ.get("RETRY_S") or 0)
+
+          def row(test, destination, result, description, component="", test_type=""):
+              severity = "info" if result else ("warning" if result is None else "critical")
+              return {"test": test, "destination": destination, "component": component, "test_type": test_type,
+                      "result": result, "description": description, "severity": severity,
+                      "path": test + " -> " + (destination or "(none)")}
+
+          def rows_of(test, response, destination=""):
+              if response.status_code != 200:
+                  why = response.errors[0].message if getattr(response, "errors", None) else "HTTP %s" % response.status_code
+                  return [row(test, destination, False, why)]
+              out = []
+              for item in response.items:
+                  d = item.to_dict()
+                  ok = d.get("success") if d.get("success") is not None else d.get("result")
+                  text = d.get("result_details") or d.get("description") or ""
+                  # the support test names no destination: its rows are told
+                  # apart by test_type (phonehome, remote_assist)
+                  out.append(row(test, d.get("destination") or d.get("test_type") or destination, bool(ok), text,
+                                 d.get("component_name") or d.get("component_address") or "", d.get("test_type") or ""))
+              return out or [row(test, destination, None, "the array returned no test result")]
+
+          def run(test):
+              if test == "alert_watchers":
+                  names = watchers or [w.name for w in c.get_alert_watchers().items if getattr(w, "enabled", True)]
+                  if not names:
+                      return [row(test, "", None, "no enabled alert watcher to test")]
+                  return rows_of(test, c.get_alert_watchers_test(names=names), ",".join(names))
+              if test == "syslog_servers":
+                  if not list(c.get_syslog_servers().items):
+                      return [row(test, "", None, "no syslog server configured")]
+                  return rows_of(test, c.get_syslog_servers_test())
+              if test == "support":
+                  return rows_of(test, c.get_support_test(), "support")
+              if test == "ntp":
+                  return rows_of(test, c.get_arrays_ntp_test())
+              if test == "snmp_managers":
+                  if not list(c.get_snmp_managers().items):
+                      return [row(test, "", None, "no SNMP manager configured")]
+                  return rows_of(test, c.get_snmp_managers_test())
+              return [row(test, "", False, "unknown test; self_check_tests takes alert_watchers, syslog_servers, support, ntp, snmp_managers")]
+
+          rows = [r for t in tests for r in run(t)]
+          failed = sorted({r["test"] for r in rows if r["result"] is False})
+          if failed and retry_s > 0:
+              time.sleep(retry_s)
+              kept = [r for r in rows if r["test"] not in failed]
+              for test in failed:
+                  for r in run(test):
+                      r["retried"] = True
+                      kept.append(r)
+              rows = kept
+          print(json.dumps({"rows": rows, "retried": failed}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        TESTS: "{{ self_check_tests | join(',') }}"
+        WATCHERS: "{{ self_check_alert_watchers | join(',') }}"
+        RETRY_S: "{{ self_check_retry_s }}"
+      register: tested
+      changed_when: false
+      no_log: true
+
+    - name: Parse the results
+      ansible.builtin.set_fact:
+        self_check: "{{ tested.stdout | from_json }}"
+
+    # One array's loop at a time: lineinfile is read-modify-rename on the one
+    # alert log every array shares, and two arrays writing at once can lose
+    # a line without either noticing.
+    - name: Record each destination
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'self_check',
+              'severity': item.severity, 'array': inventory_hostname, 'test': item.test,
+              'test_type': item.test_type, 'destination': item.destination, 'component': item.component,
+              'result': item.result, 'description': item.description,
+              'retried': item.retried | default(false)} | to_json }}
+      loop: "{{ self_check.rows }}"
+      loop_control:
+        label: "{{ item.test }} {{ item.destination }}: {{ item.severity }}"
+      delegate_to: localhost
+      throttle: 1
+
+    - name: Show each destination
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ item.test }} -> {{ item.destination | default('(none)', true) }}:
+          {{ 'pass' if item.result else ('nothing to test' if item.result is none else 'FAIL') }}
+          {{ item.description }}{{ ' (on the second attempt)' if item.retried | default(false) else '' }}
+      loop: "{{ self_check.rows }}"
+      loop_control:
+        label: "{{ item.test }} {{ item.destination }}"
+
+    - name: Keep this array's broken paths
+      ansible.builtin.set_fact:
+        self_check_failed: >-
+          {{ self_check.rows | selectattr('severity', 'equalto', 'critical') | map(attribute='path')
+             | map('regex_replace', '^', inventory_hostname ~ ': ') | list }}
+
+    # The artifacts describe the whole run, read from every array's facts
+    # (an array ended above has none), and are published whether or not the
+    # job is then failed for a broken path.
+    - name: Publish the self-check, and fail the job when a path is broken
+      block:
+        - name: Fail the job when a notification path is broken
+          when: self_check_fail_job | bool and self_check_failed | length > 0
+          ansible.builtin.fail:
+            msg: "{{ self_check_failed | join('; ') }}"
+      always:
+        - name: Publish the self-check as job artifacts
+          ansible.builtin.set_stats:
+            aggregate: false
+            per_host: false
+            data: >-
+              {{ {'arrays_checked': ansible_play_hosts_all | map('extract', hostvars) | selectattr('self_check', 'defined')
+                                    | map(attribute='inventory_hostname') | list,
+                  'tests_run': ansible_play_hosts_all | map('extract', hostvars) | selectattr('self_check', 'defined')
+                               | map(attribute='self_check.rows') | flatten | length,
+                  'failed_count': ansible_play_hosts_all | map('extract', hostvars) | selectattr('self_check_failed', 'defined')
+                                  | map(attribute='self_check_failed') | flatten | length,
+                  'failed': ansible_play_hosts_all | map('extract', hostvars) | selectattr('self_check_failed', 'defined')
+                            | map(attribute='self_check_failed') | flatten} }}
+          run_once: true
+          delegate_to: localhost

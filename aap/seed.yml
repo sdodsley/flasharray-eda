@@ -10,12 +10,17 @@
 #
 # Created, in order: the organization; the "FlashArray API", "FlashArray
 # fleet" and "Orchestrator service account" credential types; one credential
-# per array, one fleet credential carrying every array, and one for the
-# orchestrator service account when its variables are set; the "FlashArrays"
-# inventory with one host per array plus localhost; the project; the
-# execution environment reference; one job template per playbook, each with
-# the fleet credential attached; the controller-tier capacity workflow
-# (request -> approval -> reclaim, notify on failure); and, on the
+# per array, one fleet credential carrying every array, one for the
+# orchestrator service account when its variables are set, and one holding a
+# platform token for the definitions check; the "FlashArrays" inventory with
+# one host per array plus localhost; the project; the execution environment
+# reference; one job template per playbook, each with the fleet credential
+# attached (the definitions check reaches no array and carries the platform
+# token credential, plus the orchestrator credential when seeded, instead);
+# the controller-tier capacity workflow (request -> approval -> reclaim,
+# notify on failure); three schedules (the nightly DR drill, the
+# weekly notification-path self-check, the nightly definitions drift check);
+# and, on the
 # Event-Driven Ansible controller, a decision environment, a project, the
 # same three credential types and credentials, and one activation per
 # platform rulebook (extensions/eda/rulebooks/platform/). Nothing here
@@ -55,6 +60,7 @@
     platform_credential_name: "Platform user - flasharray-eda"
     slack_credential_name: "Slack webhook - flasharray-eda"
     slack_notification_name: "Slack - flasharray-eda"
+    platform_token_credential_name: "Platform token - flasharray-eda"
     # the Slack webhook credential exists, and sits on the notify template,
     # only when the webhook URL is set; the notification template only when
     # the bot token and the channel are
@@ -67,8 +73,9 @@
     workflow_name: "FlashArray - capacity reclaim (controller tier)"
     # Fixed names: orchestrator workflow definitions and the platform
     # rulebooks' run_job_template actions refer to them, so a rename here is
-    # a rename everywhere. Every template carries the fleet credential, which
-    # injects every array's address and token as purefa_fleet_json;
+    # a rename everywhere. Every template but the definitions check (which
+    # reaches no array) carries the fleet credential, which injects every
+    # array's address and token as purefa_fleet_json;
     # playbooks/tasks/resolve_array.yml picks the entry of the array a launch
     # names and sets credential_array to it, so one template serves every
     # array. A launch may still pass one array's "FlashArray API" credential
@@ -146,6 +153,54 @@
       - name: "FlashArray - DR switchover"
         playbook: playbooks/dr_switchover.yml
         description: "Planned ActiveDR switchover: demote the source pod with quiesce, promote the target pod once the link reports the copy complete, so the link reverses; the same template with the sides swapped fails back; with eradicate_undo_demote true the undo-demote pod an earlier demotion left is eradicated first; artifacts both pods' states before and after, the link's direction and status, the undo-demote pods eradicated, changed"
+      - name: "FlashArray - self check"
+        playbook: playbooks/self_check.yml
+        description: "Ask every array to test its notification paths (alert watchers, syslog servers, phone home): one record per destination, critical on a failure, and the job fails when a path is broken; artifacts arrays_checked, tests_run, failed_count, failed"
+        extra_vars:
+          self_check_tests: "{{ aap_self_check_tests }}"
+          self_check_alert_watchers: "{{ aap_self_check_alert_watchers }}"
+      # Carries the platform token (the activation audit) and, when seeded,
+      # the orchestrator service account (the definitions). The vars it
+      # compares the activations against are the site file as this seed read
+      # it, laid over the example file; the audit renders what each
+      # activation should carry from them exactly as the seed does, so this
+      # template and the activations move together on every seed run.
+      - name: "FlashArray - definitions check"
+        playbook: playbooks/definitions_check.yml
+        description: "Compare the orchestrator's published workflow definitions with orchestrator/*.json and every FlashArray activation's extra vars with the site vars this seed read; the job fails on drift; artifacts result, definitions_drifted, definitions_extra, activations_wrong"
+        credentials: "{{ [platform_token_credential_name] + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}"
+        extra_vars:
+          expected_activation_vars: "{{ activation_site_vars }}"
+          activation_organization: "{{ aap_organization }}"
+          orchestrator_project: "{{ aap_orchestrator_project }}"
+          orchestrator_aap_credential: "{{ aap_orchestrator_aap_credential }}"
+          orchestrator_aap_integration: "{{ aap_orchestrator_aap_integration }}"
+          orchestrator_service_account: "{{ aap_orchestrator_service_account }}"
+    # Fixed-hour work the platform runs on its own. iCal rules from the
+    # vars: HH:MM in aap_schedule_timezone, daily or on one weekday; the
+    # DTSTART date only anchors the rule. The drill's job fails when a drill
+    # failed (dr_drill_fail_job), so the failure notification pages for it;
+    # the standalone replication rulebook drills off a tick instead, and the
+    # platform rulebook leaves that ruleset out.
+    schedule_dtstart: "DTSTART;TZID={{ aap_schedule_timezone }}:20260101T"
+    schedules:
+      - name: "FlashArray - DR drill (nightly)"
+        template: "FlashArray - DR drill"
+        description: "Every day at {{ aap_dr_drill_schedule.at }} {{ aap_schedule_timezone }}: copy, verify and destroy a volume from the latest replicated snapshot of each drill in aap_dr_drills; the job fails when a drill failed"
+        rrule: "{{ schedule_dtstart }}{{ aap_dr_drill_schedule.at | replace(':', '') }}00 RRULE:FREQ=DAILY;INTERVAL=1"
+        extra_data:
+          dr_drill_fail_job: true
+        enabled: "{{ aap_dr_drill_schedule.enabled }}"
+      - name: "FlashArray - self check (weekly)"
+        template: "FlashArray - self check"
+        description: "Every week on {{ aap_self_check_schedule.day }} at {{ aap_self_check_schedule.at }} {{ aap_schedule_timezone }}: every array tests its alert watchers, syslog servers and phone home; the job fails when a path is broken"
+        rrule: "{{ schedule_dtstart }}{{ aap_self_check_schedule.at | replace(':', '') }}00 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY={{ aap_self_check_schedule.day }}"
+        enabled: "{{ aap_self_check_schedule.enabled }}"
+      - name: "FlashArray - definitions check (nightly)"
+        template: "FlashArray - definitions check"
+        description: "Every day at {{ aap_definitions_check_schedule.at }} {{ aap_schedule_timezone }}: the orchestrator's published definitions against the repository and the activations' extra vars against the seed's rendering; the job fails on drift"
+        rrule: "{{ schedule_dtstart }}{{ aap_definitions_check_schedule.at | replace(':', '') }}00 RRULE:FREQ=DAILY;INTERVAL=1"
+        enabled: "{{ aap_definitions_check_schedule.enabled }}"
   tasks:
     - name: Refuse to run without the platform address and token
       ansible.builtin.assert:
@@ -166,6 +221,44 @@
       loop_control:
         label: "{{ item.name }}"
 
+    # The platform token credential stores the token this variable names; an
+    # empty one would seed a credential the definitions check cannot use.
+    - name: Refuse to run without the token the platform token credential stores
+      ansible.builtin.assert:
+        that:
+          - lookup('env', aap_platform_token_env) | length > 0
+        fail_msg: "{{ aap_platform_token_env }} must be set (aap_platform_token_env names the variable the platform token credential is read from)"
+        quiet: true
+
+    # YAML reads an unquoted 23:30 as the number 1410, so a schedule time
+    # must be a quoted HH:MM; the weekday is an iCal code.
+    - name: Refuse a schedule time that is not a quoted HH:MM or a weekday that is not an iCal code
+      ansible.builtin.assert:
+        that:
+          - item.value.at is string
+          - item.value.at | string is match('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+          - item.value.day | default('MO') in ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
+        fail_msg: "{{ item.key }}: at must be a quoted HH:MM and day one of MO TU WE TH FR SA SU (got at={{ item.value.at }}, day={{ item.value.day | default('') }})"
+        quiet: true
+      loop: >-
+        {{ {'aap_dr_drill_schedule': aap_dr_drill_schedule, 'aap_self_check_schedule': aap_self_check_schedule,
+            'aap_definitions_check_schedule': aap_definitions_check_schedule} | dict2items }}
+      loop_control:
+        label: "{{ item.key }}"
+
+    # The nightly definitions check runs tools/ao_sync.py --check over every
+    # orchestrator/*.json, and each carries REPLACE_AT_SYNC placeholders that
+    # only these names resolve; empty ones would fail the check every night.
+    - name: Refuse unset orchestrator names when the definitions check will compare the definitions
+      when: orchestrator_seeded | bool and aap_definitions_check_schedule.enabled | bool
+      ansible.builtin.assert:
+        that:
+          - aap_orchestrator_aap_credential | length > 0
+          - aap_orchestrator_aap_integration | length > 0
+          - aap_orchestrator_service_account | length > 0
+        fail_msg: "set aap_orchestrator_aap_credential, aap_orchestrator_aap_integration and aap_orchestrator_service_account (orchestrator/README.md, Importing), or disable aap_definitions_check_schedule"
+        quiet: true
+
     # The fleet credential's one input is a JSON list of every array's name,
     # address and token; the list is built here from the environment and is
     # held in a no_log fact.
@@ -179,6 +272,43 @@
       loop_control:
         label: "{{ item.name }}"
       no_log: true
+
+    # Rendered before the controller objects: the activations are created
+    # from this and the "FlashArray - definitions check" template carries it
+    # to compare them with later.
+    # An activation's extra vars are the rulebook vars file minus the keys
+    # its credentials inject: purefa_arrays comes from the fleet credential
+    # and orchestrator_url from the orchestrator credential when that is
+    # attached (the controller refuses a key that both the extra vars and a
+    # credential define). aap_organization is added for the run_job_template
+    # actions. The vars file holds no secrets, so the fact is logged.
+    - name: Credentials and extra vars every activation carries
+      ansible.builtin.set_fact:
+        activation_credentials: "{{ [fleet_credential_name, platform_credential_name] + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}"
+        activation_site_vars: >-
+          {{ (lookup('file', playbook_dir ~ '/../vars/example.yml') | from_yaml)
+             | combine(lookup('file', aap_eda_vars_file) | from_yaml) }}
+        activation_extra_vars: >-
+          {{ (lookup('file', playbook_dir ~ '/../vars/example.yml') | from_yaml)
+             | combine(lookup('file', aap_eda_vars_file) | from_yaml) | dict2items
+             | rejectattr('key', 'in', ['purefa_arrays', 'config_arrays'] + (['orchestrator_url'] if orchestrator_seeded | bool else []))
+             | items2dict | combine({'aap_organization': aap_organization})
+             | to_nice_yaml(indent=2, width=1000) }}
+
+    # A key the site file lacks takes the example default, and one of those
+    # defaults is a placeholder that an activation would act on: the capacity
+    # and replication rulebooks would post their handoffs to
+    # orchestrator.example.com. Refuse it rather than seed it.
+    - name: Refuse example placeholders in the extra vars the activations would carry
+      ansible.builtin.assert:
+        that:
+          - >-
+            not ((activation_extra_vars | from_yaml).orchestrator_enabled | default(false) | bool)
+            or (orchestrator_seeded | bool)
+            or ('example.com' not in ((activation_extra_vars | from_yaml).orchestrator_url | default('')))
+        fail_msg: >-
+          orchestrator_enabled is true but orchestrator_url is still the example placeholder:
+          set it in {{ aap_eda_vars_file }} or seed the orchestrator credential (AO_CLIENT_ID)
 
     # --- platform gateway ----------------------------------------------------
     - name: Organization
@@ -286,6 +416,27 @@
         credential_type: Slack webhook
         inputs:
           webhook_url: "{{ lookup('env', aap_slack_webhook_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    # The definitions check reads the activations through the platform's own
+    # API with a credential of the built-in "Red Hat Ansible Automation
+    # Platform" type, which injects the token as AAP_TOKEN and the gateway as
+    # AAP_HOSTNAME into the job (tools/activation_audit.py reads both). A
+    # token of a user with read on the Event-Driven Ansible controller is the
+    # right owner; aap_platform_token_env names the variable it comes from,
+    # the seeding token by default.
+    - name: Platform token credential for the definitions check
+      ansible.controller.credential:
+        name: "{{ platform_token_credential_name }}"
+        description: "Platform token tools/activation_audit.py reads the FlashArray activations with; injected as AAP_TOKEN and AAP_HOSTNAME"
+        organization: "{{ aap_organization }}"
+        credential_type: Red Hat Ansible Automation Platform
+        inputs:
+          host: "{{ aap_hostname }}"
+          oauth_token: "{{ lookup('env', aap_platform_token_env) }}"
+          verify_ssl: "{{ aap_validate_certs | bool }}"
         update_secrets: "{{ aap_update_secrets | bool }}"
         state: present
       no_log: true
@@ -464,6 +615,24 @@
               subject: "capacity reclaim workflow failed"
               detail: "see the failed node of the workflow job"
 
+    # Schedules on the templates above; a schedule's extra data is laid over
+    # the template's extra vars. The platform computes the next run from the
+    # rule; a disabled schedule stays, so a site can switch one off in its
+    # vars without losing it.
+    - name: Schedules
+      ansible.controller.schedule:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        unified_job_template: "{{ item.template }}"
+        organization: "{{ aap_organization }}"
+        rrule: "{{ item.rrule }}"
+        extra_data: "{{ item.extra_data | default({}) }}"
+        enabled: "{{ item.enabled | bool }}"
+        state: present
+      loop: "{{ schedules }}"
+      loop_control:
+        label: "{{ item.name }}"
+
     # --- Event-Driven Ansible controller --------------------------------------
     - name: Decision environment reference
       ansible.eda.decision_environment:
@@ -553,12 +722,6 @@
         state: present
       no_log: true
 
-    # An activation's extra vars are the rulebook vars file minus the keys
-    # its credentials inject: purefa_arrays comes from the fleet credential
-    # and orchestrator_url from the orchestrator credential when that is
-    # attached (the controller refuses a key that both the extra vars and a
-    # credential define). aap_organization is added for the run_job_template
-    # actions. The vars file holds no secrets, so the fact is logged.
     # The EDA controller refuses an activation whose rulebook calls
     # run_job_template unless a credential of its built-in type "Red Hat
     # Ansible Automation Platform" is attached; ansible-rulebook launches the
@@ -577,31 +740,6 @@
           verify_ssl: "{{ aap_validate_certs | bool }}"
         state: present
       no_log: true
-
-    - name: Credentials and extra vars every activation carries
-      ansible.builtin.set_fact:
-        activation_credentials: "{{ [fleet_credential_name, platform_credential_name] + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}"
-        activation_extra_vars: >-
-          {{ (lookup('file', playbook_dir ~ '/../vars/example.yml') | from_yaml)
-             | combine(lookup('file', aap_eda_vars_file) | from_yaml) | dict2items
-             | rejectattr('key', 'in', ['purefa_arrays', 'config_arrays'] + (['orchestrator_url'] if orchestrator_seeded | bool else []))
-             | items2dict | combine({'aap_organization': aap_organization})
-             | to_nice_yaml(indent=2, width=1000) }}
-
-    # A key the site file lacks takes the example default, and one of those
-    # defaults is a placeholder that an activation would act on: the capacity
-    # and replication rulebooks would post their handoffs to
-    # orchestrator.example.com. Refuse it rather than seed it.
-    - name: Refuse example placeholders in the extra vars the activations would carry
-      ansible.builtin.assert:
-        that:
-          - >-
-            not ((activation_extra_vars | from_yaml).orchestrator_enabled | default(false) | bool)
-            or (orchestrator_seeded | bool)
-            or ('example.com' not in ((activation_extra_vars | from_yaml).orchestrator_url | default('')))
-        fail_msg: >-
-          orchestrator_enabled is true but orchestrator_url is still the example placeholder:
-          set it in {{ aap_eda_vars_file }} or seed the orchestrator credential (AO_CLIENT_ID)
 
     # ansible.eda.rulebook_activation cannot update an activation and, in
     # 2.13, creates it enabled whatever `enabled` says; so existing ones are

@@ -121,6 +121,9 @@
                   'ntp_changed': ntp_result.changed | default(false),
                   'dns_changed': dns_result.changed | default(false)} | to_json }}
           delegate_to: localhost
+          # every array writes the one alert log, and lineinfile is
+          # read-modify-rename: one array at a time
+          throttle: 1
 
     # Job artifacts for a workflow or orchestrator node that follows this one.
     # One set for the whole run: the task runs once, after every array has

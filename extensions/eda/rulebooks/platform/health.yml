@@ -7,8 +7,9 @@
 # aap/seed.yml creates for that playbook (organization aap_organization;
 # alert_log, request_dir and baseline_dir come from the templates), the
 # project's event sources named by their collection FQCN, and the
-# webhook-only rulesets left out (event streams or the controller workflow
-# take their place on the platform).
+# webhook-only and tick-only rulesets left out (event streams, the
+# controller workflow and the controller's schedules take their place on
+# the platform).
 - name: FlashArray health
   hosts: all
   sources:

@@ -116,6 +116,45 @@ aap_approval_timeout_s: 86400
 # (reports changed on every run; use after renaming a node).
 aap_rebuild_workflow_nodes: false
 
+# --- schedules ---------------------------------------------------------------
+# Controller schedules the seed creates, as iCal rules built from these:
+# times are a quoted "HH:MM" in aap_schedule_timezone (an IANA zone name;
+# unquoted, YAML reads 23:30 as a number and the seed refuses it), the
+# weekday an iCal code (MO TU WE TH FR SA SU). A disabled schedule is created but
+# never fires. The platform's DR drill is this schedule (the platform
+# replication rulebook has no tick ruleset); a site whose orchestrator has
+# dr_drill_schedule.json published drills from there and disables this one.
+aap_schedule_timezone: UTC
+aap_dr_drill_schedule:
+  enabled: true
+  at: "02:00"
+aap_self_check_schedule:
+  enabled: true
+  day: MO
+  at: "08:00"
+aap_definitions_check_schedule:
+  enabled: true
+  at: "03:00"
+# What "FlashArray - self check" asks every array to test: alert_watchers (a
+# test e-mail to the watchers named in aap_self_check_alert_watchers, or to
+# every enabled one when the list is empty), syslog_servers (a purity.test
+# line to each server, which the syslog rulebook records on receipt) and
+# support (phone home); ntp and snmp_managers may be added.
+aap_self_check_tests: [alert_watchers, syslog_servers, support]
+aap_self_check_alert_watchers: []
+# "FlashArray - definitions check": the platform token the activation audit
+# reads with (a user with read on the Event-Driven Ansible controller; the
+# seeding token by default), and the orchestrator project and the names
+# tools/ao_sync.py resolves the definitions' placeholders with
+# (orchestrator/README.md, "Importing"); the orchestrator half of the check
+# is skipped when the orchestrator credential is not seeded, and the seed
+# refuses empty names when it is seeded and the schedule is enabled.
+aap_platform_token_env: AAP_TOKEN
+aap_orchestrator_project: default
+aap_orchestrator_aap_credential: ""
+aap_orchestrator_aap_integration: ""
+aap_orchestrator_service_account: ""
+
 # --- Event-Driven Ansible controller ---------------------------------------
 aap_eda_project_name: FlashArray EDA
 aap_eda_de_name: FlashArray EDA DE

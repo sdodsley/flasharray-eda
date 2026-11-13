@@ -43,6 +43,13 @@ ARTIFACT_KEYS = {
     "alertmanager_silence.yml": {"silence_id", "mode"},
     "expand_volume.yml": {"volume", "old_size", "new_size"},
     "replicate_now.yml": {"pgroup", "reason", "snapshot_suffix", "changed"},
+    "self_check.yml": {"arrays_checked", "tests_run", "failed_count", "failed"},
+    "definitions_check.yml": {
+        "result",
+        "definitions_drifted",
+        "definitions_extra",
+        "activations_wrong",
+    },
     "dr_switchover.yml": {
         "source_pod",
         "target_pod",
@@ -91,6 +98,8 @@ JOB_TEMPLATE_NAMES = {
     "FlashArray - DR demote",
     "FlashArray - DR switchover",
     "FlashArray - Alertmanager silence",
+    "FlashArray - self check",
+    "FlashArray - definitions check",
 }
 
 RESOLVE_ARRAY = "{{ playbook_dir }}/tasks/resolve_array.yml"
@@ -117,6 +126,7 @@ RESOLVES = {
     "remediate_dns.yml": "inventory_hostname",
     "remediate_ntp.yml": "inventory_hostname",
     "replicate_now.yml": "inventory_hostname",
+    "self_check.yml": "inventory_hostname",
 }
 
 SET_STATS = "ansible.builtin.set_stats"
@@ -182,9 +192,13 @@ def test_playbook_ends_with_one_set_stats_publishing_the_documented_keys(
     if task_file:
         assert doc[-1]["always"][-1] is task, f"{name}: set_stats is not last in always"
     else:
-        assert (
-            doc[-1]["tasks"][-1] is task
-        ), f"{name}: set_stats is not in the last play"
+        # the last task of the last play, or the always of a last block whose
+        # body fails the job after the stats are published (dr_drill,
+        # self_check, definitions_check)
+        last = doc[-1]["tasks"][-1]
+        assert last is task or (
+            "always" in last and last["always"][-1] is task
+        ), f"{name}: set_stats is not the last task of the last play"
     args = task[SET_STATS]
     assert args.get("aggregate") is False, f"{name}: aggregate must be false"
     assert args.get("per_host") is False, f"{name}: per_host must be false"
@@ -304,9 +318,9 @@ def test_seed_variables_are_documented_and_hold_no_lab_specifics(repo_root):
         for t in _seed(repo_root)[0]["tasks"]
         if any(k.endswith(".credential") for k in t)
     ]
-    # controller: per array, fleet, orchestrator, Slack webhook; EDA: per
-    # array, fleet, orchestrator, platform user
-    assert len(credential_tasks) == 8
+    # controller: per array, fleet, orchestrator, Slack webhook, platform
+    # token; EDA: per array, fleet, orchestrator, platform user
+    assert len(credential_tasks) == 9
     for task in credential_tasks:
         assert task.get("no_log") is True, f"{task['name']}: credential without no_log"
 
@@ -402,18 +416,18 @@ def test_playbooks_refuse_another_arrays_credential(repo_root):
         t for t in block["always"] if "everpure.flasharray.purefa_volume" in t
     )
     assert "credential_array" in cleanup["when"]
-    # apply_baseline spans every array (hosts: all:!localhost), so instead of
-    # an assert that would fail every multi-array launch its first task ends
-    # the hosts whose credential is not attached, before any baseline is read
-    baseline = _load(repo_root / "playbooks" / "apply_baseline.yml")
-    assert baseline[1]["hosts"] == "all:!localhost"
-    first = baseline[1]["tasks"][0]
-    assert (
-        "ansible.builtin.meta" in first
-    ), "apply_baseline.yml: no end_host guard first"
-    assert first["ansible.builtin.meta"] == "end_host"
-    assert "credential_array" in first["when"]
-    assert "inventory_hostname" in first["when"]
+    # apply_baseline and self_check span every array (hosts: all:!localhost),
+    # so instead of an assert that would fail every multi-array launch their
+    # first task ends the hosts whose credential is not attached, before
+    # anything is read
+    for name, play_index in (("apply_baseline.yml", 1), ("self_check.yml", 0)):
+        play = _load(repo_root / "playbooks" / name)[play_index]
+        assert play["hosts"] == "all:!localhost", name
+        first = play["tasks"][0]
+        assert "ansible.builtin.meta" in first, f"{name}: no end_host guard first"
+        assert first["ansible.builtin.meta"] == "end_host"
+        assert "credential_array" in first["when"]
+        assert "inventory_hostname" in first["when"]
 
 
 def test_seed_limits_apply_baseline_to_the_attached_credentials_array(repo_root):

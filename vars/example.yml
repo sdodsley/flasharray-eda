@@ -142,7 +142,11 @@ replication_auto_replicate_now: true  # overdue/stuck protection group -> immedi
 activecluster_auto_prefer: true       # stretched pod member offline -> host preferred arrays to the online side
 # Scheduled DR drill: copy a volume from the latest replicated snapshot on the
 # target, verify it, destroy it. One entry per replicated protection group
-# (needs two arrays; drop the entry for a single array).
+# (needs two arrays; drop the entry for a single array). The interval drives
+# the standalone drill, which runs that long after the rulebook starts and
+# every interval after; on the platform the ruleset is left out and the
+# controller schedule "FlashArray - DR drill (nightly)" runs the drill at a
+# fixed hour (aap/seed.yml).
 dr_drill_interval_s: 86400
 dr_drills:
   - target_array: array-b

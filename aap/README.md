@@ -81,12 +81,14 @@ platform API from where it runs.
 | Credential | `Orchestrator service account - flasharray-eda` | only when `AO_CLIENT_ID` is set |
 | Credential type | `Slack webhook` | one secret input, `webhook_url`; injected as the environment variable `SLACK_WEBHOOK_URL`, which `playbooks/notify.yml` posts to |
 | Credential | `Slack webhook - flasharray-eda` | only when `SLACK_WEBHOOK_URL` is set; attached to `FlashArray - notify` |
+| Credential | `Platform token - flasharray-eda` | the built-in `Red Hat Ansible Automation Platform` type, holding the gateway and the token the variable `aap_platform_token_env` names (the seeding token by default; a user with read on the Event-Driven Ansible controller is the right owner); injected as `AAP_HOSTNAME` and `AAP_TOKEN` into `FlashArray - definitions check` |
 | Inventory | `FlashArrays` | `localhost` plus one host per array, named as in `purefa_arrays`; `ansible_connection: local` |
 | Project | `FlashArray EDA` | git, `aap_project_url` on `aap_project_branch`; synced once by the seed |
 | Execution environment | `FlashArray EDA EE` | image from `aap_ee_image` |
-| Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote`, `FlashArray - DR switchover`, `FlashArray - Alertmanager silence` | one per playbook; the fleet credential attached; prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential; the Alertmanager silence carries `aap_alertmanager_url` as `alertmanager_url` |
+| Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote`, `FlashArray - DR switchover`, `FlashArray - Alertmanager silence`, `FlashArray - self check`, `FlashArray - definitions check` | one per playbook; the fleet credential attached (except the definitions check, which reaches no array); prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential; the Alertmanager silence carries `aap_alertmanager_url` as `alertmanager_url`; the self check carries `aap_self_check_tests` and `aap_self_check_alert_watchers`; the definitions check carries the platform token credential, the orchestrator credential when it exists, the site vars the seed read (`expected_activation_vars`) and the `aap_orchestrator_*` names ("Schedules") |
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
 | Notification template | `Slack - flasharray-eda` | only when `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are set: type Slack, posts every job template's failures and the workflow's success, failure and approval events (pending, approved, denied, timed out) to the channel, each with its link into the platform |
+| Schedules | `FlashArray - DR drill (nightly)`, `FlashArray - self check (weekly)`, `FlashArray - definitions check (nightly)` | iCal rules from `aap_dr_drill_schedule`, `aap_self_check_schedule` and `aap_definitions_check_schedule` in `aap_schedule_timezone`; the drill schedule passes `dr_drill_fail_job: true` so a failed drill fails the job ("Schedules") |
 | EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`, pulled with `aap_eda_de_pull_policy`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the store the activation workers use ("Images on a containerized platform") |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |
@@ -96,7 +98,8 @@ The names in the job template column are fixed: the orchestrator workflow
 definitions and the platform rulebooks' `run_job_template` actions refer
 to them, `orchestrator/job_templates.txt` lists the nineteen a definition
 or a platform rulebook launches (`FlashArray - apply baseline` is launched
-by people and the git-push ruleset only), and
+by people and the git-push ruleset only, `FlashArray - self check` and
+`FlashArray - definitions check` by their schedules and people), and
 `tests/unit/test_playbook_artifacts.py` checks that `seed.yml` carries
 them. `FlashArray - orchestrator post` runs
 `playbooks/orchestrator_post.yml`; it is created only when the orchestrator
@@ -222,6 +225,65 @@ holds who approved. The request and reclaim nodes run their templates
 with the fleet credential the templates carry, and `at_risk_array` picks
 the array, so one copy of the workflow serves every array.
 
+## Schedules
+
+Three things run at a fixed hour, as controller schedules on the templates
+above (`ansible.controller.schedule`; iCal rules built from
+`aap_dr_drill_schedule`, `aap_self_check_schedule` and
+`aap_definitions_check_schedule`, times a quoted `HH:MM` in
+`aap_schedule_timezone`, the weekday an iCal code; the seed refuses an
+unquoted time, which YAML reads as a number; a schedule with
+`enabled: false` is created and never fires). A schedule launches its template with the template's extra
+vars plus its own extra data, and a failed job is reported by the
+template's failure notification (`Slack - flasharray-eda` when the bot
+token is seeded), so a failed drill, a broken pager path or a drifted
+definition reaches the channel with its link into the platform.
+
+- **`FlashArray - DR drill (nightly)`** runs `FlashArray - DR drill` on
+  `aap_dr_drills` with `dr_drill_fail_job: true`: a drill that found no
+  completed snapshot to copy from, or whose copy failed, fails the job
+  (the artifacts are published first). The standalone replication rulebook
+  drills off a tick that restarts with the rulebook; the platform rulebook
+  leaves that ruleset out (`tools/platform_rulebooks.py` drops tick-only
+  rulesets as it drops webhook-only ones), so on the platform this
+  schedule is the drill. The orchestrator's `dr_drill_schedule.json` runs
+  the same drill from the orchestrator with a notify on failure; a site
+  with both keeps one and disables the other (two drills at the same hour
+  are harmless, the second finds the first's copy in flight and skips, but
+  pointless).
+- **`FlashArray - self check (weekly)`** runs `playbooks/self_check.yml`
+  on every array of the inventory. Each array tests its own notification
+  paths: a test e-mail to its alert watchers (`/alert-watchers/test`;
+  `aap_self_check_alert_watchers` names them, empty means every enabled
+  one), a `purity.test` line to each syslog server (`/syslog-servers/test`;
+  the syslog rulebook records the line when it arrives, so the alert log
+  holds both ends of that round trip) and its phone-home test
+  (`/support/test`, which answers for phone home and remote assist).
+  `aap_self_check_tests` picks the tests; `ntp` (`/arrays/ntp/test`) and
+  `snmp_managers` (`/snmp-managers/test`) may be added. One `self_check`
+  record per destination: a failure is critical and, after one retry, fails
+  the job; an array with nothing to test (no enabled watcher, no syslog
+  server) is a warning. A broken pager path is found on Monday morning
+  instead of during an incident.
+- **`FlashArray - definitions check (nightly)`** runs
+  `playbooks/definitions_check.yml`, two comparisons that write nothing:
+  `tools/ao_sync.py --check` of the orchestrator's published workflow
+  definitions against `orchestrator/*.json`, as the service account the
+  orchestrator credential injects (`aap_orchestrator_project` and the
+  `aap_orchestrator_*` names fill the definitions' placeholders; skipped
+  when that credential is not seeded), and `tools/activation_audit.py` of
+  every `FlashArray rulebook - *` activation's extra vars against the site
+  vars the seed read (the site file laid over the example file, put on the
+  template as `expected_activation_vars`; the audit renders what each
+  activation should carry from them exactly as the seed does), through the
+  `Platform token - flasharray-eda` credential (the tool takes the gateway
+  and the TLS setting from that credential's environment). The job fails on
+  drift, on a comparison that could not be made, and with a warning record
+  when neither could be made. The template's copy of the site vars is
+  refreshed by every seed run, so the check says whether the activations
+  match the last seed; "Checking the activations" below is the same
+  comparison by hand, against the site file itself.
+
 ## The Event-Driven Ansible controller side
 
 The rulebooks an activation runs are the platform rulebooks under
@@ -240,7 +302,9 @@ resolves them from the decision environment; and the rulesets whose only
 source is `ansible.eda.webhook` (the capacity approvals and the git push)
 are left out, because on the platform those are event streams with their
 own credentials or the controller-tier workflow. `APPROVAL_TOKEN` and
-`GIT_WEBHOOK_SECRET` are therefore not seeded.
+`GIT_WEBHOOK_SECRET` are therefore not seeded. The ruleset whose only
+source is `ansible.eda.tick` (the DR drill) is left out as well: on the
+platform the drill is the schedule above.
 
 The seed creates the decision environment, the project, the three
 credential types with their credentials, and one activation per platform
@@ -326,7 +390,9 @@ recreated, and nothing is recreated while the expected vars themselves
 still carry a placeholder (fix the site file first). Each delete and create
 is printed as it happens, old id and new id, because the Rule Audit rows
 stay under the old id. Run it after the seed and after any change to the
-site file.
+site file; the nightly `FlashArray - definitions check` runs the same
+comparison from the platform against the site vars the last seed run left
+on its template ("Schedules").
 
 The plugin counts consecutive failed polls per array and signal and sets
 `escalate: true` on `purefa_poll_error` once they reach its

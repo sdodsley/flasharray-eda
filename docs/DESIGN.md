@@ -259,6 +259,14 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
 - Poll failures arrive as `purefa_poll_error` and polling continues; a
   management VIP `url_check` to tell a dead network from a dead array is
   design intent.
+- The pager paths are tested, not assumed. Once a week every array tests
+  its own (`playbooks/self_check.yml`, a controller schedule on the
+  platform): a test e-mail to its alert watchers, a `purity.test` line to
+  its syslog servers, which the syslog rulebook records on receipt, and its
+  phone-home test; one record per destination and a failed job on a broken
+  path. Every night the automation checks itself the same way
+  (`playbooks/definitions_check.yml`): the orchestrator's published
+  definitions and the activations' extra vars against the repository.
 
 ### 4.9 The record, the pager and the approver
 
@@ -341,7 +349,9 @@ ansible-rulebook, ansible-core and aiohttp. EDA Controller activations
 resolve custom event sources from the collections in the image, so the
 rulebooks name theirs by FQCN; on the platform they run as the generated
 variants under `extensions/eda/rulebooks/platform/`, where `run_playbook`
-becomes `run_job_template` (`aap/README.md`, [PACKAGING.md](PACKAGING.md)).
+becomes `run_job_template` and the tick-driven DR drill gives way to a
+controller schedule the seed creates, beside the weekly self-check and the
+nightly definitions check (`aap/README.md`, [PACKAGING.md](PACKAGING.md)).
 The Slack approval bot runs as one more container beside the listeners
 (`slack/README.md`); Socket Mode means it opens an outbound websocket and
 needs no inbound port.

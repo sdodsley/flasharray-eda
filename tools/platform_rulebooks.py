@@ -15,7 +15,9 @@ organization aap_organization, with the same extra_vars minus alert_log,
 request_dir and baseline_dir, which the job templates carry; (b) rulesets
 whose only source is ansible.eda.webhook are left out, because the approval
 and git-push webhooks are event streams or the controller workflow on the
-platform; (c) the project's event sources are named by their collection
+platform, and so are rulesets whose only source is ansible.eda.tick, because
+fixed-hour work is a controller schedule there (aap/seed.yml creates the DR
+drill's); (c) the project's event sources are named by their collection
 FQCN (SOURCE_FQCN). Comments inside a standalone rulebook do not survive the
 round trip; the header of each generated file says where it comes from.
 Standard library plus PyYAML; the output is deterministic, so the committed
@@ -69,6 +71,7 @@ SOURCE_FQCN = {
 TEMPLATE_VARS = ("alert_log", "request_dir", "baseline_dir")
 
 WEBHOOK_SOURCE = "ansible.eda.webhook"
+TICK_SOURCE = "ansible.eda.tick"
 ORGANIZATION = "{{ aap_organization }}"
 
 # keys of a source entry that are not the source's name
@@ -84,8 +87,9 @@ HEADER = """\
 # aap/seed.yml creates for that playbook (organization aap_organization;
 # alert_log, request_dir and baseline_dir come from the templates), the
 # project's event sources named by their collection FQCN, and the
-# webhook-only rulesets left out (event streams or the controller workflow
-# take their place on the platform).
+# webhook-only and tick-only rulesets left out (event streams, the
+# controller workflow and the controller's schedules take their place on
+# the platform).
 """
 
 
@@ -169,16 +173,29 @@ def convert_ruleset(ruleset):
     return out
 
 
-def webhook_only(ruleset):
+def _only_source(ruleset, source):
     sources = ruleset.get("sources") or []
-    return bool(sources) and all(
-        source_type(entry) == WEBHOOK_SOURCE for entry in sources
-    )
+    return bool(sources) and all(source_type(entry) == source for entry in sources)
+
+
+def webhook_only(ruleset):
+    return _only_source(ruleset, WEBHOOK_SOURCE)
+
+
+def tick_only(ruleset):
+    return _only_source(ruleset, TICK_SOURCE)
+
+
+def platform_omits(ruleset):
+    """True for a ruleset the platform form leaves out: webhook-only (an
+    event stream or the controller workflow there) or tick-only (a
+    controller schedule there)."""
+    return webhook_only(ruleset) or tick_only(ruleset)
 
 
 def convert(doc):
     """The platform form of one standalone rulebook document."""
-    return [convert_ruleset(rs) for rs in doc if not webhook_only(rs)]
+    return [convert_ruleset(rs) for rs in doc if not platform_omits(rs)]
 
 
 def render(name, doc):

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Controller schedules from the seed: `aap/seed.yml` creates the nightly
+  DR drill at a fixed hour (`dr_drill_fail_job` makes a failed drill fail
+  the job, and the platform rulebooks leave the tick-driven drill ruleset
+  out), the weekly notification-path self-check (`playbooks/self_check.yml`:
+  every array sends a test e-mail to its alert watchers and a `purity.test`
+  line to its syslog servers, which the syslog rulebook now records on
+  receipt, and runs its phone-home test; one record per destination, a
+  failed job on a broken path) and the nightly definitions drift check
+  (`playbooks/definitions_check.yml`: `ao_sync --check` against the
+  orchestrator and `activation_audit` against the site vars the seed read,
+  through a `Platform token - flasharray-eda`
+  credential whose environment the audit tool now reads). Times, the
+  watcher list and the orchestrator names are seed vars.
+- The two playbooks that span every array (apply baseline and the self
+  check) write the shared alert log one array at a time: `lineinfile` is
+  read-modify-rename, and two arrays writing at once could lose a record.
 - Run twice: every playbook a template launches now honours the contract
   that a second launch with the same extra vars leaves the array as it is
   and says so. Expand volume treats a volume already at the size as done;

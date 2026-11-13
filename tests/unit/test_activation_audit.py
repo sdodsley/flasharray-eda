@@ -784,3 +784,55 @@ def test_cli_needs_the_token_in_the_environment(tmp_path):
     )
     assert result.returncode == 2
     assert "AAP_TOKEN" in result.stderr
+
+
+def test_cli_takes_the_gateway_and_tls_from_the_credentials_environment(
+    audit, store, files, capsys, monkeypatch
+):
+    """In a platform job the "Red Hat Ansible Automation Platform" credential
+    injects AAP_HOSTNAME (possibly with an /api/... path) and
+    AAP_VALIDATE_CERTS; --url and --insecure default to them."""
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [_activation(7, "FlashArray rulebook - alerts", good)]
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setenv("AAP_HOSTNAME", store.url + "/api/controller/")
+    monkeypatch.setenv("AAP_VALIDATE_CERTS", "False")
+    code = audit.main([*files])
+    out = capsys.readouterr()
+    assert code == 0
+    assert out.out.splitlines()[0] == "FlashArray rulebook - alerts: ok (running)"
+
+
+def test_env_defaults_for_the_gateway_and_tls(audit, monkeypatch):
+    for name in ("AAP_HOSTNAME", "CONTROLLER_HOST", "AAP_VALIDATE_CERTS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("CONTROLLER_VERIFY_SSL", raising=False)
+    assert audit.env_url() == ""
+    assert audit.env_insecure() is False
+    monkeypatch.setenv("CONTROLLER_HOST", "https://gw.example.com/api/controller/")
+    assert audit.env_url() == "https://gw.example.com"
+    monkeypatch.setenv("AAP_HOSTNAME", "https://aap.example.com/")
+    assert audit.env_url() == "https://aap.example.com"  # AAP_HOSTNAME first
+    monkeypatch.setenv("CONTROLLER_VERIFY_SSL", "False")
+    assert audit.env_insecure() is True
+    monkeypatch.setenv("AAP_VALIDATE_CERTS", "True")
+    assert audit.env_insecure() is False  # AAP_VALIDATE_CERTS first
+
+
+def test_cli_needs_a_gateway(tmp_path):
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AAP_HOSTNAME", "CONTROLLER_HOST")
+    }
+    env["AAP_TOKEN"] = "tok"
+    result = subprocess.run(
+        [sys.executable, "-I", str(TOOL), "--vars", str(tmp_path / "x.yml")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 2
+    assert "AAP_HOSTNAME" in result.stderr
