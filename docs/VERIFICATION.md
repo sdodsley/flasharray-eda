@@ -121,11 +121,16 @@ second read it already expired; the DR switchover ran twice each way on
 the lab link, the second run of each direction changing nothing. The
 reclaim's already-done path is pinned by the static test only: array A
 refuses eradication (`Eradication is disabled`), so no reclaim ran live.
-The bridge's pending check ran
-against the mock orchestrator in the unit tests; its first platform run
-follows this commit, the platform running the committed tree. The drill's
-in-flight skip and a demotion retried inside its quiesce are unit-tested
-only (both need two overlapping launches).
+The bridge's pending check ran on the platform once the tree was
+committed: with a capacity execution paused at its approval, two launches
+of the orchestrator-post template with the same event each recorded
+`pending` with that execution's id and posted nothing (jobs 486 and 488);
+the approval was then rejected so nothing was reclaimed. The silence pair
+was run again at the default 30 minute length after the reuse rule gained
+its five-minute floor: the second create reused the id, the second expire
+read it already expired. The drill's in-flight skip and stale-copy removal
+and a demotion retried inside its quiesce are unit-tested only (they need
+two overlapping launches).
 
 ## Exercised through Prometheus and Alertmanager
 
