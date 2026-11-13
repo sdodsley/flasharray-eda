@@ -81,10 +81,21 @@
       register: read_before
       changed_when: false
       no_log: true
+      # settle, then judge: a launch retried inside the quiesce waits for the
+      # pod to reach its requested state before anything is decided
+      retries: 30
+      delay: 10
+      until: >-
+        read_before.rc != 0 or
+        (read_before.stdout | from_json).promotion_status | default('')
+        == (read_before.stdout | from_json).requested_promotion_state | default('')
+      ignore_errors: true
 
     - name: Parse
       ansible.builtin.set_fact:
-        before: "{{ read_before.stdout | from_json }}"
+        before: >-
+          {{ (read_before.stdout | from_json) if read_before.rc == 0
+             else {'error': 'pod read failed: ' ~ (read_before.stderr_lines | default([]) | last | default('no error text'))} }}
 
     - name: Show the pod before the change
       ansible.builtin.debug:

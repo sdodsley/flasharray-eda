@@ -53,7 +53,12 @@ def mock(tmp_path):
     module = _load_mock()
     record = tmp_path / "record.jsonl"
     server = module.make_server(
-        "127.0.0.1", 0, CLIENT_ID, CLIENT_SECRET, [BOUND_PATH], str(record)
+        "127.0.0.1",
+        0,
+        CLIENT_ID,
+        CLIENT_SECRET,
+        [BOUND_PATH, "fa_replication"],
+        str(record),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -183,6 +188,7 @@ def _run_playbook(
 ):
     """Run orchestrator_post.yml once against the mock, or against `url`;
     return (rc, alert-log records, output)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     alert_log = tmp_path / "alerts.log"
     extra = tmp_path / "extra_vars.json"
     extra.write_text(
@@ -191,7 +197,9 @@ def _run_playbook(
                 "orchestrator_url": mock.url if url is None else url,
                 "orchestrator_webhook_path": path,
                 "event": event,
-                "array": event["purefa_capacity"]["array"],
+                "array": next(
+                    v["array"] for k, v in event.items() if k.startswith("purefa_")
+                ),
                 "alert_log": str(alert_log),
             }
         )
@@ -261,6 +269,113 @@ def test_accepted_event_is_recorded_with_its_execution_id(tmp_path, mock):
     assert envelope["data"]["top_growers"][0]["volume"] == "vol-db-01"
     assert "meta" not in envelope["data"]
     assert sorted(landed[0]) == ["event"], "the body is {event: ...} and nothing else"
+
+
+@needs_ansible
+def test_second_post_for_an_open_execution_records_pending_and_sends_nothing(
+    tmp_path, mock
+):
+    rc, records, output = _run_playbook(tmp_path, mock, _capacity_event())
+    assert rc == 0, output
+    (first,) = records
+    assert first["stage"] == "post" and first["status"] == 202
+
+    # the execution is paused at its approval: the same event again is not posted
+    rc, records, output = _run_playbook(tmp_path / "again", mock, _capacity_event())
+    assert rc == 0, output
+    _assert_no_secret_leaked(mock, output)
+    (second,) = records
+    assert second["stage"] == "pending"
+    assert second["severity"] == "info"
+    assert second["status"] is None
+    assert second["execution_id"] == first["execution_id"]
+    assert "already handling this purefa_capacity for array-a" in second["reason"]
+    assert len(_records(mock.record)) == 1, "nothing was posted the second time"
+    assert mock.server.webhook_calls == [(BOUND_PATH, 202)]
+
+    # once that execution has finished, the event is handed over again
+    mock.server.executions[0]["status"] = "completed"
+    rc, records, output = _run_playbook(tmp_path / "third", mock, _capacity_event())
+    assert rc == 0, output
+    (third,) = records
+    assert third["stage"] == "post" and third["status"] == 202
+    assert third["execution_id"] != first["execution_id"]
+    assert len(_records(mock.record)) == 2
+
+
+def _replication_event(pgroup):
+    return {
+        "purefa_pg_replication": {
+            "array": "array-a",
+            "pgroup": pgroup,
+            "state": "overdue",
+            "since_last_completed_s": 7200,
+            "frequency_ms": 3600000,
+            "in_progress": None,
+        },
+        "meta": {
+            "source": {"name": "purefa_events", "type": "purefa_events"},
+            "received_at": "2026-11-05T10:00:00.000000Z",
+            "uuid": "00000000-0000-4000-8000-000000000002",
+        },
+    }
+
+
+@needs_ansible
+def test_a_second_group_on_the_same_array_is_not_the_first_groups_execution(
+    tmp_path, mock
+):
+    rc, records, output = _run_playbook(
+        tmp_path / "pg1", mock, _replication_event("pg1"), path="fa_replication"
+    )
+    assert rc == 0, output
+    (first,) = records
+    assert first["stage"] == "post" and first["status"] == 202
+    # another group overdue on the same array is another event: posted
+    rc, records, output = _run_playbook(
+        tmp_path / "pg2", mock, _replication_event("pg2"), path="fa_replication"
+    )
+    assert rc == 0, output
+    (second,) = records
+    assert second["stage"] == "post" and second["status"] == 202
+    assert second["execution_id"] != first["execution_id"]
+    # the first group again, while its execution is still open: pending
+    rc, records, output = _run_playbook(
+        tmp_path / "pg1again", mock, _replication_event("pg1"), path="fa_replication"
+    )
+    assert rc == 0, output
+    (third,) = records
+    assert (
+        third["stage"] == "pending" and third["execution_id"] == first["execution_id"]
+    )
+    assert len(_records(mock.record)) == 2
+
+
+@needs_ansible
+def test_the_dedupe_follows_the_pages_of_the_executions_list(tmp_path, mock):
+    rc, records, output = _run_playbook(tmp_path / "first", mock, _capacity_event())
+    assert rc == 0, output
+    (first,) = records
+    # 120 other open executions crowd the first page; ours ends up on page two
+    others = [
+        {
+            "id": f"other-{n}",
+            "status": "paused",
+            "approval_pending": True,
+            "workflow_id": "mock-other",
+            "input_data": {
+                "event": {"event_type": "purefa_capacity", "array": f"array-{n}"}
+            },
+        }
+        for n in range(120)
+    ]
+    mock.server.executions[:0] = others
+    rc, records, output = _run_playbook(tmp_path / "again", mock, _capacity_event())
+    assert rc == 0, output
+    (second,) = records
+    assert (
+        second["stage"] == "pending" and second["execution_id"] == first["execution_id"]
+    )
 
 
 @needs_ansible

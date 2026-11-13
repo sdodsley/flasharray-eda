@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Run twice: every playbook a template launches now honours the contract
+  that a second launch with the same extra vars leaves the array as it is
+  and says so. Expand volume treats a volume already at the size as done;
+  replicate now and protect now read the newest eda snapshot and request
+  nothing inside a cooldown (`replicate_now_cooldown_s`,
+  `protect_now_cooldown_s`; protect now also stops ratcheting the
+  eradication delay); the capacity request is keyed on `request_key` and
+  reuses a request already awaiting approval; the reclaim accepts a
+  request already done; the Alertmanager silence reuses an active silence
+  and expires only an active one; the DR drill names its copy for the
+  launch, leaves a drill in flight alone and removes a copy older than
+  `dr_drill_stale_s` that a dead launch left; the switchover marks planned
+  work only on a source still promoted, and the three DR playbooks wait
+  for a pod mid-change to settle before judging; `orchestrator_post.yml`
+  records `pending` instead of posting when an execution is already
+  handling the same event for the same array. `tests/e2e_run_twice.sh`
+  launches each template twice on real arrays;
+  `tests/unit/test_playbook_idempotent.py` pins the guards.
 - An alert that opens and resolves between two polls is first seen already
   resolving; the alerts rulebook now notifies once for it, at one severity
   below its own, instead of routing it through the runbook map as if it

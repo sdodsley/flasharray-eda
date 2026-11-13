@@ -86,14 +86,14 @@ template itself (extra vars or a survey), not in these files:
 
 | Template | Playbook | Passed by the node | Set on the template |
 | --- | --- | --- | --- |
-| FlashArray - capacity request | `playbooks/capacity_request.yml` | `at_risk_array`, `used_pct`, `used_bytes`, `capacity_bytes`, `days_to_full`, `top_growers`, `pending_eradication_volumes`, `pending_eradication_snapshots`, `candidate_targets` | `request_dir`, `alert_log` |
+| FlashArray - capacity request | `playbooks/capacity_request.yml` | `at_risk_array`, `used_pct`, `used_bytes`, `capacity_bytes`, `days_to_full`, `top_growers`, `pending_eradication_volumes`, `pending_eradication_snapshots`, `candidate_targets`, `request_key` (the event's `observed_at`: a retried launch keeps its request id) | `request_dir`, `alert_log` |
 | FlashArray - capacity reclaim | `playbooks/capacity_reclaim.yml` | `request_id`, `array`, `candidates`, `rebuild_from_artifacts` (`true`), `reclaim_action` (`eradicate_pending`), `approver` | `request_dir` (persistent, same path as the request template), `alert_log` |
 | FlashArray - notify | `playbooks/notify.yml` | `severity`, `subject`, `detail`, `target_array` | `alert_log` |
 | FlashArray - expand volume | `playbooks/expand_volume.yml` | `target_array`, `volume`, `new_size` | `alert_log` (optionally `reason`, `requested_by`) |
 | FlashArray - DR drill | `playbooks/dr_drill.yml` | nothing | `dr_drills`, `alert_log` |
-| FlashArray - replicate now | `playbooks/replicate_now.yml` | `target_array`, `pgroup`, `reason` (`approved`), `since_last_completed_s`, `frequency_ms`, `in_progress` | `alert_log` |
+| FlashArray - replicate now | `playbooks/replicate_now.yml` | `target_array`, `pgroup`, `reason` (`approved`), `since_last_completed_s`, `frequency_ms`, `in_progress` | `alert_log`; optionally `replicate_now_cooldown_s` (default 300) and `snapshot_suffix` to pin the name |
 | FlashArray - QoS cap | `playbooks/qos_cap.yml` | `target_array`, `volume`, `mode` (`cap`), `cap_iops`, `reason` | `alert_log` |
-| FlashArray - protect now | `playbooks/protect_now.yml` | `target_array`, `extend_eradication_by_s`, `audit_user` and `audit_command` (constants naming the workflow, so the record shows what asked) | `alert_log` |
+| FlashArray - protect now | `playbooks/protect_now.yml` | `target_array`, `extend_eradication_by_s`, `audit_user` and `audit_command` (constants naming the workflow, so the record shows what asked) | `alert_log`; optionally `protect_now_cooldown_s` (default 600) |
 | FlashArray - identify LED | `playbooks/identify_led.yml` | `target_array`, `component`, `led_state`, `severity` (`info`) | `alert_log` |
 | FlashArray - DR promote | `playbooks/dr_promote.yml` | `target_array`, `pod` | `alert_log` |
 | FlashArray - DR demote | `playbooks/dr_demote.yml` | `target_array`, `pod`, `quiesce`, `eradicate_undo_demote` | `alert_log` |
@@ -160,6 +160,13 @@ with `set_stats` so the orchestrator sees them as
   `groups_snapshotted`, `groups_failed` and `eradication_delay_days`.
 - **FlashArray - identify LED** publishes `array`, `component`, `led_state`
   (`on` or `off`), `led_changed` and `led_error`.
+- The run-twice flags a node may route on: expand volume `already_at_size`,
+  replicate now and protect now `skipped` (and the suffix that already
+  exists), capacity request `already_raised`, capacity reclaim
+  `already_done` and `nothing_pending`, Alertmanager silence `reused` and
+  `already_expired`, DR drill `skipped_count` (a copy older than
+  `dr_drill_stale_s`, default 1800 s, is removed before the drill as a dead
+  launch's leftover).
 - **FlashArray - replicate now** publishes `array`, `pgroup`, `reason`,
   `snapshot_suffix` and `changed`.
 - **FlashArray - DR promote** and **FlashArray - DR demote** publish
@@ -365,7 +372,26 @@ sections above follow them:
   job: the gateway timed out after the controller had accepted one, the
   node retried and launched the template again, and the execution
   recorded the second job. A playbook behind an AAP node must be safe to
-  run twice; `dr_switchover.yml` leaves a side already where it should be.
+  run twice, and every template here is: a second launch with the same
+  extra vars leaves the array as it is, reports changed false and says so
+  in its record and artifacts. The switchover leaves a side already where
+  it should be (and waits for a pod mid-change to settle before judging);
+  expand volume treats a volume already at the size as done
+  (`already_at_size`); replicate now and protect now read the newest eda
+  snapshot first and request nothing inside their cooldown (`skipped`);
+  the capacity request is keyed on `request_key` and reuses a request
+  already awaiting approval (`already_raised`); the reclaim accepts a
+  request already done with the same action (`already_done`); the
+  Alertmanager silence reuses an active silence of its own (`reused`) and
+  expires one only while it is active (`already_expired`); the DR drill
+  names its copy for the launch and leaves a drill in flight alone
+  (`skipped`); `orchestrator_post.yml` lists the executions still open and,
+  when one carries the same event type for the same array and scope (the
+  protection group, volume, pod or component the event names), records
+  `pending` with that execution's id instead of posting again. `notify`
+  and the ticket record are a message per launch by design (the record
+  carries a `ticket_key` a backend can deduplicate on).
+  `tests/e2e_run_twice.sh` launches each of them twice on real arrays.
 - `GET /api/v1/approvals?status=pending` lists the approvals waiting
   (`id`, `execution_id`, `node_name`, `prompt`); `PATCH
   /api/v1/approvals/{id}` with `status` (`approved` or `rejected`) and

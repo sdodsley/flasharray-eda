@@ -362,6 +362,13 @@ Facts the rules are written around;
   takes one untemplated file; `localhost` must be in the inventory.
 - State that must survive a rulebook restart lives on the array: the QoS
   cap is a volume tag in namespace `eda`, the approval request is a file.
+- Every playbook a template launches is safe to run twice with the same
+  extra vars: the array is left as it is, the record says changed false and
+  why (already at size, inside the cooldown, already raised, already done,
+  reused, already expired, pending; the bridge matches an open execution on
+  event type, array and scope such as the protection group). A platform node retried after a
+  gateway error is the live case; [orchestrator/README.md](orchestrator/README.md)
+  lists the behaviour per template and `tests/e2e_run_twice.sh` proves it.
 
 ## Testing
 
@@ -396,7 +403,8 @@ to the real rulebooks, throttles included; the unit test fails when they
 drift.
 
 `tests/e2e_sources.sh`, `tests/e2e_change_control.sh`,
-`tests/e2e_replication.sh` and `tests/e2e_approvals.sh` run the rulebooks
+`tests/e2e_replication.sh`, `tests/e2e_approvals.sh` and
+`tests/e2e_run_twice.sh` (every template twice) run the rulebooks
 against live arrays, inducing what can be induced (NTP drift, a second
 user's changes, a paused replica link, a maintenance window, a
 pending-eradication volume, a busy volume capped and uncapped) and

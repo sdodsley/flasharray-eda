@@ -25,6 +25,10 @@
 # of the job template cannot name its own candidates. A request file that
 # is there wins over the extra vars, and the alert-log record and the
 # artifacts say when a request was rebuilt (rebuilt_from).
+# Run twice: a request already done with the same action is not refused; the
+# first run's result is republished with already_done true and nothing is
+# sent to the array. A rebuilt request whose candidates are all gone reports
+# nothing_pending true.
 - name: Reclaim capacity on an approved request
   hosts: localhost
   gather_facts: false
@@ -100,15 +104,21 @@
           - credential_array is not defined or credential_array == request.array
         fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ request.array }}; nothing eradicated"
 
-    - name: Refuse anything that is not awaiting approval or not a proposed action
+    - name: Refuse anything that is not awaiting approval (or done with this very action) or not a proposed action
       ansible.builtin.assert:
         that:
-          - request.status == 'awaiting_approval'
+          - >-
+            request.status == 'awaiting_approval' or
+            (request.status == 'done' and request.action | default('') == reclaim_action)
           - reclaim_action in request.proposed_actions
         fail_msg: "request {{ request_id }} is {{ request.status }} or does not propose {{ reclaim_action }}"
 
+    - name: Note a request already done with this action
+      ansible.builtin.set_fact:
+        already_done: "{{ request.status == 'done' }}"
+
     - name: Eradicate the listed candidates that are still pending eradication
-      when: reclaim_action == 'eradicate_pending'
+      when: reclaim_action == 'eradicate_pending' and not (already_done | bool)
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
@@ -141,11 +151,14 @@
       changed_when: (reclaim.stdout | from_json).eradicated | length > 0
       no_log: true
 
-    - name: Parse the result
+    - name: Parse the result (a request already done keeps its first result)
       ansible.builtin.set_fact:
-        reclaim_result: "{{ reclaim.stdout | default('{}') | from_json }}"
+        reclaim_result: >-
+          {{ (request.result | default({'eradicated': [], 'refused': [], 'skipped': []})) if already_done | bool
+             else (reclaim.stdout | default('{}') | from_json) }}
 
     - name: Mark the request done
+      when: not (already_done | bool)
       ansible.builtin.copy:
         dest: "{{ request_file }}"
         mode: "0600"
@@ -162,13 +175,17 @@
         line: >-
           {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'capacity_reclaim', 'severity': 'info',
               'array': request.array, 'request_id': request_id, 'approver': approver | default(''),
-              'action': reclaim_action, 'result': reclaim_result,
+              'action': reclaim_action, 'result': reclaim_result, 'already_done': already_done | bool,
+              'nothing_pending': (reclaim_result.eradicated | default([]) | length) == 0
+                                 and (reclaim_result.refused | default([]) | length) == 0
+                                 and (reclaim_result.skipped | default([]) | length) > 0,
               'rebuilt_from': request.rebuilt_from | default('')} | to_json }}
 
     - name: Show the outcome
       ansible.builtin.debug:
         msg: >-
-          request {{ request_id }} approved by {{ approver | default('?') }}: {{ reclaim_action }} on {{ request.array }} ->
+          request {{ request_id }} approved by {{ approver | default('?') }}: {{ reclaim_action }} on {{ request.array }}
+          {{ '(already done, first result republished) ->' if already_done | bool else '->' }}
           eradicated {{ reclaim_result.eradicated | default([]) | length }},
           refused {{ reclaim_result.refused | default([]) | length }},
           skipped {{ reclaim_result.skipped | default([]) | length }}: {{ reclaim_result }}
@@ -185,6 +202,10 @@
         data: >-
           {{ {'request_id': request_id, 'array': request.array,
               'rebuilt_from': request.rebuilt_from | default(''),
+              'already_done': already_done | bool,
+              'nothing_pending': (reclaim_result.eradicated | default([]) | length) == 0
+                                 and (reclaim_result.refused | default([]) | length) == 0
+                                 and (reclaim_result.skipped | default([]) | length) > 0,
               'eradicated': reclaim_result.eradicated | default([]),
               'refused': reclaim_result.refused | default([]),
               'result': ('done' if (reclaim_result.refused | default([]) | length) == 0

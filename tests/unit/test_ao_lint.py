@@ -303,7 +303,9 @@ def test_capacity_definition_feeds_the_request_playbook():
         "pending_eradication_volumes",
         "pending_eradication_snapshots",
         "candidate_targets",
+        "request_key",  # the event's observed_at: a retried launch keeps its request id
     }
+    assert extra["request_key"] == "${trigger.event.observed_at}"
     assert "request_dir" not in extra and "alert_log" not in extra
     reclaim = nodes["capacity_reclaim"]["parameters"]["extra_vars"]
     assert reclaim["request_id"] == "${capacity_request.artifacts.request_id}"

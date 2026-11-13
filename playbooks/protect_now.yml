@@ -6,6 +6,10 @@
 #   2. the enabled eradication delay lengthened by extend_eradication_by_s,
 #      rounded up to whole days, never shortened, the disabled delay kept
 #   3. critical record with everything that fired
+# Run twice: a second launch inside protect_now_cooldown_s (default 600) of
+# the newest eda-protect-* snapshot on the array takes no snapshot and does not
+# lengthen the delay again (it would ratchet it by another step); the record
+# says skipped and names the earlier snapshot.
 - name: Protect now
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -29,14 +33,22 @@
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
-          import json, os, urllib3
+          import json, os, re, time, urllib3
           urllib3.disable_warnings()
           from pypureclient import flasharray
           c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
           pgs = [p.name for p in c.get_protection_groups(filter="is_local='true' and destroyed='false'").items]
           e = list(c.get_arrays().items)[0].to_dict().get("eradication_config") or {}
+          # the newest protect snapshot of a LOCAL group: '<array>:<group>' (one colon, not the '::' of a
+          # pod group) was replicated in from another array's run and does not count
+          s = c.get_protection_group_snapshots(filter="name='*.eda-protect-*'", sort=["created-"], limit=20)
+          recent = [x.to_dict() for x in s.items] if s.status_code == 200 else []
+          local = [x for x in recent if not re.match(r"^[^:]+:(?!:)", x["name"]) and not x.get("destroyed")]
+          newest = local[0] if local else None
           print(json.dumps({"pgroups": pgs, "enabled_delay_ms": e.get("enabled_delay") or e.get("eradication_delay"),
-                            "disabled_delay_ms": e.get("disabled_delay"), "manual_eradication": e.get("manual_eradication")}))
+                            "disabled_delay_ms": e.get("disabled_delay"), "manual_eradication": e.get("manual_eradication"),
+                            "newest_protect": newest["name"] if newest else None,
+                            "newest_protect_age_s": int(time.time() - newest["created"] / 1000) if newest else None}))
       environment:
         FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
         FA_TOKEN: "{{ api_token }}"
@@ -49,6 +61,12 @@
         protect: "{{ discovery.stdout | from_json }}"
         snap_suffix: "eda-protect-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
 
+    - name: Decide whether this is a repeat inside the cooldown
+      ansible.builtin.set_fact:
+        protect_wanted: >-
+          {{ protect.newest_protect_age_s is none
+             or (protect.newest_protect_age_s | int) >= (protect_now_cooldown_s | default(600) | int) }}
+
     - name: Show what was found
       ansible.builtin.debug:
         var: protect
@@ -58,6 +76,7 @@
         new_enabled_days: "{{ [30, ((protect.enabled_delay_ms | int) / 86400000 + (extend_eradication_by_s | int) / 86400) | round(0, 'ceil') | int] | min }}"
 
     - name: Snapshot every local protection group now
+      when: protect_wanted | bool
       everpure.flasharray.purefa_pgsnap:
         fa_url: "{{ fa_url }}"
         api_token: "{{ api_token }}"
@@ -70,8 +89,15 @@
       register: snaps
       ignore_errors: true
 
+    # a loop skipped by its when still registers one skipped result per item
+    - name: Keep the snapshot results that ran
+      ansible.builtin.set_fact:
+        snapped: "{{ (snaps.results | default([])) if protect_wanted | bool else [] }}"
+
     - name: Lengthen the enabled eradication delay
-      when: extend_eradication_by_s | int > 0 and (new_enabled_days | int) * 86400000 > protect.enabled_delay_ms | int
+      when:
+        - protect_wanted | bool
+        - extend_eradication_by_s | int > 0 and (new_enabled_days | int) * 86400000 > protect.enabled_delay_ms | int
       everpure.flasharray.purefa_eradication:
         fa_url: "{{ fa_url }}"
         api_token: "{{ api_token }}"
@@ -90,8 +116,11 @@
               'array': inventory_hostname,
               'signals': {'drr_drop_pct': drr_drop_pct | default(''), 'snapshot_growth_pct': snapshot_growth_pct | default(''),
                           'audit_user': audit_user | default(''), 'audit_command': audit_command | default('')},
-              'snapshots': snaps.results | map(attribute='item') | list, 'snapshot_suffix': snap_suffix,
-              'snapshot_failures': snaps.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list,
+              'snapshots': snapped | map(attribute='item') | list,
+              'snapshot_suffix': snap_suffix if protect_wanted | bool else (protect.newest_protect.split('.', 1) | last),
+              'skipped': not (protect_wanted | bool), 'previous_snapshot': protect.newest_protect,
+              'previous_snapshot_age_s': protect.newest_protect_age_s,
+              'snapshot_failures': snapped | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list,
               'eradication_delay_before_ms': protect.enabled_delay_ms,
               'eradication_delay_after_days': new_enabled_days | int,
               'eradication_changed': erad.changed | default(false),
@@ -101,7 +130,9 @@
     - name: Show
       ansible.builtin.debug:
         msg: >-
-          PROTECT NOW on {{ inventory_hostname }}: snapshots {{ snap_suffix }} on {{ protect.pgroups }};
+          PROTECT NOW on {{ inventory_hostname }}:
+          {{ 'snapshots ' ~ snap_suffix ~ ' on ' ~ (protect.pgroups | string) if protect_wanted | bool
+             else 'repeat inside the cooldown, nothing taken: ' ~ protect.newest_protect ~ ' is ' ~ protect.newest_protect_age_s ~ ' s old' }};
           eradication delay {{ 'lengthened to ' ~ new_enabled_days ~ ' days' if erad.changed | default(false) else 'unchanged' }};
           trigger: DRR -{{ drr_drop_pct | default('?') }}%, snapshots +{{ snapshot_growth_pct | default('?') }}%,
           {{ audit_user | default('?') }} ran {{ audit_command | default('?') }}
@@ -114,10 +145,12 @@
         aggregate: false
         per_host: false
         data: >-
-          {{ {'array': inventory_hostname, 'snapshot_suffix': snap_suffix,
-              'groups_failed': snaps.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list,
-              'groups_snapshotted': snaps.results | map(attribute='item') | list
-                                    | difference(snaps.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list),
+          {{ {'array': inventory_hostname,
+              'snapshot_suffix': snap_suffix if protect_wanted | bool else (protect.newest_protect.split('.', 1) | last),
+              'skipped': not (protect_wanted | bool),
+              'groups_failed': snapped | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list,
+              'groups_snapshotted': snapped | map(attribute='item') | list
+                                    | difference(snapped | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list),
               'eradication_delay_days': ((new_enabled_days | int) if erad.changed | default(false)
                                          else (((protect.enabled_delay_ms | int) / 86400000) | round(2)))} }}
       run_once: true

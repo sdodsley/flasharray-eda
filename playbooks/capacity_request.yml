@@ -8,6 +8,12 @@
 # nothing destroyed since. An approver answers through the capacity approvals
 # webhook (see the capacity rulebook) or, in Ansible Automation Platform,
 # through the workflow approval node.
+# Run twice: the request id is keyed on request_key when the launcher passes
+# one (the orchestrator node passes the event's observed_at, the rulebook the
+# event's received_at), so a retried launch computes the same id; and a
+# request already awaiting approval for the array in request_dir is reused:
+# nothing is written, the record says already_raised, and the artifacts carry
+# that request's id and candidates.
 - name: Raise a capacity approval request
   hosts: localhost
   gather_facts: false
@@ -38,7 +44,10 @@
     - name: Pin the request id and time
       ansible.builtin.set_fact:
         request_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
-        request_id: "{{ at_risk_array }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+        request_id: >-
+          {{ at_risk_array ~ '-' ~ ((request_key | string | regex_replace('[^0-9A-Za-z]', ''))
+             if request_key | default('') | string | length > 0
+             else now(utc=true).strftime('%Y%m%d%H%M%S')) }}
 
     - name: Make sure the request directory exists
       ansible.builtin.file:
@@ -46,11 +55,49 @@
         state: directory
         mode: "0700"
 
+    - name: Look for a request already awaiting approval for this array
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import glob, json, os
+          d, arr, keyed = os.environ["DIR"], os.environ["ARR"], os.environ["KEYED"]
+          def load(path):
+              try:
+                  with open(path) as f:
+                      return json.load(f)
+              except Exception:
+                  return None
+          # the keyed file first, whatever its status (a retry after the
+          # request was done must not reopen it), then any request still
+          # awaiting approval for the array
+          found = load(os.path.join(d, keyed + ".json"))
+          if not found:
+              for path in sorted(glob.glob(os.path.join(d, arr + "-*.json")), reverse=True):
+                  r = load(path)
+                  if r and r.get("status") == "awaiting_approval" and r.get("array") == arr:
+                      found = r
+                      break
+          print(json.dumps({"open": found["request_id"] if found else None,
+                            "status": (found or {}).get("status"),
+                            "candidates": (found or {}).get("candidates")}))
+      environment:
+        DIR: "{{ request_dir }}"
+        ARR: "{{ at_risk_array }}"
+        KEYED: "{{ request_id }}"
+      register: open_cmd
+      changed_when: false
+
+    - name: Reuse the open request when there is one
+      ansible.builtin.set_fact:
+        open_request: "{{ open_cmd.stdout | from_json }}"
+        request_open: "{{ (open_cmd.stdout | from_json).open is not none }}"
+        request_id: "{{ (open_cmd.stdout | from_json).open | default(request_id, true) }}"
+
     # The Alertmanager path may name an array that is not in the inventory,
     # and a failed read must not lose the request: the candidate list is then
     # empty (an approval eradicates nothing) and the error is recorded.
     - name: List what is pending eradication on the array (the reclaim candidates)
-      when: at_risk_array in hostvars
+      when: at_risk_array in hostvars and not (request_open | bool)
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
@@ -68,11 +115,13 @@
       failed_when: false
       no_log: true
 
-    - name: Parse the candidates
+    - name: Parse the candidates (an open request keeps the ones it listed)
       ansible.builtin.set_fact:
-        candidates: "{{ (candidates_cmd.stdout | from_json) if (candidates_cmd.rc | default(1)) == 0 else {'volumes': [], 'snapshots': []} }}"
+        candidates: >-
+          {{ (open_request.candidates | default({'volumes': [], 'snapshots': []}, true)) if request_open | bool
+             else ((candidates_cmd.stdout | from_json) if (candidates_cmd.rc | default(1)) == 0 else {'volumes': [], 'snapshots': []}) }}
         candidates_error: >-
-          {{ '' if (candidates_cmd.rc | default(1)) == 0
+          {{ '' if (request_open | bool or (candidates_cmd.rc | default(1)) == 0)
              else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory')) }}
 
     - name: Build the request
@@ -81,7 +130,9 @@
           time: "{{ request_time }}"
           kind: capacity_request
           severity: warning
-          status: awaiting_approval
+          status: >-
+            {{ (('already_raised' if open_request.status == 'awaiting_approval' else 'already_' ~ open_request.status)
+                if request_open | bool else 'awaiting_approval') }}
           request_id: "{{ request_id }}"
           array: "{{ at_risk_array }}"
           used_pct: "{{ used_pct | default('') }}"
@@ -98,6 +149,7 @@
             - eradicate_pending
 
     - name: Write the request file
+      when: not (request_open | bool)
       ansible.builtin.copy:
         dest: "{{ request_dir }}/{{ request_id }}.json"
         mode: "0600"
@@ -113,7 +165,8 @@
     - name: Show the request
       ansible.builtin.debug:
         msg: >-
-          Capacity request {{ request_id }}: {{ at_risk_array }} at {{ used_pct | default('?') }}% used
+          Capacity request {{ request_id }}{{ ' (already awaiting approval, reused)' if request_open | bool else '' }}:
+          {{ at_risk_array }} at {{ used_pct | default('?') }}% used
           (full in {{ days_to_full | default('n/a') }} days);
           candidates pending eradication: {{ candidates.volumes | length }} volumes /
           {{ candidates.snapshots | length }} snapshots{{ (' (' ~ candidates_error | trim ~ ')') if candidates_error | trim else '' }};
@@ -134,6 +187,6 @@
         data: >-
           {{ {'request_id': request_id, 'at_risk_array': at_risk_array,
               'candidate_count': (candidates.volumes | length) + (candidates.snapshots | length),
-              'candidates': candidates} }}
+              'candidates': candidates, 'already_raised': request_open | bool} }}
       run_once: true
       delegate_to: localhost

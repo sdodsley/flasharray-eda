@@ -3,6 +3,10 @@
 # targets. Called by the replication rulebook when a replicating protection
 # group is overdue (no completed transfer within two schedule periods) or
 # stuck (an in-progress transfer whose progress has not moved for N polls).
+# Run twice: a second launch inside replicate_now_cooldown_s (default 300) of
+# the group's newest eda-* snapshot, or with a snapshot_suffix that already
+# exists, requests nothing more and records that (changed false, skipped
+# true); the artifacts then name the snapshot that already exists.
 - name: Replicate a protection group now
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -22,11 +26,52 @@
           - credential_array is not defined or credential_array == inventory_hostname
         fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
 
-    - name: Pin the snapshot suffix
+    - name: Read the group's newest eda snapshot (and whether a pinned suffix exists)
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, time, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flasharray
+          c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
+          pg = os.environ["PG"]
+          # the newest snapshot this playbook (or an approval of it) took: protect-now's eda-protect-*
+          # snapshots are local and do not count, nor does one already destroyed
+          r = c.get_protection_group_snapshots(filter="name='%s.eda-*'" % pg, sort=["created-"], limit=20)
+          items = [s.to_dict() for s in r.items] if r.status_code == 200 else []
+          items = [s for s in items if ".eda-protect-" not in s["name"] and not s.get("destroyed")]
+          newest = items[0] if items else None
+          pinned = os.environ.get("SUFFIX") or ""
+          exists = False
+          if pinned:
+              p = c.get_protection_group_snapshots(names=["%s.%s" % (pg, pinned)])
+              exists = p.status_code == 200 and len(list(p.items)) > 0
+          print(json.dumps({"newest": newest["name"] if newest else None,
+                            "newest_age_s": int(time.time() - newest["created"] / 1000) if newest else None,
+                            "pinned_exists": exists}))
+      environment:
+        FA_HOST: "{{ fa_url | regex_replace('^https?://', '') }}"
+        FA_TOKEN: "{{ api_token }}"
+        PG: "{{ pgroup }}"
+        SUFFIX: "{{ snapshot_suffix | default('') }}"
+      register: recent_cmd
+      changed_when: false
+      no_log: true
+
+    - name: Parse
       ansible.builtin.set_fact:
-        snap_suffix: "eda-{{ reason }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+        recent: "{{ recent_cmd.stdout | from_json }}"
+
+    - name: Pin the snapshot suffix and decide whether a snapshot is still wanted
+      ansible.builtin.set_fact:
+        snap_suffix: "{{ snapshot_suffix | default('eda-' ~ reason ~ '-' ~ now(utc=true).strftime('%Y%m%d%H%M%S'), true) }}"
+        snapshot_wanted: >-
+          {{ not (recent.pinned_exists | bool)
+             and (recent.newest_age_s is none
+                  or (recent.newest_age_s | int) >= (replicate_now_cooldown_s | default(300) | int)) }}
 
     - name: Snapshot the group and replicate immediately
+      when: snapshot_wanted | bool
       everpure.flasharray.purefa_pgsnap:
         fa_url: "{{ fa_url }}"
         api_token: "{{ api_token }}"
@@ -48,12 +93,18 @@
               'array': inventory_hostname, 'pgroup': pgroup, 'reason': reason,
               'since_last_completed_s': since_last_completed_s | default(''),
               'frequency_ms': frequency_ms | default(''), 'in_progress': in_progress | default(''),
-              'changed': snap.changed} | to_json }}
+              'changed': snap.changed | default(false), 'skipped': not (snapshot_wanted | bool),
+              'newest_before': recent.newest, 'newest_age_s': recent.newest_age_s} | to_json }}
       delegate_to: localhost
 
     - name: Show the action
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ pgroup }} was {{ reason }}; immediate replicated snapshot requested (changed={{ snap.changed }})"
+        msg: >-
+          {{ inventory_hostname }}: {{ pgroup }} was {{ reason }};
+          {{ 'immediate replicated snapshot requested' if snapshot_wanted | bool
+             else ('snapshot ' ~ snap_suffix ~ ' already exists, nothing requested' if recent.pinned_exists | bool
+                   else 'nothing requested: ' ~ recent.newest ~ ' is ' ~ recent.newest_age_s ~ ' s old, inside the cooldown') }}
+          (changed={{ snap.changed | default(false) }})
 
     # job artifacts for workflow and orchestrator nodes (orchestrator/README.md)
     - name: Publish the job artifacts
@@ -62,6 +113,8 @@
         per_host: false
         data: >-
           {{ {'array': inventory_hostname, 'pgroup': pgroup, 'reason': reason,
-              'snapshot_suffix': snap_suffix, 'changed': snap.changed | default(false)} }}
+              'snapshot_suffix': (snap_suffix if (snapshot_wanted | bool or recent.pinned_exists | bool)
+                                  else (recent.newest.split('.', 1) | last)),
+              'changed': snap.changed | default(false), 'skipped': not (snapshot_wanted | bool)} }}
       run_once: true
       delegate_to: localhost

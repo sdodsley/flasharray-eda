@@ -71,6 +71,7 @@
           job_args:
             extra_vars:
               at_risk_array: '{{ event.purefa_capacity.array }}'
+              request_key: '{{ event.meta.received_at | default('''') }}'
               used_pct: '{{ event.purefa_capacity.used_pct }}'
               used_bytes: '{{ event.purefa_capacity.used_bytes }}'
               capacity_bytes: '{{ event.purefa_capacity.capacity_bytes }}'

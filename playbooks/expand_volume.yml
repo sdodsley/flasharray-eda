@@ -12,7 +12,9 @@
 # is used. The current size is read first (one read-only SDK call) and the
 # play refuses anything that would not grow the volume: purefa_volume would
 # refuse a shrink too, but this way the reason is in the record and nothing
-# is sent to the array.
+# is sent to the array. Run twice: a volume already at new_size is left as it
+# is, recorded with changed false and already_at_size true (an orchestrator
+# retries a node whose launch the gateway answered with an error).
 - name: Expand a volume
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -69,18 +71,23 @@
         before: "{{ size_cmd.stdout | from_json }}"
         new_size_bytes: "{{ new_size | human_to_bytes }}"
 
-    - name: Refuse a volume that is missing or destroyed, or a size that would not grow it
+    - name: Compare with the size the volume already has
+      ansible.builtin.set_fact:
+        already_sized: "{{ (new_size_bytes | int) == (before.provisioned | default(0) | int) }}"
+
+    - name: Refuse a volume that is missing or destroyed, or a size that would shrink it
       ansible.builtin.assert:
         that:
           - before.error is not defined
           - not (before.destroyed | default(false) | bool)
-          - new_size_bytes | int > before.provisioned | default(0) | int
+          - new_size_bytes | int >= before.provisioned | default(0) | int
         fail_msg: >-
           {{ before.error | default(volume ~ ' is '
              ~ ('destroyed' if before.destroyed | default(false) else
-                (before.provisioned | default(0) | string) ~ ' bytes; ' ~ new_size ~ ' (' ~ new_size_bytes ~ ' bytes) would not grow it')) }}
+                (before.provisioned | default(0) | string) ~ ' bytes; ' ~ new_size ~ ' (' ~ new_size_bytes ~ ' bytes) would shrink it')) }}
 
     - name: Grow the volume
+      when: not (already_sized | bool)
       everpure.flasharray.purefa_volume:
         fa_url: "{{ fa_url }}"
         api_token: "{{ api_token }}"
@@ -98,7 +105,7 @@
           {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'volume_expand', 'severity': 'info',
               'array': inventory_hostname, 'volume': volume,
               'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
-              'changed': grown.changed | default(false),
+              'changed': grown.changed | default(false), 'already_at_size': already_sized | bool,
               'reason': reason | default('') | trim, 'requested_by': requested_by | default('')} | to_json }}
       delegate_to: localhost
 
@@ -106,7 +113,8 @@
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}/{{ volume }}: {{ before.provisioned }} -> {{ new_size_bytes }} bytes
-          ({{ new_size }}) {{ '(changed)' if grown.changed | default(false) else '(unchanged)' }}
+          ({{ new_size }}) {{ '(changed)' if grown.changed | default(false)
+                               else ('(unchanged, already that size)' if already_sized | bool else '(unchanged)') }}
           {{ ':: ' ~ reason | trim if reason | default('') | trim else '' }}
 
     # Job artifacts for a workflow or orchestrator node that follows this one
@@ -118,6 +126,6 @@
         data: >-
           {{ {'array': inventory_hostname, 'volume': volume,
               'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
-              'changed': grown.changed | default(false)} }}
+              'changed': grown.changed | default(false), 'already_at_size': already_sized | bool} }}
       run_once: true
       delegate_to: localhost

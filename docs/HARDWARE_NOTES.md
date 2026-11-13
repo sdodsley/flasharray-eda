@@ -286,6 +286,11 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
   ("Activation is unresponsive. Readiness check for ansible-rulebook
   timed out") a few times before it runs; the on-failure restart policy
   carries it (the syslog activation took five instances once).
+- The replicate-now and protect-now cooldowns compare a snapshot's
+  array-side `created` with the controller's clock, so an array whose clock
+  is off shifts them by the skew (array B ran 36 minutes behind for a week
+  while its NTP alert stood); keep the arrays on NTP, which the config-drift
+  loop and alert 13 already watch.
 - A decision environment created through the API defaults to the pull
   policy `always`; an activation on a locally loaded image then fails to
   start with "x509: certificate is valid for <platform host>, not

@@ -30,6 +30,13 @@
 # record says the event was not handed over, and the rule's throttle decides
 # when it may fire again. Missing credentials or a malformed event do fail,
 # because they are configuration errors.
+#
+# Run twice: before posting, the executions still open (paused at an approval
+# or running) are listed, and one carrying the same event type for the same
+# array means the event is already being handled: the record says stage
+# "pending" with that execution's id, severity info, and nothing is posted (a
+# second post would raise a second approval). orchestrator_dedupe: false turns
+# the check off; a listing that fails is not fatal, the post goes ahead.
 - name: Hand an event to the automation orchestrator
   hosts: localhost
   gather_facts: false
@@ -37,6 +44,7 @@
     orchestrator_validate_certs: true
     orchestrator_timeout: 30
     orchestrator_max_body_bytes: 1000000
+    orchestrator_dedupe: true
     orchestrator_base: "{{ orchestrator_url | regex_replace('/+$', '') }}"
   tasks:
     - name: Read the service account credentials from the environment
@@ -135,8 +143,73 @@
              | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) }}
       no_log: true
 
+    # One read-only call set, in Python: every page of the executions still
+    # open (paused, running), matched on event type, array and the scope the
+    # event names (protection group, volume, pod, component), so a second
+    # overdue group on the same array is not mistaken for the first. A listing
+    # that fails leaves pending_execution empty and the post goes ahead.
+    - name: Look for an execution already handling this event
+      when: not oversize and ao_token | length > 0 and orchestrator_dedupe | bool
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, ssl, urllib.parse, urllib.request
+          base, tok = os.environ["ORCH_BASE"], os.environ["ORCH_TOKEN"]
+          ctx = ssl.create_default_context()
+          if os.environ.get("VERIFY") == "0":
+              ctx.check_hostname = False
+              ctx.verify_mode = ssl.CERT_NONE
+          want_type, want_array = os.environ["EVENT_TYPE"], os.environ["ARRAY"]
+          scope = json.loads(os.environ.get("SCOPE") or "{}")
+          timeout = float(os.environ.get("TIMEOUT") or 30)
+          def page(status, cursor):
+              q = {"status": status, "limit": "100"}
+              if cursor:
+                  q["cursor"] = cursor
+              req = urllib.request.Request(base + "/api/v1/executions?" + urllib.parse.urlencode(q),
+                                           headers={"Authorization": "Bearer " + tok, "Accept": "application/json"})
+              with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+                  return json.loads(r.read() or b"{}")
+          found = ""
+          for status in ("paused", "running"):
+              cursor = None
+              for _ in range(50):
+                  body = page(status, cursor)
+                  for e in body.get("resources", []) or []:
+                      ev = ((e.get("input_data") or {}).get("event") or {})
+                      if ev.get("event_type") != want_type or ev.get("array") != want_array:
+                          continue
+                      data = ev.get("data") or {}
+                      if all(str(data.get(k)) == str(v) for k, v in scope.items()):
+                          found = e.get("id") or ""
+                          break
+                  cursor = body.get("next_cursor")
+                  if found or not cursor:
+                      break
+              if found:
+                  break
+          print(json.dumps({"pending": found}))
+      environment:
+        ORCH_BASE: "{{ orchestrator_base }}"
+        ORCH_TOKEN: "{{ ao_token }}"
+        VERIFY: "{{ '1' if orchestrator_validate_certs | bool else '0' }}"
+        TIMEOUT: "{{ orchestrator_timeout | int }}"
+        EVENT_TYPE: "{{ event_type }}"
+        ARRAY: "{{ envelope.event.array }}"
+        SCOPE: "{{ event_data | dict2items | selectattr('key', 'in', ['pgroup', 'volume', 'pod', 'component']) | items2dict | to_json }}"
+      register: dedupe_cmd
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Keep the execution found, if any
+      ansible.builtin.set_fact:
+        pending_execution: >-
+          {{ ((dedupe_cmd.stdout | from_json).pending | default(''))
+             if (dedupe_cmd.rc | default(1)) == 0 and (dedupe_cmd.stdout | default('')) | length > 0 else '' }}
+
     - name: Post the event
-      when: not oversize and ao_token | length > 0
+      when: not oversize and ao_token | length > 0 and pending_execution | length == 0
       ansible.builtin.uri:
         url: "{{ orchestrator_base }}/api/v1/webhooks/eda/{{ orchestrator_webhook_path }}"
         method: POST
@@ -156,27 +229,30 @@
     - name: Keep the post outcome (status and execution id only)
       ansible.builtin.set_fact:
         post_status: "{{ post_response.status | default(0) }}"
-        execution_id: "{{ post_response.json.execution_id | default('') }}"
+        execution_id: "{{ post_response.json.execution_id | default(pending_execution) }}"
         post_reason: >-
           {{ post_response.json.detail | default(post_response.msg | default('no response'))
              | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) }}
-        stage: "{{ 'size_check' if oversize else ('token' if ao_token | length == 0 else 'post') }}"
+        stage: >-
+          {{ 'size_check' if oversize else ('token' if ao_token | length == 0
+             else ('pending' if pending_execution | length > 0 else 'post')) }}
 
     - name: Build the record
       ansible.builtin.set_fact:
         orchestrator_record: >-
           {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'),
               'kind': 'orchestrator_post',
-              'severity': 'info' if post_status | int == 202 else 'warning',
+              'severity': 'info' if (post_status | int == 202 or stage == 'pending') else 'warning',
               'array': envelope.event.array,
               'event_type': event_type,
               'webhook_path': orchestrator_webhook_path,
               'stage': stage,
-              'status': none if stage == 'size_check' else (token_status | int if stage == 'token' else post_status | int),
+              'status': none if stage in ['size_check', 'pending'] else (token_status | int if stage == 'token' else post_status | int),
               'execution_id': execution_id,
               'reason': ('body of ' ~ body_bytes ~ ' bytes exceeds the ' ~ orchestrator_max_body_bytes ~ ' byte limit; not sent') if stage == 'size_check'
                         else (('token request failed: ' ~ token_reason) if stage == 'token'
-                              else ('' if post_status | int == 202 else post_reason)),
+                              else (('execution ' ~ execution_id ~ ' is already handling this ' ~ event_type ~ ' for ' ~ envelope.event.array ~ '; nothing sent') if stage == 'pending'
+                                    else ('' if post_status | int == 202 else post_reason))),
               'body_bytes': body_bytes | int} }}
 
     - name: Append to the alert log
@@ -204,6 +280,7 @@
     - orchestrator_fallback_local | default(false) | bool
     - hostvars['localhost'].event_type | default('') == 'purefa_capacity'
     - (hostvars['localhost'].orchestrator_record.status | default(0)) != 202
+    - hostvars['localhost'].orchestrator_record.stage | default('') != 'pending'
   vars:
     at_risk_array: "{{ hostvars['localhost'].event_data.array }}"
     used_pct: "{{ hostvars['localhost'].event_data.used_pct }}"

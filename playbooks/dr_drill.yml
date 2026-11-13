@@ -11,6 +11,12 @@
   hosts: localhost
   gather_facts: false
   tasks:
+    # one key per launch: the copy name carries it, so two launches cannot
+    # collide on the same copy (the platform's job id, else a timestamp)
+    - name: Pin the drill key of this launch
+      ansible.builtin.set_fact:
+        dr_drill_key: "{{ tower_job_id | default(awx_job_id | default(now(utc=true).strftime('%Y%m%d%H%M%S'))) }}"
+
     - name: Run each drill on its target array
       ansible.builtin.include_tasks: dr_drill_one.yml
       loop: "{{ dr_drills }}"
@@ -27,6 +33,7 @@
         per_host: false
         data: >-
           {{ {'drills': drills_done | default([]),
-              'failed_count': drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length} }}
+              'failed_count': drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length,
+              'skipped_count': drills_done | default([]) | selectattr('result', 'equalto', 'skipped') | list | length} }}
       run_once: true
       delegate_to: localhost

@@ -39,6 +39,7 @@ import secrets
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -77,6 +78,9 @@ class MockOrchestrator(ThreadingHTTPServer):
         self.issued_tokens = []  # every token ever issued, for tests
         self.webhook_calls = []  # (path, status) for every POST under EDA_PREFIX
         self.execution_ids = []
+        self.executions = (
+            []
+        )  # the executions the posted events started, as the API lists them
 
     @property
     def url(self):
@@ -109,6 +113,15 @@ class MockOrchestrator(ThreadingHTTPServer):
         execution_id = str(uuid.uuid4())
         with self.lock:
             self.execution_ids.append(execution_id)
+            self.executions.append(
+                {
+                    "id": execution_id,
+                    "status": "paused",
+                    "approval_pending": True,
+                    "workflow_id": "mock-" + path,
+                    "input_data": body,
+                }
+            )
             if self.record:
                 with open(self.record, "a", encoding="ascii") as handle:
                     handle.write(json.dumps(body) + "\n")
@@ -155,8 +168,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             self._send(200, {"status": "ok"})
+        elif self.path.startswith("/api/v1/executions"):
+            self._executions()
         else:
             self._problem(404, "Not Found", f"no route for GET {self.path}")
+
+    def _executions(self):
+        """The executions list the bridge reads before posting: bearer token
+        required, ?status= filters, {"resources": [...]} like the product."""
+        auth = self.headers.get("Authorization", "")
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() != "bearer" or not self.server.token_valid(token.strip()):
+            return self._problem(401, "Unauthorized", "missing or invalid bearer token")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        wanted = query.get("status", [None])[0]
+        limit = int(query.get("limit", ["100"])[0])
+        offset = int(query.get("cursor", ["0"])[0] or 0)
+        with self.server.lock:
+            rows = [
+                dict(e) for e in self.server.executions if wanted in (None, e["status"])
+            ]
+        page = rows[offset : offset + limit]
+        body = {"resources": page, "total": len(rows)}
+        if offset + limit < len(rows):
+            body["next_cursor"] = str(offset + limit)
+        self._send(200, body)
 
     def do_POST(self):
         if self.path == TOKEN_PATH:

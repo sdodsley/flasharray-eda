@@ -24,7 +24,10 @@
 # through a proxy that authenticates on the job's behalf
 # (prometheus/alertmanager.example.yml). An
 # Alertmanager that does not answer is recorded, not fatal: planned work
-# must not stall on its own silence.
+# must not stall on its own silence. Run twice: a create finds an active
+# silence of this playbook's making with the same matchers and reuses its id
+# (changed false, reused true); an expire reads the silence first and deletes
+# it only while it is active.
 - name: Silence or unsilence the replica-link rules in Alertmanager
   hosts: localhost
   gather_facts: false
@@ -51,8 +54,40 @@
       ansible.builtin.debug:
         msg: "no alertmanager_url configured: nothing to {{ mode }}"
 
-    - name: Create the silence
+    - name: Look for an active silence of ours with the same matchers
       when: mode == 'create' and alertmanager_url | default('') | length > 0
+      ansible.builtin.uri:
+        url: "{{ alertmanager_url }}/api/v2/silences"
+        method: GET
+        status_code: [200]
+        timeout: 15
+        return_content: true
+      register: silences
+      failed_when: false
+
+    # ours: active, created by this playbook, the same two matchers
+    - name: Pick the silence to reuse, if any
+      ansible.builtin.set_fact:
+        existing_silence: >-
+          {%- set ns = namespace(found='') -%}
+          {%- for s in (silences.json | default([])) if ns.found == '' -%}
+            {%- if (s.status.state | default('')) == 'active' and (s.createdBy | default('')) == silence_created_by -%}
+              {%- set ends = (s.endsAt | default('') | regex_replace('[.][0-9]+', '') | regex_replace('(Z|[+-]00:00)$', '')) -%}
+              {%- set well_formed = ends is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$') -%}
+              {%- set left = ((ends | to_datetime('%Y-%m-%dT%H:%M:%S')) - now(utc=true)).total_seconds() if well_formed else 0 -%}
+              {%- if left >= 300 -%}
+              {%- set by_name = s.matchers | default([]) | selectattr('name', 'equalto', 'alertname')
+                                | selectattr('value', 'equalto', silence_alertname_regex) | list -%}
+              {%- set by_array = s.matchers | default([]) | selectattr('name', 'equalto', 'array_name')
+                                 | selectattr('value', 'equalto', silence_array_regex | default('')) | list -%}
+              {%- if by_name | length > 0 and by_array | length > 0 -%}{%- set ns.found = s.id -%}{%- endif -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.found }}
+
+    - name: Create the silence
+      when: mode == 'create' and alertmanager_url | default('') | length > 0 and existing_silence | length == 0
       ansible.builtin.uri:
         url: "{{ alertmanager_url }}/api/v2/silences"
         method: POST
@@ -78,8 +113,23 @@
       changed_when: created.status | default(0) == 200
       failed_when: false
 
-    - name: Expire the silence
+    - name: Read the silence before expiring it
       when: mode == 'expire' and alertmanager_url | default('') | length > 0 and silence_id | default('') | length > 0
+      ansible.builtin.uri:
+        url: "{{ alertmanager_url }}/api/v2/silence/{{ silence_id }}"
+        method: GET
+        status_code: [200, 404]
+        timeout: 15
+        return_content: true
+      register: silence_read
+      failed_when: false
+
+    # unknown (no answer) still tries the delete; expired or gone does not
+    - name: Expire the silence
+      when: >-
+        mode == 'expire' and alertmanager_url | default('') | length > 0 and silence_id | default('') | length > 0
+        and (silence_read.json.status.state | default('unknown')) in ['active', 'pending', 'unknown']
+        and silence_read.status | default(0) != 404
       ansible.builtin.uri:
         url: "{{ alertmanager_url }}/api/v2/silence/{{ silence_id }}"
         method: DELETE
@@ -98,11 +148,16 @@
       ansible.builtin.set_fact:
         silence_outcome:
           mode: "{{ mode }}"
-          silence_id: "{{ created.json.silenceID | default(silence_id | default('')) }}"
+          silence_id: "{{ created.json.silenceID | default(existing_silence | default('', true) or silence_id | default(''), true) }}"
           alertmanager: "{{ alertmanager_url | default('') }}"
           arrays: "{{ silence_array_regex | default('') }}"
           minutes: "{{ silence_minutes | int }}"
           changed: "{{ (created.changed | default(false)) or (expired.changed | default(false)) }}"
+          reused: "{{ mode == 'create' and existing_silence | default('') | length > 0 }}"
+          already_expired: >-
+            {{ mode == 'expire' and silence_id | default('') | length > 0 and alertmanager_url | default('') | length > 0
+               and (silence_read.status | default(0) == 404
+                    or (silence_read.json.status.state | default('unknown')) in ['expired']) }}
           error: >-
             {{ '' if (created is skipped or created.status | default(0) == 200) and (expired is skipped or expired.status | default(0) in [200, 404])
                else ('alertmanager ' ~ (created.msg | default(expired.msg | default('did not answer'))) | truncate(160)) }}
@@ -117,6 +172,7 @@
               'array': silence_outcome.arrays, 'mode': silence_outcome.mode, 'silence_id': silence_outcome.silence_id,
               'alertmanager': silence_outcome.alertmanager, 'minutes': silence_outcome.minutes,
               'comment': silence_comment | default(''), 'changed': silence_outcome.changed | bool,
+              'reused': silence_outcome.reused | bool, 'already_expired': silence_outcome.already_expired | bool,
               'error': silence_outcome.error} | to_json }}
 
     - name: Show the outcome
@@ -124,7 +180,9 @@
         msg: >-
           alertmanager silence {{ silence_outcome.mode }}: id {{ silence_outcome.silence_id | default('-', true) }}
           for arrays {{ silence_outcome.arrays }} on {{ silence_outcome.alertmanager | default('(none configured)', true) }}
-          {{ '(changed)' if silence_outcome.changed | bool else '(unchanged)' }}
+          {{ '(changed)' if silence_outcome.changed | bool
+             else ('(unchanged, reused the active silence)' if silence_outcome.reused | bool
+                   else ('(unchanged, already expired)' if silence_outcome.already_expired | bool else '(unchanged)')) }}
           {{ silence_outcome.error }}
 
     # Job artifacts for the node that expires the silence.
@@ -135,6 +193,7 @@
         data: >-
           {{ {'silence_id': silence_outcome.silence_id, 'mode': silence_outcome.mode,
               'alertmanager': silence_outcome.alertmanager, 'changed': silence_outcome.changed | bool,
+              'reused': silence_outcome.reused | bool, 'already_expired': silence_outcome.already_expired | bool,
               'error': silence_outcome.error} }}
       run_once: true
       delegate_to: localhost

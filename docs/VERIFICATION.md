@@ -102,6 +102,31 @@ under "Exercised on a platform")
 | syslog listener | runs `syslog.yml` and sends lines over UDP and then TCP with `tests/syslog_send.py` | both transports deliver; a human's `purevol destroy` and the alert produce notifications, the test line is logged |
 | Alertmanager | runs `alertmanager.yml` and sends one webhook payload with a replica-link alert, a hardware alert and a resolved capacity alert (README 'Testing' shows a representative body) | the hardware alert lights the identify LED on a controller of the real array (cleared by the test); the others notify and log |
 
+### Run twice (2026-11-13, standalone against the arrays)
+
+Every template launched twice with the same extra vars, seconds apart,
+from `tests/e2e_run_twice.sh`: expand volume grew a scratch volume to 2G
+and the second run reported it already at that size (changed false,
+`already_at_size` true); replicate now took a replicated snapshot of the
+`simon` group and the second run, 3 s later, requested nothing (inside the
+cooldown, `skipped` true); protect now snapshotted the two local groups
+that hold volumes (the array refuses a snapshot of an empty group, four
+of the six, recorded as failures as before) and the second run took
+nothing (`skipped` true); it ran with `extend_eradication_by_s` 0, so the
+guard against lengthening the delay twice is unit-tested only; the capacity request wrote
+one request file for one `request_key` and the second run reused it
+(`already_raised`, one file); the Alertmanager silence created once and
+the second create reused the same id, the first expire changed and the
+second read it already expired; the DR switchover ran twice each way on
+the lab link, the second run of each direction changing nothing. The
+reclaim's already-done path is pinned by the static test only: array A
+refuses eradication (`Eradication is disabled`), so no reclaim ran live.
+The bridge's pending check ran
+against the mock orchestrator in the unit tests; its first platform run
+follows this commit, the platform running the committed tree. The drill's
+in-flight skip and a demotion retried inside its quiesce are unit-tested
+only (both need two overlapping launches).
+
 ## Exercised through Prometheus and Alertmanager
 
 Prometheus 3.5 and Alertmanager 0.28 run as containers on the platform host,

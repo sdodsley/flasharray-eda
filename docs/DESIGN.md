@@ -299,6 +299,14 @@ Each remediation passes the gates its event allows; the table in
   have no switch.
 - State that must survive a restart lives on the array or in a file, never
   in a rulebook fact.
+- Run twice: every playbook behind a template reads before it writes and
+  leaves an array already where it should be alone, reporting changed
+  false and the reason (an orchestrator retries a node whose launch the
+  gateway answered with an error, so duplicates are a fact of the
+  platform, not a corner case). Names minted per run (snapshot suffixes,
+  request ids, drill copies) are keyed on the launch or guarded by a
+  cooldown, and the bridge asks the orchestrator for an execution already
+  handling the event before it posts.
 
 ## 6. Traps
 

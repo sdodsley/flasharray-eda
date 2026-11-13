@@ -112,10 +112,21 @@
       register: source_read_before
       changed_when: false
       no_log: true
+      # settle, then judge: a launch retried inside the quiesce waits for the
+      # pod to reach its requested state before anything is decided
+      retries: 30
+      delay: 10
+      until: >-
+        source_read_before.rc != 0 or
+        (source_read_before.stdout | from_json).promotion_status | default('')
+        == (source_read_before.stdout | from_json).requested_promotion_state | default('')
+      ignore_errors: true
 
     - name: Parse
       ansible.builtin.set_fact:
-        source_before: "{{ source_read_before.stdout | from_json }}"
+        source_before: >-
+          {{ (source_read_before.stdout | from_json) if source_read_before.rc == 0
+             else {'error': 'pod read failed: ' ~ (source_read_before.stderr_lines | default([]) | last | default('no error text'))} }}
 
     - name: Show the source pod before the change
       ansible.builtin.debug:
@@ -194,6 +205,9 @@
               print(mode, pod)
 
     - name: Mark the source pod as planned work
+      # a demoted source (a run that stopped half way, or this run again)
+      # refuses tags, and the earlier stamp already sits on both pods
+      when: source_before.promotion_status != 'demoted'
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: "{{ planned_work_script }}"
@@ -209,7 +223,9 @@
       failed_when: false
       no_log: true
     - name: Stop when the planned-work tag on the source pod could not be set
-      when: marked_source.rc | default(0) != 0
+      when:
+        - source_before.promotion_status != 'demoted'
+        - marked_source.rc | default(0) != 0
       ansible.builtin.fail:
         msg: "{{ marked_source.stderr_lines | default([]) | last | default('the tag script failed') }}"
 

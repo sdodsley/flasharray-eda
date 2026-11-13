@@ -5,12 +5,34 @@
 # fails or a size mismatch is recorded as critical (the signal that a DR plan
 # has silently stopped working), the copy is destroyed on every path, and the
 # rescue clears the failure so dr_drill.yml carries on with the next drill.
+# Run twice: the copy is named for the launch (dr_drill_key), and a copy of
+# an earlier launch still on the target means that drill is in flight: this
+# one records skipped and touches nothing. A copy older than dr_drill_stale_s
+# (default 1800 s) is what a launch that died before its cleanup left; it is
+# destroyed and eradicated, then the drill runs.
 - name: Start the drill with a clean slate
   ansible.builtin.set_fact:
-    drill_copy: "{{ drill.prefix | default('eda-drill') }}-{{ drill.pgroup }}"
+    drill_key: "{{ dr_drill_key | default(now(utc=true).strftime('%Y%m%d%H%M%S')) }}"
     drill_snap: {}
     drill_result: {}
     drill_error: ""
+    drill_skipped: false
+
+# <prefix>-<pgroup>-<key>, kept inside the array's 63-character volume name:
+# a base over 40 characters is cut to 33 plus a short hash of the group, so
+# the base never depends on the key's length and two long groups never share
+# one
+- name: Name the copy for this launch
+  ansible.builtin.set_fact:
+    drill_full: "{{ (drill.prefix | default('eda-drill')) ~ '-' ~ drill.pgroup }}"
+
+- name: Keep the base within the name limit
+  ansible.builtin.set_fact:
+    drill_base: "{{ drill_full if drill_full | length <= 40 else drill_full[:33] ~ '-' ~ (drill.pgroup | hash('md5'))[:6] }}"
+
+- name: Pin the copy name
+  ansible.builtin.set_fact:
+    drill_copy: "{{ drill_base }}-{{ drill_key }}"
 
 - name: Find, copy and verify, then record whatever happened
   block:
@@ -34,11 +56,22 @@
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
-          import json, os, urllib3
+          import json, os, time, urllib3
           urllib3.disable_warnings()
           from pypureclient import flasharray
           c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
           pg = os.environ["SOURCE"] + ":" + os.environ["PGROUP"]
+          # copies of this group from other launches: <base>-<digits>; fresh ones
+          # mean a drill in flight, ones older than STALE_S were left behind
+          base = os.environ["COPY_BASE"]; stale_s = int(os.environ.get("STALE_S") or 1800)
+          live = c.get_volumes(filter="name='%s-*' and destroyed='false'" % base)
+          copies = [v.to_dict() for v in live.items] if live.status_code == 200 else []
+          copies = [v for v in copies if v["name"][len(base) + 1:].isdigit()]
+          now_ms = time.time() * 1000
+          in_progress = [v["name"] for v in copies if now_ms - (v.get("created") or now_ms) < stale_s * 1000]
+          stale = [v["name"] for v in copies if v["name"] not in in_progress]
+          if in_progress:
+              print(json.dumps({"in_progress": in_progress, "stale": stale})); raise SystemExit(0)
           done = [t for t in c.get_protection_group_snapshots_transfer(filter=f"name='{pg}.*'", limit=50).items if t.completed]
           if not done:
               print(json.dumps({"error": f"no completed transfer for {pg}"})); raise SystemExit(0)
@@ -47,12 +80,14 @@
           want = os.environ.get("VOLUME") or ""
           pick = next((m for m in members if m.endswith("." + want)), members[0] if members else None)
           print(json.dumps({"snapshot": latest.name, "completed": latest.completed, "members": members, "volume_snapshot": pick,
-                            "volume": pick.split(".", 2)[-1] if pick else None}))
+                            "volume": pick.split(".", 2)[-1] if pick else None, "stale": stale}))
       environment:
         FA_HOST: "{{ hostvars[drill.target_array].fa_url | regex_replace('^https?://', '') }}"
         FA_TOKEN: "{{ hostvars[drill.target_array].api_token }}"
         SOURCE: "{{ drill.source_array }}"
         PGROUP: "{{ drill.pgroup }}"
+        COPY_BASE: "{{ drill_base }}"
+        STALE_S: "{{ dr_drill_stale_s | default(1800) }}"
         VOLUME: "{{ drill.volume | default('') }}"
       register: find
       changed_when: false
@@ -66,12 +101,34 @@
       ansible.builtin.debug:
         var: drill_snap
 
+    - name: Leave a drill already in flight alone
+      when: drill_snap.in_progress | default([]) | length > 0
+      ansible.builtin.set_fact:
+        drill_skipped: true
+        drill_result: {"skipped": true, "in_progress": "{{ drill_snap.in_progress }}"}
+
+    # a copy older than dr_drill_stale_s (default 1800) is what a launch
+    # that died before its cleanup left: remove it, then drill
+    - name: Destroy and eradicate a stale copy an earlier launch left
+      when: not drill_skipped
+      everpure.flasharray.purefa_volume:
+        fa_url: "{{ hostvars[drill.target_array].fa_url }}"
+        api_token: "{{ hostvars[drill.target_array].api_token }}"
+        disable_warnings: true
+        name: "{{ item }}"
+        state: absent
+        eradicate: true
+      loop: "{{ drill_snap.stale | default([]) }}"
+      register: stale_cleanup
+      failed_when: false
+
     - name: Fail the drill when there is nothing to copy
-      when: drill_snap.error is defined or not (drill_snap.volume_snapshot | default(''))
+      when: not drill_skipped and (drill_snap.error is defined or not (drill_snap.volume_snapshot | default('')))
       ansible.builtin.fail:
         msg: "{{ drill_snap.error | default('no member volume snapshot in ' ~ (drill_snap.snapshot | default(''))) }}"
 
     - name: Copy the member volume from the replicated snapshot
+      when: not drill_skipped
       everpure.flasharray.purefa_pgsnap:
         fa_url: "{{ hostvars[drill.target_array].fa_url }}"
         api_token: "{{ hostvars[drill.target_array].api_token }}"
@@ -85,6 +142,7 @@
         state: copy
 
     - name: Verify the copy exists and matches the snapshot size
+      when: not drill_skipped
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
@@ -106,11 +164,12 @@
       no_log: true
 
     - name: Parse the verification
+      when: not drill_skipped
       ansible.builtin.set_fact:
         drill_result: "{{ verify.stdout | from_json }}"
 
     - name: Fail the drill when the copy does not match the snapshot
-      when: not drill_result.size_matches | default(false)
+      when: not drill_skipped and not drill_result.size_matches | default(false)
       ansible.builtin.fail:
         msg: "copy {{ drill_copy }} does not match {{ drill_snap.volume_snapshot }}: {{ drill_result }}"
   rescue:
@@ -128,7 +187,7 @@
         name: "{{ drill_copy }}"
         state: absent
         eradicate: true
-      when: drill.target_array in hostvars and credential_array | default(drill.target_array) == drill.target_array  # a bad entry or credential is still recorded below
+      when: not drill_skipped and drill.target_array in hostvars and credential_array | default(drill.target_array) == drill.target_array  # a bad entry or credential is still recorded below
       register: cleanup
       failed_when: false  # the copy may never have been made; a copy that could not be destroyed is recorded
 
@@ -140,6 +199,7 @@
         line: >-
           {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'dr_drill',
               'severity': 'critical' if drill_error else ('warning' if cleanup.failed | default(false) else 'info'),
+              'skipped': drill_skipped | bool,
               'cleanup_error': (cleanup.msg | default('')) if cleanup.failed | default(false) else '',
               'array': drill.target_array, 'source_array': drill.source_array, 'pgroup': drill.pgroup,
               'snapshot': drill_snap.snapshot | default(''), 'snapshot_completed': drill_snap.completed | default(''),
@@ -151,7 +211,8 @@
         msg: >-
           DR drill {{ drill.target_array }} <- {{ drill.source_array }}:{{ drill.pgroup }}:
           {{ 'FAILED ' ~ drill_error if drill_error
-             else 'OK ' ~ drill_snap.snapshot ~ ' volume ' ~ drill_snap.volume ~ ' copied and verified' }}
+             else ('SKIPPED, a drill copy is in flight: ' ~ (drill_snap.in_progress | default([]) | join(', ')) if drill_skipped
+                   else 'OK ' ~ drill_snap.snapshot ~ ' volume ' ~ drill_snap.volume ~ ' copied and verified') }}
 
     # drills_done accumulates across the drills dr_drill.yml includes; the
     # artifacts below describe this drill alone and dr_drill.yml replaces them
@@ -161,7 +222,8 @@
       ansible.builtin.set_fact:
         drills_done: >-
           {{ drills_done | default([]) + [{'target_array': drill.target_array, 'source_array': drill.source_array,
-                                           'pgroup': drill.pgroup, 'result': 'failed' if drill_error else 'ok',
+                                           'pgroup': drill.pgroup,
+                                           'result': 'failed' if drill_error else ('skipped' if drill_skipped else 'ok'),
                                            'error': drill_error | trim}] }}
 
     - name: Publish this drill as job artifacts

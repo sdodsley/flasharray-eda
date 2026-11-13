@@ -37,6 +37,9 @@
         alert_record:
           time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
           kind: "{{ 'ticket' if runbook.route in ['ticket', 'tasks'] else 'notify' }}"
+          # the key a ticket backend deduplicates on: a repeat launch for the
+          # same alert and transition carries the same one
+          ticket_key: "{{ target_array }}:{{ alert_id | default('') }}:{{ transition | default('opened') }}"
           severity: "{{ runbook.severity | default(severity) }}"
           array: "{{ target_array }}"
           alert_id: "{{ alert_id }}"

@@ -428,7 +428,12 @@ def test_switchover_marks_the_source_pod_as_planned_work(repo_root):
     assert task["environment"]["MODE"] == "set"
     assert task.get("failed_when") is False and task.get("register") == "marked_source"
     stop = source["tasks"][mark + 1]
-    assert "ansible.builtin.fail" in stop and "marked_source.rc" in stop["when"]
+    stop_when = stop["when"] if isinstance(stop["when"], list) else [stop["when"]]
+    assert "ansible.builtin.fail" in stop
+    assert any("marked_source.rc" in w for w in stop_when)
+    # a source already demoted cannot take the tag: neither task runs then
+    assert any("promotion_status != 'demoted'" in w for w in stop_when)
+    assert "source_before.promotion_status != 'demoted'" in task["when"]
     script = next(
         t["ansible.builtin.set_fact"]["planned_work_script"]
         for t in source["tasks"]

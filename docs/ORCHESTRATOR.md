@@ -193,7 +193,11 @@ Vars (`vars/example.yml`, copied to `vars/local-<site>.yml`):
 | `orchestrator_validate_certs` | `true` | TLS verification for both calls (the orchestrator normally has a real certificate, unlike lab arrays) |
 
 Playbook-only knobs, overridable as extra_vars: `orchestrator_timeout`
-(seconds per call, 30) and `orchestrator_max_body_bytes` (1000000).
+(seconds per call, 30), `orchestrator_max_body_bytes` (1000000) and
+`orchestrator_dedupe` (true: before posting, the executions still open are
+listed and one already handling the same event type, array and scope,
+such as the protection group, makes the record `pending` instead of a
+second post).
 
 Environment (`env.example`): `AO_CLIENT_ID` and `AO_CLIENT_SECRET`, the
 client credentials of an orchestrator service account. The playbook reads

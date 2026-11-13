@@ -50,7 +50,8 @@
           "top_growers": "${trigger.event.data.top_growers}",
           "pending_eradication_volumes": "${trigger.event.data.pending_eradication_volumes}",
           "pending_eradication_snapshots": "${trigger.event.data.pending_eradication_snapshots}",
-          "candidate_targets": "${trigger.event.data.others}"
+          "candidate_targets": "${trigger.event.data.others}",
+          "request_key": "${trigger.event.observed_at}"
         }
       }
     },

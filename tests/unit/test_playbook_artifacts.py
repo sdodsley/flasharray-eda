@@ -208,7 +208,9 @@ def test_expand_volume_keeps_the_guard_rails(repo_root):
     assert "inventory_hostname == target_array" in conditions
     assert "volume is match(" in conditions
     assert "new_size | string is match(" in conditions
-    assert "new_size_bytes | int > before.provisioned" in conditions
+    assert (
+        "new_size_bytes | int >= before.provisioned" in conditions
+    )  # equal = unchanged
     # the size read never shows the token, and the assertions come before the write
     read = next(t for t in tasks if "ansible.builtin.command" in t)
     assert read.get("no_log") is True
