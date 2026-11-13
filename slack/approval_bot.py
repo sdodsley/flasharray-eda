@@ -44,6 +44,14 @@ NOTIFY_TEMPLATE      the controller job template that writes the critical
                      notify record of an expired orchestrator approval
                      (default "FlashArray - notify"; empty = no record; needs
                      AAP_HOST and a token with execute on it)
+SLACK_ROUTES         "prefix=channel,prefix=channel": approvals whose workflow
+                     name or title starts with a prefix are posted to that
+                     channel instead of SLACK_CHANNEL (two projects on one
+                     Slack app: Socket Mode hands each click to one open
+                     connection, so one bot instance serves both and routes)
+NOTIFY_ROUTES        "prefix=template": the notify template for the expiry
+                     record of approvals matching the prefix (default
+                     NOTIFY_TEMPLATE)
 POLL_SECONDS         how often the approval queues are read (default 30)
 AO_URL               orchestrator API base, e.g. https://orchestrator:18000;
                      unset = orchestrator approvals are not watched
@@ -113,6 +121,28 @@ MAX_PAGES = 50
 STATE_FILE = "cards.json"
 DEFAULT_NOTIFY_TEMPLATE = "FlashArray - notify"
 SLACK_NOTE = re.compile(r"via Slack by (.+?) \(")
+
+
+def parse_routes(text):
+    """SLACK_ROUTES and NOTIFY_ROUTES: "prefix=value,prefix=value" as a list of
+    (prefix, value) in the order given; items without both parts are
+    dropped."""
+    routes = []
+    for item in (text or "").split(","):
+        prefix, sep, value = item.partition("=")
+        if sep and prefix.strip() and value.strip():
+            routes.append((prefix.strip(), value.strip()))
+    return routes
+
+
+def route_for(approval, routes):
+    """The value of the first route whose prefix starts the approval's
+    workflow name or title (case-insensitive); None when none does."""
+    for prefix, value in routes:
+        for text in (approval.workflow, approval.title):
+            if text and text.lower().startswith(prefix.lower()):
+                return value
+    return None
 
 
 def parse_time(text):
@@ -493,7 +523,7 @@ class Controller:
         self.http = http
         self.ui_url = (ui_url or base).rstrip("/")
         self.notify_template = notify_template
-        self.notify_template_id = None
+        self.template_ids = {}  # template name -> id, looked up once
 
     name = "controller"
 
@@ -578,27 +608,29 @@ class Controller:
                 f"controller {verb} refused: HTTP {status} {str(body)[:120]}"
             )
 
-    def notify(self, subject, detail, severity="critical", target_array=""):
-        """Launch the notify template with one record; the job id. Raises
-        RuntimeError when the template is unknown or the launch refused."""
-        if not self.notify_template:
+    def notify(
+        self, subject, detail, severity="critical", target_array="", template=None
+    ):
+        """Launch the notify template (NOTIFY_TEMPLATE, or the one given) with
+        one record; the job id. Raises RuntimeError when the template is
+        unknown or the launch refused."""
+        name = template or self.notify_template
+        if not name:
             raise RuntimeError("no notify template configured")
-        if self.notify_template_id is None:
+        if name not in self.template_ids:
             status, body = self.http(
                 self.base
                 + "/api/controller/v2/job_templates/?name="
-                + urllib.parse.quote(self.notify_template),
+                + urllib.parse.quote(name),
                 headers=self._headers(),
                 verify=self.verify,
             )
             results = body.get("results") if isinstance(body, dict) else None
             if status != 200 or not results:
-                raise RuntimeError(
-                    f"notify template {self.notify_template!r} not found: HTTP {status}"
-                )
-            self.notify_template_id = results[0]["id"]
+                raise RuntimeError(f"notify template {name!r} not found: HTTP {status}")
+            self.template_ids[name] = results[0]["id"]
         status, body = self.http(
-            f"{self.base}/api/controller/v2/job_templates/{self.notify_template_id}/launch/",
+            f"{self.base}/api/controller/v2/job_templates/{self.template_ids[name]}/launch/",
             "POST",
             {
                 "extra_vars": {
@@ -810,9 +842,13 @@ class Bot:
         store=None,
         escalate="",
         now=time.time,
+        routes=(),
+        notify_routes=(),
     ):
         self.web = web
         self.channel = channel
+        self.routes = list(routes)  # (workflow or title prefix, channel)
+        self.notify_routes = list(notify_routes)  # (prefix, notify template)
         self.systems = {s.name: s for s in systems}
         self.approvers = set(approvers)
         self.poll_seconds = poll_seconds
@@ -849,6 +885,9 @@ class Bot:
     def _controller(self):
         return self.systems.get(Controller.name)
 
+    def _channel_for(self, approval):
+        return route_for(approval, self.routes) or self.channel
+
     def poll_once(self):
         for system in self.systems.values():
             try:
@@ -862,15 +901,27 @@ class Bot:
                 with self.lock:
                     card = self.posted.get(approval.key)
                     if card is None:
-                        response = self.web.chat_postMessage(
-                            channel=self.channel,
-                            text=f"Approval needed: {approval.title}",
-                            blocks=build_card(approval),
-                        )
+                        channel = self._channel_for(approval)
+                        try:
+                            response = self.web.chat_postMessage(
+                                channel=channel,
+                                text=f"Approval needed: {approval.title}",
+                                blocks=build_card(approval),
+                            )
+                        except (
+                            Exception
+                        ) as exc:  # a channel the bot is not in: next poll
+                            logger.warning(
+                                "could not post %s to %s: %s",
+                                approval.key,
+                                channel,
+                                exc,
+                            )
+                            continue
                         # chat.update wants the channel id, which the post returns
                         card = Card(
                             response["ts"],
-                            response.get("channel") or self.channel,
+                            response.get("channel") or channel,
                             approval,
                             posted_at=self.now(),
                         )
@@ -1014,7 +1065,10 @@ class Bot:
         if approval.system == Controller.name:
             return
         controller = self._controller()
-        if controller is None or not controller.notify_template:
+        template = route_for(approval, self.notify_routes) or (
+            controller.notify_template if controller else ""
+        )
+        if controller is None or not template:
             logger.warning(
                 "no notify record for the expired %s: no controller or no template",
                 approval.key,
@@ -1029,7 +1083,9 @@ class Bot:
         )
         try:
             job = controller.notify(
-                f"approval expired, nobody decided: {approval.title}", detail
+                f"approval expired, nobody decided: {approval.title}",
+                detail,
+                template=template,
             )
             logger.info("notify record for %s: job %s", approval.key, job)
         except Exception as exc:
@@ -1166,6 +1222,8 @@ def main(argv=None):
         int(os.environ.get("POLL_SECONDS", "30")),
         store=CardStore(args.state_dir) if args.state_dir else None,
         escalate=os.environ.get("SLACK_ESCALATE", ""),
+        routes=parse_routes(os.environ.get("SLACK_ROUTES", "")),
+        notify_routes=parse_routes(os.environ.get("NOTIFY_ROUTES", "")),
     )
 
     def on_request(client, req):
@@ -1182,10 +1240,11 @@ def main(argv=None):
     poller.start()
     socket.connect()
     logger.info(
-        "connected; watching %s; approvers %s; state %s",
+        "connected; watching %s; approvers %s; state %s; routes %s",
         ", ".join(bot.systems),
         "anyone in the channel" if not approvers else len(approvers),
         args.state_dir or "in memory",
+        ", ".join(f"{p} -> {c}" for p, c in bot.routes) or "none",
     )
     try:
         threading.Event().wait()

@@ -15,7 +15,10 @@
   critical record through the controller's notify template
   (`NOTIFY_TEMPLATE`); a timed-out controller approval's workflow records
   itself on its failure edge. A final status the system cannot answer is
-  retried, and treated as expired once the window has passed.
+  retried, and treated as expired once the window has passed. `SLACK_ROUTES`
+  and `NOTIFY_ROUTES` send another project's cards (by workflow name prefix)
+  to its own channel and notify template, so one bot instance serves two
+  projects on one Slack app.
 - Controller schedules from the seed: `aap/seed.yml` creates the nightly
   DR drill at a fixed hour (`dr_drill_fail_job` makes a failed drill fail
   the job, and the platform rulebooks leave the tick-driven drill ruleset

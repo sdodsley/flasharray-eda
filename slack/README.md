@@ -123,6 +123,17 @@ decided is refused by the platform and reported back as an ephemeral
 message.
 `SLACK_CHANNEL` may be a name: Slack accepts it for the post and the bot
 keeps the channel id the post returns for the card's later updates.
+
+Two projects on one Slack app share one bot. Socket Mode hands each button
+click to one of the app's open connections, so a second bot instance on
+the same app would lose the clicks meant for the other; instead the one
+instance polls both systems (its identities need the approve rights on
+both projects' workflows and execute on both notify templates) and
+`SLACK_ROUTES` sends each project's cards to its own channel by the prefix
+of the workflow name, for example `FlashBlade=#flashblade-eda`, with
+`NOTIFY_ROUTES` naming that project's notify template for the expiry
+record. A second Slack app, with its own tokens and bot instance, is the
+other way to keep the projects apart.
 The reminders, the expiry handling and the state were exercised against
 the lab orchestrator with a throwaway four-minute approval nobody decided:
 the card, the two reminders in its thread, the rewrite as expired, the
@@ -140,6 +151,8 @@ denied by API, which the bot read and rewrote as rejected by that user
 | `SLACK_ESCALATE` | text put in front of the last reminder and the expiry message instead of the approver mentions, for example `<!subteam^S0123>` or `<!here>` |
 | `STATE_DIR` | directory for `cards.json`, the record of the posted cards; unset keeps it in memory |
 | `NOTIFY_TEMPLATE` | the controller template that writes the critical record of an expired orchestrator approval (default `FlashArray - notify`; empty = no record) |
+| `SLACK_ROUTES` | `prefix=channel,prefix=channel`: an approval whose workflow name or title starts with a prefix is posted to that channel instead of `SLACK_CHANNEL`, and its reminders and expiry message follow it |
+| `NOTIFY_ROUTES` | `prefix=template`: the notify template for the expiry record of approvals matching the prefix (default `NOTIFY_TEMPLATE`) |
 | `AO_URL`, `AO_UI_URL`, `AO_VERIFY_CERTS` | orchestrator API base, the UI the card links to (default the API base), TLS verification (default true); unset `AO_URL` = not watched |
 | `AO_CLIENT_ID` + `AO_CLIENT_SECRET`, or `AO_USERNAME` + `AO_PASSWORD_FILE` | the orchestrator identity |
 | `AAP_HOST`, `AAP_TOKEN` or `AAP_TOKEN_FILE`, `AAP_VERIFY_CERTS` | the platform gateway and a controller token; unset `AAP_HOST` = not watched |
