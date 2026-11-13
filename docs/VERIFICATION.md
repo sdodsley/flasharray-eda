@@ -132,6 +132,26 @@ read it already expired. The drill's in-flight skip and stale-copy removal
 and a demotion retried inside its quiesce are unit-tested only (they need
 two overlapping launches).
 
+### Self-check and definitions check (2026-11-13, standalone)
+
+`playbooks/self_check.yml` ran from the standalone checkout against both
+arrays three times: with the syslog and phone-home tests only (every row
+passed on both arrays, phone home and remote assist alike; the platform's
+syslog activation logged the arrays' `purity.test` lines as they arrived),
+then with the alert-watcher test to one named watcher (array A passed;
+array B answered "No SMTP relay host configured.", the row was recorded
+critical after the retry and the play failed for B as designed, a real
+finding about B's alerting), then with an unknown test and the SNMP test on
+arrays with no SNMP manager (the unknown test critical and the job failed,
+the SNMP rows warning). `playbooks/definitions_check.yml` ran on the
+platform host with the orchestrator service account and the platform token
+in its environment, the way the job gets them: its first run reported one
+drifted definition (`capacity_reclaim_approval.json`, changed by the
+run-twice commit and never re-imported) and, through a mistake in the test
+harness, nine activations; after the import and the harness fix it
+reported zero drift on both halves and exited 0, and the kept temp file
+audited by hand gave the same answer.
+
 ## Exercised through Prometheus and Alertmanager
 
 Prometheus 3.5 and Alertmanager 0.28 run as containers on the platform host,
@@ -484,6 +504,35 @@ old id had left the list, which the tool now waits out; a second run
 finished the fleet, and a read-only run then reported all ten clean.
 `tools/ao_sync.py --check` against the live orchestrator exits 0 with the
 nine definitions unchanged.
+
+The schedules (2026-11-13). The seed, run against the platform at the
+commit that added them, created the three schedules with the expected next
+runs (02:00 and 03:00 UTC the next day, Monday 08:00 UTC), the two
+templates with their credentials (the definitions check with the
+orchestrator service account and the platform token) and the platform
+token credential. Three of the four seed runs that day lost one task each
+to a gateway 502 or 503 on a read (the credential types, the activations,
+the notification templates) and the next run finished the rest, as
+"Re-running safely" says; one run went through clean. Each schedule was
+fired once by setting its rule to a single run two minutes ahead and
+restoring it afterwards, so the jobs carry launch type `scheduled`: the
+self check ran on both arrays (eight tests; syslog, phone home and remote
+assist passed on both, array A had no enabled watcher to e-mail and said
+so, array B's two watchers failed on its missing SMTP relay and the job
+failed as designed), and the syslog activation, recreated on the new
+revision, turned the two `purity.test` lines the arrays sent into notify
+jobs within a few seconds, the receipt record showing array A's clock
+within a second of the listener's and array B's 36 minutes behind; the
+nightly drill copied a member volume of the replicated group out of the
+latest completed snapshot on the target, verified and destroyed it, and
+its job passed with `dr_drill_fail_job` set. The definitions check,
+launched by hand, failed correctly while the replication activation was
+being recreated (`status starting`) and passed once it ran: both halves
+compared, nine definitions unchanged, ten activations clean. A second scheduled run of the self check, after a
+seed run with the Slack variables had put the notification template on the
+new templates (a seed run without them removes it, and the webhook
+credential from the notify template), had its failure posted to the
+channel by the platform's own notification, with the link into the job.
 
 ## Replayed only
 

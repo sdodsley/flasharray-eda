@@ -468,8 +468,16 @@ it. Its job-failure posts wait for a failed job.
 
 The fleet credential is exercised by the activations: the change-control,
 config-drift and replication activations launch the remediate NTP,
-remediate DNS, notify and DR drill templates, whose playbooks resolve the
-array from `purefa_fleet_json` and run against it. The ten activations run
+remediate DNS and notify templates, whose playbooks resolve the array from
+`purefa_fleet_json` and run against it; the DR drill runs from its
+schedule the same way. The three schedules were fired once each on the
+platform (a one-run rule two minutes ahead, then the real rule put back):
+the self check tested both arrays and failed the job on an array whose
+watchers have no SMTP relay, with the syslog activation recording the test
+lines it received; the drill copied, verified and destroyed a volume from
+the latest replicated snapshot; the definitions check, launched by hand,
+found every definition and activation in place
+([docs/VERIFICATION.md](../docs/VERIFICATION.md)). The ten activations run
 from the decision-environment image (`localhost/flasharray-eda-de`, loaded
 through the host user's podman socket with `aap_eda_de_pull_policy: never`,
 see "Images on a containerized platform"). The seed enables the activations

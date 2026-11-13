@@ -35,7 +35,21 @@ unless stated.
 - History resolutions are fixed: 30 s, 5 min, 30 min, 2 h, 8 h, 1 day.
   Anything else is "Invalid resolution".
 - Maintenance windows accept 3600 to 172800 seconds, not minutes.
-- `GET /alert-watchers/test` needs explicit watcher names.
+- The self-test endpoints (`playbooks/self_check.yml`) answer with
+  `TestResult` rows: at REST 2.54 `component_name`, `component_address`,
+  `destination`, `test_type`, `success`, `result_details`, `description`,
+  `enabled` (older releases say `result`). `GET /alert-watchers/test` needs
+  explicit watcher names and tests a named watcher even when it is
+  disabled (`test_type` `send-test-email`); an array with no SMTP relay
+  answers 400 "No SMTP relay host configured." for any watcher, which is
+  how the first self-check found that one lab array's two enabled watchers
+  had never received a mail. `GET /syslog-servers/test` answers one row per
+  server, sent by one controller, with "verification of successful
+  transmission is done at the destination." (the array does not confirm
+  receipt; the listener's test-line rule is the confirmation, and the line
+  arrived within a second). `GET /support/test` answers two rows with no
+  `destination`, `test_type` `phonehome` and `remote_assist`, "All tests
+  passed." from CT0 on both lab arrays.
 - A protection group's `targets` are not on the group object at REST 2.46;
   `/protection-groups/targets` is one extra call per poll.
 - Transfers that completed before the poller started have no `started`; the
@@ -119,6 +133,10 @@ sends a `purity.test` line):
 - Lines have no `<PRI>`, so no syslog severity or facility; the hostname is
   the controller's (`<array>-ct0`), and the program carries a pid
   (`purity.audit[211234]:`). The array name is in the message text.
+- The `purity.test` line carries the array's own `UTC Time`, so the
+  receipt record the syslog rulebook now writes shows the array's clock
+  against the listener's: the array whose NTP was stuck stamped its test
+  lines 36 minutes behind the time they arrived.
 - Every CLI, GUI and REST command is one `purity.audit` line in the layout
   `[user (local)]@array(array-id) command arguments. Message ID: N UTC
   Time: <ISO> Array Name: <array>`; REST calls appear as the CLI command
