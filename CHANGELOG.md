@@ -25,7 +25,8 @@
   (`NOTIFY_TEMPLATE`); a timed-out controller approval's workflow records
   itself on its failure edge. A final status the system cannot answer is
   retried, and treated as expired once the window has passed. `SLACK_ROUTES`
-  and `NOTIFY_ROUTES` send another project's cards (by workflow name prefix)
+  and `NOTIFY_ROUTES` send another project's cards (by workflow name or
+  title prefix)
   to its own channel and notify template, so one bot instance serves two
   projects on one Slack app.
 - Controller schedules from the seed: `aap/seed.yml` creates the nightly
@@ -40,7 +41,14 @@
   orchestrator and `activation_audit` against the site vars the seed read,
   through a `Platform token - flasharray-eda`
   credential whose environment the audit tool now reads). Times, the
-  watcher list and the orchestrator names are seed vars.
+  watcher list and the orchestrator names are seed vars;
+  `self_check_fail_job` and `definitions_check_fail_job` decide whether a
+  broken path or drift fails the job. A site that seeds the orchestrator
+  credential (`AO_CLIENT_ID` set) now puts `aap_orchestrator_aap_credential`,
+  `aap_orchestrator_aap_integration` and `aap_orchestrator_service_account`
+  in its vars file (the names it already passes to `tools/ao_sync.py`), or
+  disables `aap_definitions_check_schedule`; the seed refuses to run,
+  before creating anything, until one of those is done.
 - The two playbooks that span every array (apply baseline and the self
   check) write the shared alert log one array at a time: `lineinfile` is
   read-modify-rename, and two arrays writing at once could lose a record.
@@ -59,9 +67,13 @@
   work only on a source still promoted, and the three DR playbooks wait
   for a pod mid-change to settle before judging; `orchestrator_post.yml`
   records `pending` instead of posting when an execution is already
-  handling the same event for the same array. `tests/e2e_run_twice.sh`
-  launches each template twice on real arrays;
-  `tests/unit/test_playbook_idempotent.py` pins the guards.
+  handling the same event for the same array; ticket records carry a
+  `ticket_key`, and `orchestrator_dedupe: false` turns the pending check
+  off. `tests/e2e_run_twice.sh` runs seven of the playbooks twice on real
+  arrays (expand volume, replicate now, protect now, capacity request and
+  reclaim, the Alertmanager silence and, when opted in, the DR switchover);
+  `tests/unit/test_playbook_idempotent.py` pins the guards of the rest, and
+  docs/VERIFICATION.md records which second runs happened live.
 - An alert that opens and resolves between two polls is first seen already
   resolving; the alerts rulebook now notifies once for it, at one severity
   below its own, instead of routing it through the runbook map as if it
@@ -75,7 +87,6 @@
   maintenance window too, the hardware rules' hourly throttle is keyed on
   the component's `episode` so one back after recovering is lit and
   recorded at once, and runbook 13 refuses a credential for another array.
-
 - The alert lifecycle: `closing` is the resolved signal (the array holds a
   resolved alert there for a day before `closed`), so the alerts rulebook
   notifies once at one severity below the alert's with the time it was

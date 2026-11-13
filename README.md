@@ -377,7 +377,8 @@ Facts the rules are written around;
   reused, already expired, pending; the bridge matches an open execution on
   event type, array and scope such as the protection group). A platform node retried after a
   gateway error is the live case; [orchestrator/README.md](orchestrator/README.md)
-  lists the behaviour per template and `tests/e2e_run_twice.sh` proves it.
+  lists the behaviour per template and `tests/e2e_run_twice.sh` proves seven
+  of the playbooks on real arrays.
 
 ## Testing
 
@@ -414,7 +415,7 @@ drift.
 
 `tests/e2e_sources.sh`, `tests/e2e_change_control.sh`,
 `tests/e2e_replication.sh`, `tests/e2e_approvals.sh` and
-`tests/e2e_run_twice.sh` (every template twice) run the rulebooks
+`tests/e2e_run_twice.sh` (seven playbooks twice) run the rulebooks
 against live arrays, inducing what can be induced (NTP drift, a second
 user's changes, a paused replica link, a maintenance window, a
 pending-eradication volume, a busy volume capped and uncapped) and

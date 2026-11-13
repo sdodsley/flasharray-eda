@@ -104,7 +104,7 @@ under "Exercised on a platform")
 
 ### Run twice (2026-11-13, standalone against the arrays)
 
-Every template launched twice with the same extra vars, seconds apart,
+Seven playbooks launched twice with the same extra vars, seconds apart,
 from `tests/e2e_run_twice.sh`: expand volume grew a scratch volume to 2G
 and the second run reported it already at that size (changed false,
 `already_at_size` true); replicate now took a replicated snapshot of the

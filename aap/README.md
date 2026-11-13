@@ -27,7 +27,12 @@ It creates nothing on an array and nothing in the automation orchestrator
   (the same names `env.example` uses), and, if the orchestrator credential
   is wanted, `AO_URL`, `AO_CLIENT_ID` and `AO_CLIENT_SECRET`. The seed
   refuses to run with an array's pair empty and skips the orchestrator
-  credentials when `AO_CLIENT_ID` is empty. For Slack, optionally
+  credentials when `AO_CLIENT_ID` is empty. With `AO_CLIENT_ID` set and
+  `aap_definitions_check_schedule` enabled (the default), the vars file must
+  also name `aap_orchestrator_aap_credential`,
+  `aap_orchestrator_aap_integration` and `aap_orchestrator_service_account`
+  (the names `tools/ao_sync.py` resolves the definitions' placeholders with;
+  "Schedules"); the seed refuses to run without them. For Slack, optionally
   `SLACK_WEBHOOK_URL` (an incoming webhook, stored as a credential on the
   notify template) and `SLACK_BOT_TOKEN` with `SLACK_CHANNEL` (a bot token
   with `chat:write`, invited to the channel, for the platform's own Slack
@@ -431,7 +436,9 @@ push sync the controller project (and the EDA project, before recreating
 an activation) or a job runs the revision the project last fetched. A
 gateway answering 503 or 504 while the platform is busy fails the one
 task that hit it; the seed is idempotent, so the next run finishes the
-rest. The seed never deletes anything.
+rest. The seed never deletes anything. A release that changes a file in
+`orchestrator/` needs `tools/ao_sync.py` after the seed; the nightly
+definitions check names the files until it has run.
 
 ## Verified on a platform
 

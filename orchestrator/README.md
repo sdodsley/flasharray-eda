@@ -396,7 +396,10 @@ sections above follow them:
   `pending` with that execution's id instead of posting again. `notify`
   and the ticket record are a message per launch by design (the record
   carries a `ticket_key` a backend can deduplicate on).
-  `tests/e2e_run_twice.sh` launches each of them twice on real arrays.
+  `tests/e2e_run_twice.sh` launches the ones it covers twice on real arrays
+  (expand, replicate now, protect now, capacity request and reclaim, the
+  Alertmanager silence and, opted in, the switchover);
+  `tests/unit/test_playbook_idempotent.py` pins the guards of the rest.
 - `GET /api/v1/approvals?status=pending` lists the approvals waiting
   (`id`, `execution_id`, `node_name`, `prompt`); `PATCH
   /api/v1/approvals/{id}` with `status` (`approved` or `rejected`) and
