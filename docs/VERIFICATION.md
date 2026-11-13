@@ -534,6 +534,31 @@ new templates (a seed run without them removes it, and the webhook
 credential from the notify template), had its failure posted to the
 channel by the platform's own notification, with the link into the job.
 
+The approval bot's reminders, expiry handling and state (2026-11-13).
+Against the lab orchestrator, a throwaway workflow with a four-minute
+approval window that nobody decided was imported, run and deleted three
+times. Each time the bot posted the card within one poll, reminded in the
+card's thread at half and at ninety percent of the window (the second
+reminder shown in the channel), saw the approval leave the queue, read its
+end from the detail (`expired`, decided by the worker, "Approval decision
+window expired"), rewrote the card as expired, posted the critical message
+in the channel and launched the notify template for the critical record
+(jobs 507, 508 and 513). The first run showed the state directory
+unwritable by the image's non-root user under rootless podman, so the bot
+warned on every write and posted the card again after its restart; with
+the `U` volume flag the second and third runs kept the card across a
+restart made thirty seconds after it was posted ("1 card(s) remembered",
+one card for the approval) and went on to its end. The third run was the committed code, with the final-status read moved
+ahead of forgetting the card.
+The controller side: the controller-tier capacity workflow launched by
+hand put its approval in the queue, the bot posted the card, a denial made
+by API as the admin took the approval out of the queue, and the bot read
+the final status and rewrote the card as rejected by `admin` while the
+workflow took its failure edge to the warning notify. Not exercised live:
+a controller approval timing out (the lab's node waits 24 hours), a Slack
+click racing the sweep, and a detail read failing at the moment an
+approval leaves the queue; the unit tests pin those.
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on an array:

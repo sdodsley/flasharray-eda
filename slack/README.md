@@ -123,6 +123,13 @@ decided is refused by the platform and reported back as an ephemeral
 message.
 `SLACK_CHANNEL` may be a name: Slack accepts it for the post and the bot
 keeps the channel id the post returns for the card's later updates.
+The reminders, the expiry handling and the state were exercised against
+the lab orchestrator with a throwaway four-minute approval nobody decided:
+the card, the two reminders in its thread, the rewrite as expired, the
+critical message and the critical notify record, with the bot restarted
+mid-window and the card kept; and against the controller with an approval
+denied by API, which the bot read and rewrote as rejected by that user
+([docs/VERIFICATION.md](../docs/VERIFICATION.md)).
 
 ## Variables
 
