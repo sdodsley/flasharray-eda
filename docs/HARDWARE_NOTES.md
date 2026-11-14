@@ -329,7 +329,23 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
   activation keeps the rulebook and the extra vars it was created with,
   and a project is synced when it is created, not on later seed runs: a
   changed playbook reaches a job template after a project sync, a changed
-  rule or a new vars key reaches an activation after it is recreated.
+  rule or a new vars key reaches an activation after it is recreated,
+  and a changed event source plugin only after the decision environment
+  is rebuilt and loaded again: an activation recreated on the old image
+  runs the new rulebook against the old events, and a condition that
+  reads a field the old plugin never emitted is simply never true
+  (VERIFICATION.md, the QoS proof's third platform run).
+- The EDA server runs at most twelve activations at once
+  (`MAX_RUNNING_ACTIVATIONS`, the containerized installer's
+  `eda_max_running_activations`); the next one waits as `pending` with
+  "Wait for a worker to be available", and the cap is shared by every
+  project on the platform. An activation must connect its rulebook
+  within `RULEBOOK_READINESS_TIMEOUT_SECONDS` (60); on a host whose load
+  average is well above its CPU count the start fails with "Activation is
+  unresponsive. Readiness check for ansible-rulebook timed out" and the
+  restart policy tries again, each attempt holding a slot. While the host
+  is that busy the gateway answers API calls with 502, 503 and also 403,
+  so a tool that reads the platform retries all three.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under

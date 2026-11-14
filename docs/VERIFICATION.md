@@ -152,6 +152,76 @@ harness, nine activations; after the import and the harness fix it
 reported zero drift on both halves and exited 0, and the kept temp file
 audited by hand gave the same answer.
 
+### The QoS cap and volume groups (2026-11-13/14)
+
+Standalone against array A with a scratch volume group carrying a 50,000
+IOPS limit and a scratch member: the plugin's performance poll, run
+directly, stamped `volume_group`, `volume_group_qos` true and, from a
+probe tag on the group, `eda_capped` with scope `vgroup`; `qos_cap.yml`
+with scope notify recorded the refusal and changed nothing, with scope
+volume recorded the array's own refusal ("Cannot set rate limits on
+individual volumes inside volume groups with rate limit.") without failing
+the job, with scope vgroup tagged the group (`qos_cap`, `qos_prev_iops`
+50000, `qos_cap_volume`) and set its limit to 20,000; a second cap changed
+nothing; the lift restored 50,000 and removed the tags; a second lift
+changed nothing. The group and the member were destroyed and eradicated
+afterwards.
+
+Through the platform, under the fio load of the earlier QoS proof, the
+proof took five runs, and the ones that failed are the useful part. The
+first fired nothing: the load volume read at 55 µs unthrottled and was not
+among the ten slowest volumes the telemetry source fetches, while a
+datastore on the array produced the sustained-latency notices at the
+lowered thresholds; the volume was then put in a group with a 300 IOPS
+limit, which makes it the slowest volume on the array (139 µs against a
+40 µs threshold) holding 61 % of its IOPS. The second never ran: the lab
+VM sat at a load average of 19 on 12 CPUs under another project's
+activations, the EDA server's running-activation cap of twelve was full,
+and the recreated performance activation failed its 60-second readiness
+check on nine starts in a row; once the other project paused, the load
+fell to 9 within four minutes and the activation came up in 70 seconds.
+The third ran against the right volume with every rule condition met on
+the array's own figures and stayed silent, because the decision
+environment in the workers' store had been built the day before the
+plugin change: an image that does not emit `volume_group_qos` and
+`volume_group_capped` cannot match a condition that reads them, and
+nothing reports it. That is the upgrade note's first instruction, seen
+live before the release. The fourth, on the rebuilt and reloaded image
+with scope notify, proved the notify path: the new rule fired for the
+member (`volume_group_qos` true, 137 µs, 65.7 % of the array's IOPS for
+three polls) with the warning "sits in volume group ..., which has its
+own QoS" and no cap, and again 38 minutes later once its 30-minute
+throttle had passed. It also showed what a share threshold of 1 % means
+on a shared array: the cap rule, which the scope only steers for members
+of a rate-limited group, capped a real datastore volume outside any group
+(408 µs, 19.7 % of the array's IOPS) at 200 IOPS, and the lift restored it
+48 minutes later, at the first poll after the lab's thresholds were put
+back; the thresholds a proof lowers apply to every volume the source
+reports, so the fifth run kept the share threshold at 40 %, which only the
+load volume (60 %) reaches. The switch to scope vgroup in the fourth run
+failed on the platform gateway's 403 and 503 answers while another
+project's activations were starting, so the group path waited for the
+fifth run: on the rebuilt image with scope vgroup, the cap rule fired for the
+member (133 µs, 61.6 % of the array's IOPS for four polls,
+`volume_group_qos` true), the playbook chose the group (`cap_target`
+vgroup), tagged it (`qos_cap`, `qos_cap_volume` naming the member,
+`qos_prev_iops` 300) and set its limit to 200, where the array reported
+189 reads per second a moment later; fio was stopped at the cap, and the
+lift rule fired for the named member after three normal polls
+(`eda_capped` true, scope vgroup), restored 300 and removed the tags
+within two minutes of the cap. The same run capped the datastore volume a
+second time: a 40 % share threshold does not keep it out during its own
+bursts (405 reads and 127 writes per second, 63.9 % of the array, 221 µs
+for four polls), so it carried a 200 IOPS limit for eight minutes until
+the lift at the first normal poll after the lab's thresholds were
+restored. Both caps on the datastore were the design doing what it is
+for, on the volume that was the noisiest at that moment; the lesson for a
+proof is that lowered thresholds on a shared array are a change to
+production, and the next proof wants a source-side volume filter (not
+there yet) or an array of its own. Every scratch object was destroyed and
+eradicated after each run, and the performance activation runs on the
+lab's own thresholds again.
+
 ## Exercised through Prometheus and Alertmanager
 
 Prometheus 3.5 and Alertmanager 0.28 run as containers on the platform host,
