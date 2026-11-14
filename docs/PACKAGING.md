@@ -26,14 +26,16 @@ the local launcher and the environment files, `tools/`, `slack/`, `venv/`,
 `build_ignore`, so the built artifact carries the collection content only.
 
 The event sources are `sdodsley.flasharray_eda.purefa_events` and
-`sdodsley.flasharray_eda.purefa_syslog`, and nine of the ten standalone
-rulebooks declare them under those names (`alertmanager.yml` uses the stock
-`ansible.eda.alertmanager` source alone). ansible-rulebook resolves a FQCN source
-from `ANSIBLE_COLLECTIONS_PATH`, which is why the collection has to be
-installed before a rulebook starts; `run.sh` still passes `--source-dir`,
-which ansible-rulebook consults first for bare names and which is harmless
-for a FQCN. The dependencies are declared in `galaxy.yml`: `ansible.eda`
->= 2.13.0 (the stock webhook, tick, generic and alertmanager sources) and
+`sdodsley.flasharray_eda.purefa_syslog`. Nine of the ten standalone
+rulebooks declare them under those names; `alertmanager.yml` uses the stock
+`ansible.eda.alertmanager` source alone. ansible-rulebook resolves a FQCN
+source from `ANSIBLE_COLLECTIONS_PATH`, so the collection must be installed
+before a rulebook starts. `run.sh` passes `--source-dir` as well;
+ansible-rulebook consults it first for bare names, and it has no effect on
+a FQCN.
+
+The dependencies are declared in `galaxy.yml`: `ansible.eda` >= 2.13.0
+(the stock webhook, tick, generic and alertmanager sources) and
 `everpure.flasharray` >= 1.46.0 (the modules the playbooks run).
 `requirements.yml` lists the same two for `ansible-galaxy collection
 install -r`, and `aap/requirements.yml` adds the Automation Hub collections
@@ -48,13 +50,14 @@ installs it, with its dependencies when they are not already installed,
 under `./collections` with `ansible-galaxy collection install --force -p
 collections`. `env.sh` puts `./collections` first on
 `ANSIBLE_COLLECTIONS_PATH` when that directory exists, so `run.sh` and the
-end-to-end scripts resolve the FQCN sources from it. `make deps` installs
-the Python requirements and the two collections and then runs `make
-collection`, so a fresh checkout is ready after `make deps`. CI runs `make
-collection` after the lint (so that the installed collections are not
-linted) and before the unit tests. `build/` and `collections/` are
-gitignored and in `build_ignore`, so building from a tree that already
-holds an installed copy does not package it twice.
+end-to-end scripts resolve the FQCN sources from it.
+
+`make deps` installs the Python requirements and the two collections and
+then runs `make collection`, so a fresh checkout is ready after `make
+deps`. CI runs `make collection` after the lint (so that the installed
+collections are not linted) and before the unit tests. `build/` and
+`collections/` are gitignored and in `build_ignore`, so building from a
+tree that holds an installed copy does not package it twice.
 
 ## The decision environment
 
@@ -88,30 +91,37 @@ and `ansible-galaxy collection install` leaves a dependency that is already
 installed there alone, so `ANSIBLE_COLLECTIONS_PATH` in those two images is
 `/usr/share/ansible/collections:/app/.ansible/collections`; with the first
 directory alone ansible-rulebook cannot find `ansible.eda.alertmanager` and
-the other stock sources. The supported base already keeps `ansible.eda`
-under `/usr/share/ansible/collections`, so `aap/decision-environment.yml`
-needs no override.
+the other stock sources. The supported base keeps `ansible.eda` under
+`/usr/share/ansible/collections`, so `aap/decision-environment.yml` needs
+no override.
 
-Two things about ansible-builder 3 that the definitions are written around:
-`additional_build_files` copies a directory's *contents* into
-`_build/<dest>`, so each collection directory names its own `dest`
-(`flasharray_eda/extensions`, `flasharray_eda/playbooks`,
-`flasharray_eda/meta`) or the three merge into one; and the base image's
-`/usr/bin/python3` is 3.9 while ansible-rulebook and the `PYTHONPATH` it
-sets are 3.12, so `python_interpreter` pins `/usr/bin/python3.12` for the
-build stages. A third, for the supported base: `ansible.eda`'s requirements
-name `systemd-python`, which has no wheel and needs Python headers, systemd
-headers and a compiler the supported images lack, so
-`aap/decision-environment.yml` excludes it (`dependencies.exclude.python`;
-nothing in this project reads the journal). On a rootless host with native overlay, buildah can fail
-every multi-stage `COPY --from` with "copier: stat ... no such file or
-directory" although the stage image holds the path; a separate image
-store with the `vfs` driver (`podman --root <dir> --storage-driver vfs`,
-put first on the PATH as `podman` for the build) builds the image. A
-container from a builder image names its rulebook, inventory and vars by
-absolute path or sets `-w /opt/flasharray-eda`: the final stage keeps that
-working directory, but a relative path is the first thing to check when a
-run says a file does not exist.
+Three things about ansible-builder 3 that the definitions are written
+around:
+
+- `additional_build_files` copies a directory's *contents* into
+  `_build/<dest>`, so each collection directory names its own `dest`
+  (`flasharray_eda/extensions`, `flasharray_eda/playbooks`,
+  `flasharray_eda/meta`) or the three merge into one.
+- The base image's `/usr/bin/python3` is 3.9 while ansible-rulebook and the
+  `PYTHONPATH` it sets are 3.12, so `python_interpreter` pins
+  `/usr/bin/python3.12` for the build stages.
+- On the supported base, `ansible.eda`'s requirements name
+  `systemd-python`, which has no wheel and needs Python headers, systemd
+  headers and a compiler the supported images lack, so
+  `aap/decision-environment.yml` excludes it (`dependencies.exclude.python`;
+  nothing in this project reads the journal).
+
+Two notes for the build host and the container:
+
+- On a rootless host with native overlay, buildah can fail every
+  multi-stage `COPY --from` with "copier: stat ... no such file or
+  directory" although the stage image holds the path. A separate image
+  store with the `vfs` driver (`podman --root <dir> --storage-driver vfs`,
+  put first on the PATH as `podman` for the build) builds the image.
+- A container from a builder image names its rulebook, inventory and vars
+  by absolute path or sets `-w /opt/flasharray-eda`. The final stage keeps
+  that working directory, but a relative path is the first thing to check
+  when a run says a file does not exist.
 
 Because the sources resolve from the installed collection, the image serves
 two uses with one tree: a standalone `podman run ... ansible-rulebook
@@ -122,8 +132,8 @@ collections in the decision environment only.
 
 ## Moving the content into everpure.flasharray
 
-The content is already in collection layout, so the move is a rename plus
-the collection's own review steps:
+The content is in collection layout, so the move is a rename plus the
+collection's own review steps:
 
 1. **Source names.** `sdodsley.flasharray_eda.purefa_events` and
    `sdodsley.flasharray_eda.purefa_syslog` become

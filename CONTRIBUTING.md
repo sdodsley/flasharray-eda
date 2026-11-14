@@ -58,3 +58,25 @@ rulebooks, throttles included.
 - Every `.py` and `.sh` file starts (after the shebang, if any) with
   `# Copyright 2026 Everpure, Inc.` and
   `# SPDX-License-Identifier: Apache-2.0`.
+
+## Writing
+
+- Documentation describes the tree as it stands, in the present tense, for
+  someone reading it today. No history words ("now", "no longer", "after
+  the review", "seen live"), no commit hashes, no dates outside the
+  changelog headings and the ledger. How a behaviour came about belongs in
+  [docs/VERIFICATION.md](docs/VERIFICATION.md), the one chronological
+  document, or in the commit message.
+- One fact lives in the document that owns it. README.md says what the
+  project does and how to run it; docs/DESIGN.md how it works and why;
+  docs/HARDWARE_NOTES.md what the arrays, SDK, modules, ansible-rulebook and
+  platform do; aap/README.md, orchestrator/README.md and slack/README.md
+  their component. Other documents refer to the owner instead of repeating
+  it.
+- A changelog entry is one to three sentences: what changed and what an
+  operator notices, naming a variable, file or template once. A release
+  section opens with two to four sentences on what the release is, and an
+  "Upgrading" paragraph lists its steps as one clause each. The GitHub
+  release notes are the section verbatim, so it must stand alone.
+- Short sentences; lists for parallel items; a paragraph describes one
+  thing. No em dashes.

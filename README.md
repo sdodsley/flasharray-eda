@@ -9,24 +9,15 @@ events and acts on them through the `everpure.flasharray` collection. No
 Pure1, no Fusion and no external monitoring stack are required; a
 Prometheus/Alertmanager path exists for sites that already run one.
 
-Status: a prototype, not a supported product. The REST-pull rulebooks (the
-first eight rows of the table below) are verified against two Purity//FA
-6.10.6 arrays; the syslog listener receives both arrays' live syslog as a
-platform activation and its audit and alert rules launch job templates; the
-Prometheus rules evaluate on a live Prometheus scraping both arrays'
-native exporters and the capacity, replica-link and scrape-failure rules
-drive the Alertmanager path end to end into the platform's activation (a posted
-hardware alert also lights the identify LED); the
-Ansible Automation Platform seed, the controller-tier approval workflow
-and the capacity, overdue-replication, day-2 and DR orchestrator workflows
-are verified against a 2.7 installation and a live orchestrator; the
-rulebooks run as activations on the platform from the decision-environment
-image and launch job templates, and the capacity activation hands a live
-event to the orchestrator; notifications reach a Slack channel beside the
-alert log, and an orchestrator approval has been decided from that channel
-through the bot. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what is
-exercised on hardware, [docs/DESIGN.md](docs/DESIGN.md) the design and
-scope, and [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and
+Status: a prototype, not a supported product. The rulebooks, the platform
+seed, the orchestrator workflows and the Slack bot are exercised against
+two Purity//FA 6.10.6 arrays, an Ansible Automation Platform 2.7
+installation, a live Prometheus and a live automation orchestrator (the
+upstream code of the 2026.8 release).
+[docs/VERIFICATION.md](docs/VERIFICATION.md) is the ledger of what is
+proven on hardware and what is replayed from fixtures,
+[docs/DESIGN.md](docs/DESIGN.md) the design and scope, and
+[docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array, SDK and
 rulebook behaviour the rules are written around.
 
 Three transports feed the same rulebooks and the same playbooks:
@@ -54,11 +45,15 @@ flowchart LR
 
 ## Quick start
 
-Requirements: Python 3.9+ and Java 17+ (for ansible-rulebook);
-ansible-rulebook 1.3.x and ansible-core 2.17 (the tested versions;
-`requirements.txt` holds the minimums); `everpure.flasharray` >= 1.46.0 and
-`ansible.eda` >= 2.13.0 (`requirements.yml`); py-pure-client >= 1.94.1.
-Tested against Purity//FA 6.10.6 (REST 2.46).
+Requirements:
+
+- Python 3.9+ and Java 17+ (for ansible-rulebook).
+- ansible-rulebook 1.3.x and ansible-core 2.17, the tested versions;
+  `requirements.txt` holds the minimums.
+- `everpure.flasharray` >= 1.46.0 and `ansible.eda` >= 2.13.0
+  (`requirements.yml`).
+- py-pure-client >= 1.94.1.
+- Purity//FA 6.10.6 (REST 2.46) is the tested array release.
 
 ```
 python3 -m venv venv && . venv/bin/activate
@@ -70,26 +65,31 @@ cp inventory/example.yml inventory/local-lab.yml
 ```
 
 The repository is the collection `sdodsley.flasharray_eda` (`galaxy.yml` at
-the root): the rulebooks name their event sources by FQCN,
+the root). The rulebooks name their event sources by FQCN,
 `sdodsley.flasharray_eda.purefa_events` and
 `sdodsley.flasharray_eda.purefa_syslog`, and ansible-rulebook resolves them
-from an installed collection. `make collection` (which `make deps` runs
-last) builds the tarball into `build/` and installs it under
+from an installed collection. `make collection` (the last step of
+`make deps`) builds the tarball into `build/` and installs it under
 `./collections`; [docs/PACKAGING.md](docs/PACKAGING.md) has the details.
 
-`run.sh` sources `env.sh`, which loads `~/.flasharray-eda.env` (override
-with `FAEDA_ENV`), activates `./venv` (`FAEDA_VENV`) or else expects
-`ansible-rulebook` on the PATH and says so, puts `./collections` (when that
-directory exists) and `~/.ansible/collections` on
-`ANSIBLE_COLLECTIONS_PATH`, which is where the FQCN sources resolve from,
-and defaults `FAEDA_VARS` to `vars/local-lab.yml` and `FAEDA_INVENTORY` to
-`inventory/local-lab.yml`. It then starts the rulebook (still passing
+`run.sh` sources `env.sh`, which prepares the environment:
+
+- loads `~/.flasharray-eda.env` (override with `FAEDA_ENV`);
+- activates `./venv` (`FAEDA_VENV`), or else expects `ansible-rulebook` on
+  the PATH and says so;
+- puts `./collections` (when that directory exists) and
+  `~/.ansible/collections` on `ANSIBLE_COLLECTIONS_PATH`, which is where
+  the FQCN sources resolve from;
+- defaults `FAEDA_VARS` to `vars/local-lab.yml` and `FAEDA_INVENTORY` to
+  `inventory/local-lab.yml`.
+
+`run.sh` then starts the rulebook. It passes
 `--source-dir extensions/eda/plugins/event_source`, which ansible-rulebook
-consults for bare names only and which is harmless for a FQCN) and hands
-`APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` to ansible-rulebook with
-`--env-vars` when they are set in the environment; that is how the webhook
-rulesets read them (`{{ APPROVAL_TOKEN }}` in a rulebook is an environment
-variable, not a vars-file key).
+consults for bare names only and which is harmless for a FQCN, and it
+hands `APPROVAL_TOKEN` and `GIT_WEBHOOK_SECRET` to ansible-rulebook with
+`--env-vars` when they are set in the environment. That is how the webhook
+rulesets read them: `{{ APPROVAL_TOKEN }}` in a rulebook is an environment
+variable, not a vars-file key.
 
 Three things to get right on the first run:
 
@@ -126,21 +126,25 @@ Three things to get right on the first run:
 | `syslog.yml` | purefa_syslog | `purity.audit` / `purity.alert` / `purity.test` lines pushed by the array | fast notification seconds after the fact; a test line (the weekly self-check's) is recorded on receipt |
 | `alertmanager.yml` | ansible.eda.alertmanager | alerts from `prometheus/flasharray.rules.yml` on the native OpenMetrics exporter | the same playbooks, no custom code on the array side |
 
-The gates are what each event allows. `maintenance_active` (one cached
-`/maintenance-windows` read per array) travels on alert, audit, hardware
-and replication events and holds back the alert runbooks, the reconcile,
-the identify LED, the preferred-array move and replicate-now; the config
-and telemetry events carry no such flag, so the NTP and DNS reapply and
-the QoS cap run inside a window too. `automation_users` keeps the
-audit-driven rules (reconcile, protect-now) from reacting to the
-automation's own changes. Three per-site switches fall back to notify:
-`qos_auto_cap`, `activecluster_auto_prefer` and
-`replication_auto_replicate_now`; the reapply, the reconcile, the identify
-LED, protect-now and the DR drill have none, and `orchestrator_enabled`
-moves the capacity and overdue-replication decisions into the automation
-orchestrator. Every record a playbook writes to the alert log carries
-`time`, `kind`, `severity` and `array`, and every notification also
-reaches Slack when a webhook is configured ("Notifications" below).
+Gates decide what each event allows:
+
+- `maintenance_active` (one cached `/maintenance-windows` read per array)
+  travels on alert, audit, hardware and replication events. It holds back
+  the alert runbooks, the reconcile, the identify LED, the preferred-array
+  move and replicate-now. Config and telemetry events carry no such flag,
+  so the NTP and DNS reapply and the QoS cap run inside a window too.
+- `automation_users` keeps the audit-driven rules (reconcile, protect-now)
+  from reacting to the automation's own changes.
+- Three per-site switches fall back to notify: `qos_auto_cap`,
+  `activecluster_auto_prefer` and `replication_auto_replicate_now`. The
+  reapply, the reconcile, the identify LED, protect-now and the DR drill
+  have no switch.
+- `orchestrator_enabled` moves the capacity and overdue-replication
+  decisions into the automation orchestrator.
+
+Every record a playbook writes to the alert log carries `time`, `kind`,
+`severity` and `array`. Every notification also reaches Slack when a
+webhook is configured ("Notifications" below).
 
 ## Layout
 
@@ -184,9 +188,10 @@ requirements.txt, requirements.yml     Python packages and the two collections (
 
 `purefa_events` polls one or more arrays with py-pure-client and emits plain
 fact events; policy lives in the rulebooks. `arrays` is a list, or a JSON
-string that decodes to one so a platform credential can inject it as a
-single variable. One instance can run several signals, each on its own
-interval; every REST call is bounded by `request_timeout` (default 30 s):
+string that decodes to one, so a platform credential can inject it as a
+single variable. One instance runs several signals, each on its own
+interval, and every REST call is bounded by `request_timeout` (default
+30 s):
 
 | Signal | Endpoints | Events |
 | --- | --- | --- |
@@ -198,32 +203,32 @@ interval; every REST call is bounded by `request_timeout` (default 30 s):
 | config | `/arrays`, `/dns`, `/directory-services`, `/admins/settings`, `/syslog-servers`, `/smtp-servers`, `/alert-watchers`, `/support` | `purefa_config` |
 
 Every event carries `array`; alert, audit, hardware and replication events
-also carry `maintenance_active`; poll failures arrive as `purefa_poll_error`
-and polling continues. Full argument and field lists are in the plugin
-docstrings.
+also carry `maintenance_active`. A poll failure arrives as
+`purefa_poll_error` and polling continues. The plugin docstrings hold the
+full argument and field lists.
 
 `purefa_syslog` listens on UDP and TCP for the array's syslog and emits
-`purefa_syslog` with the audit fields parsed: Purity writes a command record
+`purefa_syslog` with the audit fields parsed. Purity writes a command record
 (`[user (local)]@array(id) purevol destroy v1. Message ID: N ...`) for
-every CLI, GUI and REST command and a `Key: 'value'` record for sessions,
-and both become `user`, `action`, `command`, `result` and the rest. An
-array forwards its controllers' whole system log to a syslog target, so
-the listener keeps the `purity.alert`, `purity.audit` and `purity.test`
+every CLI, GUI and REST command and a `Key: 'value'` record for sessions;
+both become `user`, `action`, `command`, `result` and the rest. An array
+forwards its controllers' whole system log to a syslog target, so the
+listener keeps the `purity.alert`, `purity.audit` and `purity.test`
 programs and drops everything else (`programs`; `all` passes it through as
 kind `other`). The array's own service accounts count as automation
 (`system_users`). `allowed_sources` restricts the senders it accepts (empty =
-any) and `arrays` maps an array's own name or its syslog hostname to the
-inventory name (the message's "Array name" field is tried first, then the
-syslog hostname, which is the controller's).
+any). `arrays` maps an array's own name or its syslog hostname to the
+inventory name: the message's "Array name" field is tried first, then the
+syslog hostname, which is the controller's.
 
 The zero-code path needs neither plugin: Prometheus scrapes the array's
 native OpenMetrics exporter, `prometheus/flasharray.rules.yml` raises alerts
 carrying a `domain` label, Alertmanager posts them to
 `ansible.eda.alertmanager`, and `alertmanager.yml` runs the same playbooks.
 The rules follow the names and labels the native exporter serves on
-Purity//FA 6.10.6 (listed at the top of the rules file) and evaluate on a
-live Prometheus; `prometheus/prometheus.example.yml` and
-`alertmanager.example.yml` are the scrape and routing configurations.
+Purity//FA 6.10.6 (listed at the top of the rules file);
+`prometheus/prometheus.example.yml` and `alertmanager.example.yml` are the
+scrape and routing configurations.
 
 ## Listeners
 
@@ -261,31 +266,37 @@ differently (see also [SECURITY.md](SECURITY.md)):
 
 ## Notifications
 
-Every rule that notifies runs `playbooks/notify.yml` (the alert runbook
-map is the exception: `alert_runbook.yml` writes its own ticket or notify
-record and posts nothing), which appends a
-record to the alert log and, when `SLACK_WEBHOOK_URL` is set (env file;
-on the platform the `Slack webhook` credential on the notify template),
-posts the same record to a Slack incoming webhook: an icon for the
-severity, the severity, the subject with the array named once, and the
-detail on the next line, escaped for Slack. A failed post is reported in
-the job and never fails the notification; the alert log is the record,
-Slack is the pager. Only records at or above `slack_min_severity` are
-posted (an extra var, else `SLACK_MIN_SEVERITY` in the environment, else
-warning): a warning alert's resolved notice at info, or a request whose
-approval card the bot posts anyway, is record material and stays in the
-alert log and the job output. On the platform `aap/seed.yml` also
-creates a Slack notification template (bot token, `chat:write`) that posts
-job failures and the controller-tier workflow's approval, success and
-failure events, each with its link into the platform
-([aap/README.md](aap/README.md)).
-Deciding from the channel is `slack/approval_bot.py`: a Socket Mode bot
-that posts every pending orchestrator and controller approval as a card
-with Approve and Reject buttons and carries the click back with the Slack
-user's name; it reminds the channel at half and ninety percent of the
-decision window, rewrites the card with the outcome when the approval
-ends, and pages and records an approval nobody decided, which otherwise
-fails its execution in silence ([slack/README.md](slack/README.md)).
+Every rule that notifies runs `playbooks/notify.yml`. The alert runbook map
+is the exception: `alert_runbook.yml` writes its own ticket or notify
+record and posts nothing. `notify.yml` appends a record to the alert log
+and, when `SLACK_WEBHOOK_URL` is set (env file; on the platform the
+`Slack webhook` credential on the notify template), posts the same record
+to a Slack incoming webhook: an icon for the severity, the severity, the
+subject with the array named once, and the detail on the next line,
+escaped for Slack. A failed post is reported in the job and never fails
+the notification; the alert log is the record, Slack is the pager.
+
+Only records at or above `slack_min_severity` are posted (an extra var,
+else `SLACK_MIN_SEVERITY` in the environment, else warning). A warning
+alert's resolved notice at info, or a request whose approval card the bot
+posts anyway, is record material: it stays in the alert log and the job
+output.
+
+On the platform `aap/seed.yml` also creates a Slack notification template
+(bot token, `chat:write`) that posts job failures and the controller-tier
+workflow's approval, success and failure events, each with its link into
+the platform ([aap/README.md](aap/README.md)).
+
+`slack/approval_bot.py` is the Socket Mode bot that lets the channel
+decide ([slack/README.md](slack/README.md)). It:
+
+- posts every pending orchestrator and controller approval as a card with
+  Approve and Reject buttons;
+- carries the click back with the Slack user's name;
+- reminds the channel at half and ninety percent of the decision window;
+- rewrites the card with the outcome when the approval ends;
+- pages and records an approval nobody decided, which otherwise fails its
+  execution in silence.
 
 ## Decision environment and Ansible Automation Platform
 
@@ -294,41 +305,39 @@ definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
 the same tree: the collection `sdodsley.flasharray_eda`, built from the
 checkout at image build time and installed with `everpure.flasharray` and
 `ansible.eda`, py-pure-client, and the rulebooks and playbooks as plain
-files under `/opt/flasharray-eda` for runs that name them by path
-([docs/PACKAGING.md](docs/PACKAGING.md), including the two ansible-builder
-facts the definition is written around). CI does not build the image. The
-image is self-contained for standalone `ansible-rulebook` runs, with no
-`--source-dir`: the Containerfile header has the `podman run` line, which
-mounts `vars/`, `inventory/` and the baseline checkout and passes the
-credentials as environment variables. `ANSIBLE_COLLECTIONS_PATH` in the
-image names `/usr/share/ansible/collections` and the base image's
+files under `/opt/flasharray-eda` for runs that name them by path. CI does
+not build the image. The image is self-contained for standalone
+`ansible-rulebook` runs, with no `--source-dir`; the Containerfile header
+has the `podman run` line, which mounts `vars/`, `inventory/` and the
+baseline checkout and passes the credentials as environment variables.
+`ANSIBLE_COLLECTIONS_PATH` in the image names
+`/usr/share/ansible/collections` and the base image's
 `/app/.ansible/collections`, where `ansible.eda` lives.
+[docs/PACKAGING.md](docs/PACKAGING.md) has the ansible-builder facts the
+definition is written around.
 
 EDA Controller activations pass no `--source-dir` and resolve custom event
-sources only from the collections installed in the decision environment;
-the rulebooks name theirs by FQCN, so an activation on this image resolves
-`purefa_events` and `purefa_syslog` from the collection it carries.
-On the platform the rulebooks run as the generated variants under
+sources only from the collections installed in the decision environment.
+The rulebooks name theirs by FQCN, so an activation on this image resolves
+`purefa_events` and `purefa_syslog` from the collection it carries. On the
+platform the rulebooks run as the generated variants under
 `extensions/eda/rulebooks/platform/` (`tools/platform_rulebooks.py`): the
 same rules, with `run_playbook` replaced by `run_job_template` against the
-seeded job templates, the webhook rulesets left out, because approvals
-and git pushes arrive through the controller workflow and event streams
-there, and the tick-driven DR drill left out, because the platform drills
-from a schedule. `aap/seed.yml` creates the organization, the credential
-types (`FlashArray API`, one credential per array; `FlashArray fleet`,
-whose single credential carries every array; `Orchestrator service
-account`; `Slack webhook`; the built-in platform type for a token),
-the credentials, inventory, project, job templates, the controller-tier
-approval workflow, three schedules (the nightly DR drill, the weekly
-notification-path self-check in which every array tests its alert
-watchers, syslog servers and phone home, and the nightly check of the
-orchestrator's definitions and the activations' vars against the
+seeded job templates, without the webhook rulesets (approvals and git
+pushes arrive through the controller workflow and event streams there) and
+without the tick-driven DR drill (the platform drills from a schedule).
+
+`aap/seed.yml` creates the organization, the credential types
+(`FlashArray API`, one credential per array; `FlashArray fleet`, whose
+single credential carries every array; `Orchestrator service account`;
+`Slack webhook`; the built-in platform type for a token), the credentials,
+inventory, project, job templates, the controller-tier approval workflow
+(request, human approval, reclaim), three schedules (the nightly DR drill,
+the weekly notification-path self-check in which every array tests its
+alert watchers, syslog servers and phone home, and the nightly check of
+the orchestrator's definitions and the activations' vars against the
 repository) and one rulebook activation per platform rulebook
-([aap/README.md](aap/README.md)). The seed, the job templates and
-the controller-tier approval workflow (request, human approval, reclaim)
-and the activations (running, polling both arrays and launching job
-templates through `run_job_template`) are verified against an Ansible
-Automation Platform 2.7 installation.
+([aap/README.md](aap/README.md)).
 
 ### Orchestrator handoff
 
@@ -341,26 +350,23 @@ token (`AO_CLIENT_ID` / `AO_CLIENT_SECRET` from the environment, forwarded
 by `run.sh`) and posts a `flasharray-eda/1` envelope to the route's EDA
 trigger (`orchestrator_paths`); the approval and the action then run in
 the orchestrator. Every attempt is recorded in the alert log and a refusal
-never fails the rule; with `orchestrator_fallback_local: true` a capacity
+never fails the rule. With `orchestrator_fallback_local: true` a capacity
 handoff that produced no execution raises the local request instead.
 [docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md) has the contract, the vars
-and the mock (`tests/mock_orchestrator.py`) the unit test and
-`tests/replay_capacity.yml` run against; `tools/ao_sync.py` imports the
-definitions. Both routes are verified against a live orchestrator (the
-upstream code of the 2026.8 release): the post, the approval and the
-reclaim or the replicated snapshot run through, the capacity route from a
-running activation as well.
+and the mock (`tests/mock_orchestrator.py`) that the unit test and
+`tests/replay_capacity.yml` run against;
+[orchestrator/README.md](orchestrator/README.md) has the workflow
+definitions, which `tools/ao_sync.py` imports.
 
 ## Array and rulebook behaviour
 
 Facts the rules are written around;
 [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) has the longer list.
 
-- `/audits` rejects a filter on `time`; `/alerts/events` wants alert ids on
-  every tested Purity, so the alerts signal diffs `/alerts`;
-  history resolutions are fixed (30 s, 5 min, 30 min, 2 h, 8 h, 1 day);
-  maintenance windows take 3600 to 172800 seconds; the alert watcher test
-  needs watcher names.
+- `/audits` rejects a filter on `time`. `/alerts/events` wants alert ids,
+  so the alerts signal diffs `/alerts`. History resolutions are fixed
+  (30 s, 5 min, 30 min, 2 h, 8 h, 1 day). Maintenance windows take 3600 to
+  172800 seconds. The alert watcher test needs watcher names.
 - Purity logs NTP changes as `purearray setattr --ntpserver`, not `purentp`.
 - ansible-rulebook: no filters or arithmetic in conditions (the plugin emits
   the booleans; actions may use filters); `once_within` must be a literal
@@ -372,66 +378,80 @@ Facts the rules are written around;
 - State that must survive a rulebook restart lives on the array: the QoS
   cap is a volume tag in namespace `eda`, the approval request is a file.
 - Every playbook a template launches is safe to run twice with the same
-  extra vars: the array is left as it is, the record says changed false and
-  why (already at size, inside the cooldown, already raised, already done,
-  reused, already expired, pending; the bridge matches an open execution on
-  event type, array and scope such as the protection group). A platform node retried after a
-  gateway error is the live case; [orchestrator/README.md](orchestrator/README.md)
-  lists the behaviour per template and `tests/e2e_run_twice.sh` proves seven
-  of the playbooks on real arrays.
+  extra vars: the array is left as it is, and the record says changed false
+  and why (already at size, inside the cooldown, already raised, already
+  done, reused, already expired, pending; the bridge matches an open
+  execution on event type, array and scope such as the protection group).
+  This covers a platform node retried after a gateway error.
+  [orchestrator/README.md](orchestrator/README.md) lists the behaviour per
+  template and `tests/e2e_run_twice.sh` runs seven of the playbooks twice
+  on real arrays.
 
 ## Testing
 
-`make check` needs no array: black, pyflakes and yamllint over the
-plugins, `tools/`, `slack/` and the tests; `make lint-ao` (the
-orchestrator definitions through `tools/ao_lint.py`); the unit tests
-(`python -m pytest tests/unit`: a fake SDK client drives the alert diff and
-the audit cursor, the syslog parser gets the real lines of both layouts,
-static checks validate every rulebook against ansible-rulebook's own
-schema, require every lowercase variable a rulebook references to be
-documented in `vars/example.yml` and every playbook a rule runs to exist,
-plus the orchestrator bridge against its mock, the linter and its
-fixtures, the sync tool against an in-process mock of the orchestrator
-API, the Slack bot with a fake HTTP function and a fake Slack client, and
-the job artifacts every playbook a workflow node may follow publishes);
-and a playbook syntax check.
-`tests/unit/test_orchestrator_bridge.py` runs `orchestrator_post.yml`
-against the mock (skipped without `ansible-playbook`), `test_ao_lint.py`
-covers every linter rule with a fixture and checks that every
-`${node.artifacts.key}` a definition reads is published by that
-template's playbook, `test_ao_sync.py` drives the create, update, publish
-and dry-run paths, `test_approval_bot.py` the cards, the decision routing
-and both approval APIs, `test_playbook_artifacts.py` the `set_stats`
-artifacts, the credential guard and the seed, `test_schedules.py` the
-seed's schedules and the playbooks they launch. GitHub Actions runs the
-same on every push.
+`make check` needs no array. It runs:
+
+- black, pyflakes and yamllint over the plugins, `tools/`, `slack/` and the
+  tests;
+- `make lint-ao`, the orchestrator definitions through `tools/ao_lint.py`;
+- the unit tests, `python -m pytest tests/unit`;
+- a playbook syntax check.
+
+GitHub Actions runs the same on every push.
+
+The unit tests cover each component without an array:
+
+- a fake SDK client drives the alert diff and the audit cursor, and the
+  syslog parser gets the real lines of both layouts;
+- static checks validate every rulebook against ansible-rulebook's own
+  schema, require every lowercase variable a rulebook references to be
+  documented in `vars/example.yml`, and require every playbook a rule runs
+  to exist;
+- `tests/unit/test_orchestrator_bridge.py` runs `orchestrator_post.yml`
+  against the mock (skipped without `ansible-playbook`);
+- `test_ao_lint.py` covers every linter rule with a fixture and checks that
+  every `${node.artifacts.key}` a definition reads is published by that
+  template's playbook;
+- `test_ao_sync.py` drives the create, update, publish and dry-run paths
+  against an in-process mock of the orchestrator API;
+- `test_approval_bot.py` covers the cards, the decision routing and both
+  approval APIs with a fake HTTP function and a fake Slack client;
+- `test_playbook_artifacts.py` covers the `set_stats` artifacts every
+  playbook a workflow node may follow publishes, the credential guard and
+  the seed;
+- `test_schedules.py` covers the seed's schedules and the playbooks they
+  launch.
 
 `tests/replay_*.yml` are copies of the live rules driven by
 `ansible.eda.generic` from the fixtures under `tests/fixtures/`, or from
-an inline payload (`replay_capacity.yml`); ansible-rulebook has no
-include. They must stay rule-for-rule identical
-to the real rulebooks, throttles included; the unit test fails when they
-drift.
+an inline payload (`replay_capacity.yml`), because ansible-rulebook has no
+include. They stay rule-for-rule identical to the real rulebooks, throttles
+included; the unit test fails when they drift.
 
 `tests/e2e_sources.sh`, `tests/e2e_change_control.sh`,
 `tests/e2e_replication.sh`, `tests/e2e_approvals.sh` and
 `tests/e2e_run_twice.sh` (seven playbooks twice) run the rulebooks
-against live arrays, inducing what can be induced (NTP drift, a second
+against live arrays. They induce what can be induced (NTP drift, a second
 user's changes, a paused replica link, a maintenance window, a
-pending-eradication volume, a busy volume capped and uncapped) and
-replaying fixtures for what cannot (hardware failures, a degraded stretched
-pod, the anomaly signals); the replayed events still drive the real actions
-on the array. They source `env.sh`; read the array credentials from the
-environment variables named by `A_URL_ENV` / `A_TOKEN_ENV` (default
-`ARRAY_A_URL` / `ARRAY_A_TOKEN`); take array and object names from
-environment variables with no defaults (each script prints a usage line
-when one is missing); derive their own vars file into
-`tests/out/vars_test.yml` from `FAEDA_VARS` with `alert_log` and
-`request_dir` rewritten under `tests/out/`; and never delete anything
-outside `tests/out/`. `tests/e2e_approvals.sh` refuses its eradicate step
-when the array already holds pending-eradication objects, unless
-`E2E_ERADICATE_ALL=1` is set. [docs/VERIFICATION.md](docs/VERIFICATION.md)
-lists what each script exercises on hardware and what is replayed only.
+pending-eradication volume, a busy volume capped and uncapped) and replay
+fixtures for what cannot (hardware failures, a degraded stretched pod, the
+anomaly signals); the replayed events still drive the real actions on the
+array. The scripts share one contract:
+
+- they source `env.sh`;
+- they read the array credentials from the environment variables named by
+  `A_URL_ENV` / `A_TOKEN_ENV` (default `ARRAY_A_URL` / `ARRAY_A_TOKEN`);
+- they take array and object names from environment variables with no
+  defaults, and each script prints a usage line when one is missing;
+- they derive their own vars file into `tests/out/vars_test.yml` from
+  `FAEDA_VARS` with `alert_log` and `request_dir` rewritten under
+  `tests/out/`;
+- they never delete anything outside `tests/out/`.
+
+`tests/e2e_approvals.sh` refuses its eradicate step when the array already
+holds pending-eradication objects, unless `E2E_ERADICATE_ALL=1` is set.
+[docs/VERIFICATION.md](docs/VERIFICATION.md) lists what each script
+exercises on hardware and what is replayed only.
 
 `tests/syslog_send.py` sends representative lines to the syslog listener.
 The Alertmanager path is exercised by POSTing a webhook payload to

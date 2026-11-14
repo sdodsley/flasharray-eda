@@ -4,13 +4,14 @@ Why a standalone FlashArray is an event source, what it emits, how events
 reach ansible-rulebook, and the ideas each rulebook implements.
 
 Versions this design assumes: py-pure-client 1.94.1 (REST 2.57 API ceiling;
-the arrays it was verified against speak REST 2.46), ansible-rulebook 1.3.x,
-ansible.eda 2.13, and the Ansible Automation Platform 2.5 automation
-decisions documentation; the platform work is verified on 2.7.
+the verified arrays speak REST 2.46), ansible-rulebook 1.3.x, ansible.eda
+2.13, the Ansible Automation Platform 2.5 automation decisions
+documentation, and platform 2.7 for the deployment
+([VERIFICATION.md](VERIFICATION.md)).
 
 ## 1. Why the array is the event source
 
-A standalone FlashArray is a complete event source on its own; no control
+A standalone FlashArray is a complete event source on its own. No control
 plane, cloud service or monitoring stack is needed. The array already has:
 
 - an alert log (`/alerts`: every alert with its code, severity, component,
@@ -35,7 +36,7 @@ The leverage is not drift polling. It is three ideas:
 
 | Signal | Endpoint(s) | Event fields | Min REST |
 | --- | --- | --- | --- |
-| Alerts | `/alerts` with `state != closed`, diffed locally on every Purity version (`/alerts/events` wants alert ids on REST 2.46 and 2.59 alike), the opened / updated / reopened / closing / closed transitions derived by the plugin | code, severity, state, component_type/name, actual, expected, issue, summary, action, knowledge_base_url | 2.0 |
+| Alerts | `/alerts` with `state != closed`, diffed locally; the plugin derives the opened / updated / reopened / closing / closed transitions itself (`/alerts/events` wants alert ids, see [Traps](#6-traps)) | code, severity, state, component_type/name, actual, expected, issue, summary, action, knowledge_base_url | 2.0 |
 | Config changes | `/audits` (cursor on `time`) | user, user_interface, origin, command, subcommand, arguments, system_event | 2.0 |
 | Hardware | `/hardware`, `/drives`, `/controllers` | status != ok, temperature, voltage, speed, identify_enabled, controller mode/mode_since | 2.0 |
 | Capacity | `/arrays/space` (history), `/volumes/space` | used, data_reduction, snapshot space, per-volume delta | 2.0 |
@@ -51,20 +52,23 @@ Forward both into tickets.
 
 | Transport | How | Latency | Customer needs |
 | --- | --- | --- | --- |
-| Pull | `purefa_events`: one asyncio source plugin, N arrays (verified with two), six signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
-| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability), RFC 3164 headers with or without a priority (the array sends none) and RFC 5424 headers, the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array forwards too) dropped, the array's own service accounts counted as automation (`system_users`), audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes; `syslog.yml` raises the fast notification for a human's action and for alerts while the REST plugin owns the full record | sub-second | a syslog target on the array |
+| Pull | `purefa_events`: one asyncio source plugin polling N arrays, six signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
+| Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability); RFC 3164 headers with or without a priority (the array sends none) and RFC 5424 headers; the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array also forwards) dropped; the array's own service accounts counted as automation (`system_users`); audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes. `syslog.yml` raises the fast notification for a human's action and for alerts; the REST plugin owns the full record | sub-second | a syslog target on the array |
 | Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
 The Prometheus rules cover hardware and drive status, capacity and
 days-to-full, data reduction drop, read and write latency against last
 week, replica link lag and state, stretched-pod mediator state and scrape
-failure; each carries a `domain`
-label. `alertmanager.yml` maps them to the same playbooks by alert name:
-`FlashArrayHardwareComponentNotOk` drives the identify-LED playbook,
-`FlashArrayCapacityHigh` raises the approval request, every other firing
-alert (drive health and days-to-full among them) notifies with the
-`domain` label in the detail, resolved alerts are logged. No code from this
-project runs on the array side of that path.
+failure. Each rule carries a `domain` label. `alertmanager.yml` maps them to
+the same playbooks by alert name:
+
+- `FlashArrayHardwareComponentNotOk` drives the identify-LED playbook,
+- `FlashArrayCapacityHigh` raises the approval request,
+- every other firing alert (drive health and days-to-full among them)
+  notifies with the `domain` label in the detail,
+- resolved alerts are logged.
+
+No code from this project runs on the array side of that path.
 
 `ansible.eda` ships alertmanager, webhook, kafka, journald, file_watch,
 url_check, tick, generic, pg_listener and cloud queue sources. There is no
@@ -72,7 +76,7 @@ syslog or SNMP source, so the push path needs a plugin of its own
 (`purefa_syslog`). SNMP adds nothing over syslog here because syslog also
 carries audits.
 
-All three transports feed the same rulebooks and playbooks; the diagram at
+All three transports feed the same rulebooks and playbooks. The diagram at
 the top of [README.md](../README.md) shows the paths, and
 [The source plugins](../README.md#the-source-plugins) lists the arguments
 and event fields.
@@ -89,8 +93,8 @@ design intent.
 - Governed objects and an automation service account: a governed command by
   any identity not in `automation_users` is reconciled from the git baseline
   (`playbooks/reconcile.yml`; schema in `baseline/README.md`) and reported
-  with user, interface and command; destructive commands by humans are
-  reported; the automation's own changes are logged.
+  with user, interface and command. Destructive commands by humans are
+  reported. The automation's own changes are logged.
 - Git webhook source: a signed push applies the baseline forward to every
   array (`playbooks/apply_baseline.yml`); the audit stream reconciles
   backward. A Kubernetes-style reconciler with the collection as actuator.
@@ -98,7 +102,7 @@ design intent.
   policies, SSO/SAML, lockout, eradication config, SafeMode retention, scored
   against secure-by-default. `config_drift.yml` ships the poll-based form for
   NTP, DNS, LDAP, SafeMode/eradication and admin auth settings (NTP and DNS
-  reapplied, the rest notify); the wider posture score is design intent.
+  reapplied, the rest notify). The wider posture score is design intent.
 - Scheduled full reconcile: `tick` -> collection playbook in check/diff mode
   against desired state, changed tasks becoming drift events. Design intent;
   not in the shipped rulebooks.
@@ -121,27 +125,26 @@ design intent.
 ### 4.3 Hardware events get hands
 
 - A hardware component not ok: identify LED on (`purefa_hardware`, via
-  `identify_led.yml`) and notify, logged only inside a maintenance window; a
-  drive not healthy: notify. Opened alerts (`alerts.yml`) route through the
-  alert-code runbook map (`alert_runbooks`, `alert_runbook.yml`) to notify,
-  ticket, or
-  ticket plus per-code tasks under `playbooks/runbooks/<code>.yml`, carrying
-  the array's own action text and knowledge base link; unknown codes take the
-  default entry.
-  The lifecycle is read from the array: `closing` is the resolved signal
-  (a resolved alert sits in `closing` for a day before `closed`), and the
-  rulebook notifies once at one severity below the alert's with the time
-  it was open; an alert whose severity rises is routed again; a hardware
-  component that leaves the issue set clears the identify LED the loop
-  lit, and one that comes back is a new episode with an hourly window of
-  its own, lit and recorded at once (a component flapping every poll is
-  reported every poll).
-  The map falls through from code to component type to default, and
-  code 13 (NTP) reapplies the baseline servers through a per-code runbook.
-  The pairing of a lit LED with its fault lives in the plugin's memory: a
+  `identify_led.yml`) and notify, logged only inside a maintenance window. A
+  drive not healthy: notify.
+- Opened alerts (`alerts.yml`) route through the alert-code runbook map
+  (`alert_runbooks`, `alert_runbook.yml`) to notify, ticket, or ticket plus
+  per-code tasks under `playbooks/runbooks/<code>.yml`, carrying the array's
+  own action text and knowledge base link. The map falls through from code
+  to component type to default; unknown codes take the default entry.
+  Code 13 (NTP) reapplies the baseline servers through a per-code runbook.
+- The alert lifecycle is read from the array. `closing` is the resolved
+  signal (a resolved alert sits in `closing` for a day before `closed`), and
+  the rulebook notifies once, at one severity below the alert's, with the
+  time it was open. An alert whose severity rises is routed again.
+- A hardware component that leaves the issue set clears the identify LED the
+  loop lit. One that comes back is a new episode with an hourly window of its
+  own, lit and recorded at once; a component flapping every poll is reported
+  every poll.
+- The pairing of a lit LED with its fault lives in the plugin's memory: a
   component that recovers while the activation is down keeps its LED until
-  the next recovered event or a hand; a ledger of the LEDs the loop lit,
-  held on the array, is the follow-up.
+  the next recovered event or a hand. A ledger of the LEDs the loop lit, held
+  on the array, is design intent.
 - Time-boxed remote assist (`purefa_ra`): design intent; `health.yml` logs
   remote-assist events.
 - Controller failover or port down: `health.yml` notifies. Host-side checks
@@ -161,13 +164,13 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   `purefa_pgsnap` with `remote: true`, the immediate replicated snapshot).
   With `orchestrator_enabled` the event goes to the automation orchestrator
   instead and an approval with a one-hour window gates the snapshot
-  (`orchestrator/replication_overdue_approval.json`); the group's schedule
-  is never touched, one extra snapshot is sent.
+  (`orchestrator/replication_overdue_approval.json`). The group's schedule
+  is never touched; one extra snapshot is sent.
 - Array connection `partially_connected`: the replication signal reads
   `/array-connections/path` and the failed paths are notified; paused or
   unhealthy links likewise.
 - ActiveCluster: a stretched pod losing a member moves host `preferred_array`
-  to the online side and back on recovery (`preferred_array.yml`): hosts are
+  to the online side and back on recovery (`preferred_array.yml`). Hosts are
   discovered from the pod's volume connections and changed with
   `purefa_host`; hosts with an existing preference are left alone and
   reported; the peer array's hosts (listed as `<array>:<host>`) are skipped.
@@ -178,25 +181,25 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
 - ActiveDR failover test (`dr_promote.yml`, `dr_demote.yml`, driven by
   `orchestrator/dr_failover_test.json`): behind an approval, promote the
   replica link's target pod on the DR array, run the application test
-  outside the workflow, then behind a second approval demote it again,
-  eradicating the undo-demote pod an earlier demotion left so the test can
-  be repeated inside the eradication delay; writes made during the test
-  are discarded and the source pod is never touched.
+  outside the workflow, then behind a second approval demote it again. The
+  demote eradicates the undo-demote pod a previous demotion left, so the
+  test can be repeated inside the eradication delay. Writes made during the
+  test are discarded and the source pod is never touched.
 - Planned failover and failback (`dr_switchover.yml`, driven by
   `orchestrator/dr_failover_failback.json`): behind one approval, demote
   the link's source pod with quiesce and promote the target pod once the
   link reports the copy complete, so the link reverses and the target
   serves production; behind a second approval the same move runs the other
   way. Hosts are moved outside the workflow. Before it demotes, the
-  switchover tags the source pod `eda/planned_work`, which the plugin reads
-  as planned work on the link's events from both arrays and the replication
-  rulebook logs instead of paging, and the workflow holds an
+  switchover tags the source pod `eda/planned_work`; the plugin reads the
+  tag as planned work on the link's events from both arrays, and the
+  replication rulebook logs instead of paging. The workflow also holds an
   Alertmanager silence on the replica-link rules for both arrays, expired
   once the switchover's notify has gone out. A demotion leaves the pod's
-  state from before it in a destroyed `<pod>.undo-demote.<n>` pod, and the
-  module refuses to demote the pod again while one exists, so the switchover job
-  eradicates that pod first when `eradicate_undo_demote` is true; the
-  workflow sets it, a run by hand chooses. An unplanned failover, with the
+  prior state in a destroyed `<pod>.undo-demote.<n>` pod, and the module
+  refuses to demote the pod again while one exists; the switchover job
+  eradicates that pod first when `eradicate_undo_demote` is true (the
+  workflow sets it, a run by hand chooses). An unplanned failover, with the
   source array unreachable, is the promote alone (`dr_promote.yml`).
 
 ### 4.5 Capacity turns into trend and approval
@@ -208,20 +211,18 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   breach writes a request file (`capacity_request.yml`: request id
   `<array>-<timestamp>`, the days-to-full estimate, the top growers, what is
   pending eradication, the arrays with headroom) and a webhook ruleset takes
-  `{request_id, approve, approver, action}` under a bearer token; only an
-  approved request whose action was proposed runs, and `eradicate_pending`
-  (`capacity_reclaim.yml`) eradicates destroyed volumes and snapshots,
-  reporting anything the array refuses. On Ansible Automation Platform the
-  webhook ruleset gives way to a controller workflow that `aap/seed.yml`
-  creates (request job, manual approval node, reclaim), launched by hand
-  while the platform capacity rulebook runs the request job template on its
-  own, and `orchestrator_enabled` hands the event to the automation orchestrator
-  instead ([ORCHESTRATOR.md](ORCHESTRATOR.md); `orchestrator_fallback_local`
-  raises the local request when a handoff produced no execution). Both
-  platform paths are
-  exercised, the workflow by a launch through its approval node and the
-  handoff end to end against a live orchestrator, from a running rulebook
-  activation as well ([VERIFICATION.md](VERIFICATION.md)).
+  `{request_id, approve, approver, action}` under a bearer token. Only an
+  approved request whose action was proposed runs; `eradicate_pending`
+  (`capacity_reclaim.yml`) eradicates destroyed volumes and snapshots and
+  reports anything the array refuses.
+- On Ansible Automation Platform the webhook ruleset gives way to a
+  controller workflow that `aap/seed.yml` creates (request job, manual
+  approval node, reclaim), launched by hand, while the platform capacity
+  rulebook runs the request job template on its own. With
+  `orchestrator_enabled` the event goes to the automation orchestrator
+  instead ([ORCHESTRATOR.md](ORCHESTRATOR.md)); `orchestrator_fallback_local`
+  raises the local request when a handoff produced no execution.
+  [VERIFICATION.md](VERIFICATION.md) records both platform paths.
 
 ### 4.6 Performance gets a safe actuator with hysteresis
 
@@ -234,16 +235,15 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   in namespace `eda` (`qos_cap` = when it was applied, `qos_prev_iops` = the
   limit before), the telemetry signal reads them back as `eda_capped`, and
   the lift removes them, so a rulebook restart loses nothing.
-- A member of a volume group that carries its own limit cannot take one:
-  the array keeps volume and group QoS exclusive, and that is exactly where
-  sites put the workloads that matter (database, VMware, Cinder groups).
-  The telemetry signal stamps `volume_group` and `volume_group_qos` on the
-  event, so the rulebook routes before launching anything, and
-  `qos_cap_scope` says what happens: notify (the default), cap the group
-  instead (the same tags on the group plus the hot member's name, lifted
-  the same way: the lift follows that member's quiet polls, and the other
-  members only learn that their group is capped), or try the volume and
-  record the array's refusal.
+- A member of a volume group that carries its own limit cannot take one: the
+  array keeps volume and group QoS exclusive, and that is exactly where sites
+  put the workloads that matter (database, VMware, Cinder groups). The
+  telemetry signal stamps `volume_group` and `volume_group_qos` on the event,
+  so the rulebook routes before launching anything, and `qos_cap_scope` says
+  what happens: notify (the default); cap the group instead (the same tags on
+  the group plus the hot member's name, lifted the same way: the lift follows
+  that member's quiet polls, and the other members only learn that their
+  group is capped); or try the volume and record the array's refusal.
 - Cinder-backed volumes: retype to another backend instead. Design intent.
 
 ### 4.7 Composite rule for the bad day
@@ -251,8 +251,8 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
 `anomaly.yml`: one ruleset, two signals (telemetry and audits), an `all`
 condition with a 15 minute `timeout` joining a data reduction drop, a snapshot
 or write surge and a human's destructive snapshot command on the same array.
-Response (`protect_now.yml`): a protection snapshot across every local
-protection group now, a longer enabled eradication delay (ratchet-safe
+Response (`protect_now.yml`): an immediate protection snapshot across every
+local protection group, a longer enabled eradication delay (ratchet-safe
 direction) and a page, which is a critical record in the alert log. Nothing is
 shortened. The rule carries no throttle: ansible-rulebook rejects
 `once_within` on a multi-event condition, so the timeout bounds re-firing
@@ -269,12 +269,12 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
 - Poll failures arrive as `purefa_poll_error` and polling continues; a
   management VIP `url_check` to tell a dead network from a dead array is
   design intent.
-- The pager paths are tested, not assumed. Once a week every array tests
-  its own (`playbooks/self_check.yml`, a controller schedule on the
-  platform): a test e-mail to its alert watchers, a `purity.test` line to
-  its syslog servers, which the syslog rulebook records on receipt, and its
-  phone-home test; one record per destination and a failed job on a broken
-  path. Every night the automation checks itself the same way
+- The pager paths are tested, not assumed. Once a week every array tests its
+  own (`playbooks/self_check.yml`, a controller schedule on the platform): a
+  test e-mail to its alert watchers, a `purity.test` line to its syslog
+  servers (which the syslog rulebook records on receipt) and its phone-home
+  test, with one record per destination and a failed job on a broken path.
+  Every night the automation checks itself the same way
   (`playbooks/definitions_check.yml`): the orchestrator's published
   definitions and the activations' extra vars against the repository.
 
@@ -284,24 +284,24 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
   `time`, `kind`, `severity` and `array`, whatever else happens.
 - Slack is the pager. `notify.yml` posts the same record to an incoming
   webhook when `SLACK_WEBHOOK_URL` is set (the env file standalone, the
-  `Slack webhook` credential on the platform), and a failed post never
-  fails the notification. On the platform the seed also creates a Slack
-  notification template that reports job failures and the controller-tier
-  workflow's approval events with their links into the platform.
+  `Slack webhook` credential on the platform); a failed post never fails the
+  notification. On the platform the seed also creates a Slack notification
+  template that reports job failures and the controller-tier workflow's
+  approval events with their links into the platform.
 - A pager is not an approver. The two approval queues (the orchestrator's
   approvals and the controller's workflow approvals) are decided in their
-  UIs or from the channel through `slack/approval_bot.py`: a Socket Mode
-  bot that posts every pending approval as a card with Approve and Reject
-  buttons and carries the click back under its own orchestrator or
-  controller identity, with the Slack user in the orchestrator's decision
-  notes (the controller's approval call has no notes field; the bot's log
-  records the user) and an allow-list of who may click
-  ([SECURITY.md](../SECURITY.md)). The bot also keeps the approval from
-  dying quietly: reminders in the card's thread at half and ninety percent
-  of the window, the card rewritten with the outcome when the approval
-  ends, and a critical message plus a critical notify record when nobody
-  decided and the execution failed; its cards survive a restart. Mail and
-  ServiceNow are design intent; the notify playbook is where they go.
+  UIs or from the channel through `slack/approval_bot.py`, a Socket Mode bot
+  (`slack/README.md`). The bot posts every pending approval as a card with
+  Approve and Reject buttons and carries the click back under its own
+  orchestrator or controller identity, with the Slack user in the
+  orchestrator's decision notes (the controller's approval call has no notes
+  field; the bot's log records the user) and an allow-list of who may click
+  ([SECURITY.md](../SECURITY.md)). It keeps the approval from dying quietly:
+  reminders in the card's thread at half and ninety percent of the window,
+  the card rewritten with the outcome when the approval ends, and a critical
+  message plus a critical notify record when nobody decided and the
+  execution failed. Its cards survive a restart. Mail and ServiceNow are
+  design intent; the notify playbook is where they go.
 
 ## 5. Gates
 
@@ -322,13 +322,13 @@ Each remediation passes the gates its event allows; the table in
 - State that must survive a restart lives on the array or in a file, never
   in a rulebook fact.
 - Run twice: every playbook behind a template reads before it writes and
-  leaves an array already where it should be alone, reporting changed
-  false and the reason (an orchestrator retries a node whose launch the
-  gateway answered with an error, so duplicates are a fact of the
-  platform, not a corner case). Names minted per run (snapshot suffixes,
-  request ids, drill copies) are keyed on the launch or guarded by a
-  cooldown, and the bridge asks the orchestrator for an execution already
-  handling the event before it posts.
+  leaves an array already where it should be alone, reporting changed false
+  and the reason. An orchestrator retries a node whose launch the gateway
+  answered with an error, so duplicates are a fact of the platform, not a
+  corner case. Names minted per run (snapshot suffixes, request ids, drill
+  copies) are keyed on the launch or guarded by a cooldown, and the bridge
+  asks the orchestrator for an execution already handling the event before
+  it posts.
 
 ## 6. Traps
 
@@ -337,20 +337,19 @@ Each remediation passes the gates its event allows; the table in
   untemplated `--vars` file, `run_playbook` copying only the playbook's
   directory, `localhost` in the inventory) are listed in
   [HARDWARE_NOTES.md](HARDWARE_NOTES.md).
-- `/alerts/events` is not an event log on any tested Purity (REST 2.46 and
-  2.59 both want alert ids): the alerts signal diffs `/alerts` with `state
-  != closed` and derives the opened / updated / reopened / closing /
-  closed transitions itself.
+- `/alerts/events` is not an event log on REST 2.46 or 2.59; both want alert
+  ids. The alerts signal diffs `/alerts` with `state != closed` and derives
+  the opened / updated / reopened / closing / closed transitions itself.
 - Per-array tokens: a read-only role for the source plugin, a write role only
   for the remediation credential, both in the platform's credential store
   ([SECURITY.md](../SECURITY.md)).
 - Whether a Controller workflow approval node pauses a workflow launched from
   a rulebook exactly as a manual launch does is not stated in the AAP 2.5
-  documentation; the manual launch is verified, and the rulebooks hand
-  the event to the orchestrator rather than launch the controller workflow
+  documentation. The manual launch is verified, and the rulebooks hand the
+  event to the orchestrator rather than launch the controller workflow
   ([VERIFICATION.md](VERIFICATION.md)).
-- Scale: one plugin instance polls N arrays with one REST client per array;
-  verified with two arrays, larger fleets untested.
+- Scale: one plugin instance polls N arrays with one REST client per array.
+  Two arrays are verified; larger fleets are untested.
 
 ## 7. Deployment
 
@@ -359,15 +358,18 @@ definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
 the same tree: the collection `sdodsley.flasharray_eda` built from the
 checkout and installed with its dependencies, py-pure-client, and the
 rulebooks and playbooks as plain files. The base image ships
-ansible-rulebook, ansible-core and aiohttp. EDA Controller activations
-resolve custom event sources from the collections in the image, so the
-rulebooks name theirs by FQCN; on the platform they run as the generated
-variants under `extensions/eda/rulebooks/platform/`, where `run_playbook`
-becomes `run_job_template` and the tick-driven DR drill gives way to a
-controller schedule the seed creates, beside the weekly self-check and the
-nightly definitions check (`aap/README.md`, [PACKAGING.md](PACKAGING.md)).
+ansible-rulebook, ansible-core and aiohttp.
+
+EDA Controller activations resolve custom event sources from the collections
+in the image, so the rulebooks name theirs by FQCN. On the platform they run
+as the generated variants under `extensions/eda/rulebooks/platform/`, where
+`run_playbook` becomes `run_job_template` and the tick-driven DR drill gives
+way to a controller schedule the seed creates, beside the weekly self-check
+and the nightly definitions check (`aap/README.md`,
+[PACKAGING.md](PACKAGING.md)).
+
 The Slack approval bot runs as one more container beside the listeners
-(`slack/README.md`); Socket Mode means it opens an outbound websocket and
+(`slack/README.md`). Socket Mode means it opens an outbound websocket and
 needs no inbound port.
 
 ## 8. References

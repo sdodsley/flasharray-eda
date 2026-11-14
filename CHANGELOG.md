@@ -2,601 +2,247 @@
 
 ## Unreleased
 
-- The seed's enabled-flag enforcement touches FlashArray activations
-  only. The EDA API ignores the name filter on its activation list and
-  returns every activation on the platform, so the loop that enables or
-  disables now picks ours out by name; on a platform shared with another
-  project the old loop set that project's activations too (seen live from
-  the other direction: another project's seed disabled all ten of ours,
-  and the nightly definitions check reported it two hours later).
+- The seed enforces the enabled flag on FlashArray activations only. The
+  EDA API ignores the name filter on its activation list, so the seed picks
+  ours out by name and leaves another project's activations alone.
+- The documentation describes the tree as it stands rather than the order
+  it was built in; CONTRIBUTING.md carries the writing rules, and the
+  changelog is contracted to match.
 
 ## 0.4.0 (2026-11-14)
 
-The platform now runs the loop's housekeeping on schedules (the nightly DR
-drill, the weekly notification-path self check, the nightly definitions
-drift check), the Slack approval bot remembers its cards across restarts,
-says how each approval ended, reminds the channel and expires what nobody
-decided, and can serve a second project on its own channel; planned work no
-longer pages; the loop pages when its own polls keep failing and audits its
-activations against the seed; an alert's whole lifecycle is modelled; the
-playbooks behind the templates can be run twice; and the QoS cap knows
-about volume groups. Verified against the two Purity//FA 6.10.6 arrays and
-Ansible Automation Platform 2.7 with the automation orchestrator;
-[docs/VERIFICATION.md](docs/VERIFICATION.md) has the ledger.
+Housekeeping runs on controller schedules, the Slack approval bot survives
+restarts and reports outcomes, planned work does not page, the loop watches
+its own polls and activations, the alert lifecycle is modelled, every
+template playbook can be run twice, and the QoS cap understands volume
+groups. Verified on Purity//FA 6.10.6 and Ansible Automation Platform 2.7
+with the automation orchestrator; docs/VERIFICATION.md has the ledger.
 
-Upgrading from 0.3.1, in this order. Sync both platform projects (the seed
-syncs a project only when it creates it): the controller project before the
-seed runs again, because three new templates name playbooks only the new
-revision holds, and the EDA project before any activation is recreated.
-Rebuild the decision environment and get it into the store the activation
-workers use (`make de`, then push and pull, or `podman save | podman
---remote load` with `aap_eda_de_pull_policy: never`; aap/README.md, "Images
-on a containerized platform"): the event source plugin changed and the
-platform rulebooks read fields only the new one emits, so on the old image
-the noisy-neighbour cap rule never matches and nothing says so. Run
-`aap/seed.yml` again: it adds the three templates, the platform token
-credential and the three schedules from the new `aap_*_schedule` vars; a
-site that seeds the orchestrator credential now names
-`aap_orchestrator_aap_credential`, `aap_orchestrator_aap_integration` and
-`aap_orchestrator_service_account` in its vars file (the names it already
-passes to `tools/ao_sync.py`) or disables `aap_definitions_check_schedule`,
-or the seed refuses to run before creating anything. Then publish the four
-changed orchestrator definitions with `tools/ao_sync.py` (the
-failover-and-failback workflow launches the new silence template); the
-nightly definitions check fails until this is done. Then
-`tools/activation_audit.py --recreate`: an activation keeps the rulebook
-and extra vars it was created with, and `vars/example.yml` gained
-`qos_cap_scope` and `alert_runbooks_by_type`, so the audit reports all ten
-activations drifted and recreates all ten. Finally recreate the bot
-container with a writable `STATE_DIR` volume (slack/README.md); its
-platform token user also needs execute on `FlashArray - notify`, or the
-record of an expired approval is only a warning in the bot's log.
+Upgrading from 0.3.1, in this order: sync both platform projects, the
+controller one before the seed and the EDA one before any activation is
+recreated; rebuild the decision environment and load it into the store the
+activation workers use (aap/README.md), as the platform rulebooks need
+fields only the rebuilt image emits; run the seed again, with the three
+orchestrator names in the vars file or the definitions-check schedule
+disabled on a site that seeds the orchestrator credential; publish the
+changed orchestrator definitions with `tools/ao_sync.py`; recreate every
+activation with `tools/activation_audit.py --recreate`; recreate the bot
+container with a writable `STATE_DIR` volume (slack/README.md) and a
+platform token whose user may execute the notify template.
 
-- The QoS cap knows about volume groups. The array refuses a volume limit
-  on a member of a group that has its own (the two are exclusive), which is
-  where sites keep the workloads that matter, so the telemetry signal now
-  stamps `volume_group` and `volume_group_qos` on `purefa_volume_performance`
-  and `qos_cap_scope` decides what the loop does with such a member: notify
-  (default, a warning instead of a failed job), `vgroup` (cap the whole
-  group, its state in tags on the group, lifted the same way) or `volume`
-  (try the volume and record the refusal); the day-2 form takes the same
-  scope, and the cap's artifacts say where it went.
-- The Slack approval bot remembers its cards (`STATE_DIR`, `cards.json`),
-  so a restart edits them instead of posting again; it reads how an
-  approval ended when it leaves the queue (orchestrator `timeout_at`,
-  `decided_by` and `decision_notes`, which it now reads instead of fields
-  the API never had; controller `timed_out` and `approved_or_denied_by`)
-  and rewrites the card with the outcome and who decided; it reminds the
-  channel in the card's thread at half and ninety percent of the decision
-  window, the last time mentioning the approvers or `SLACK_ESCALATE`; and
-  an approval nobody decided gets a critical message in the channel and,
-  for an orchestrator approval, whose execution fails in silence, a
-  critical record through the controller's notify template
-  (`NOTIFY_TEMPLATE`); a timed-out controller approval's workflow records
-  itself on its failure edge. A final status the system cannot answer is
-  retried, and treated as expired once the window has passed. `SLACK_ROUTES`
-  and `NOTIFY_ROUTES` send another project's cards (by workflow name or
-  title prefix)
-  to its own channel and notify template, so one bot instance serves two
-  projects on one Slack app.
-- Controller schedules from the seed: `aap/seed.yml` creates the nightly
-  DR drill at a fixed hour (`dr_drill_fail_job` makes a failed drill fail
-  the job, and the platform rulebooks leave the tick-driven drill ruleset
-  out), the weekly notification-path self-check (`playbooks/self_check.yml`:
-  every array sends a test e-mail to its alert watchers and a `purity.test`
-  line to its syslog servers, which the syslog rulebook now records on
-  receipt, and runs its phone-home test; one record per destination, a
-  failed job on a broken path) and the nightly definitions drift check
-  (`playbooks/definitions_check.yml`: `ao_sync --check` against the
-  orchestrator and `activation_audit` against the site vars the seed read,
-  through a `Platform token - flasharray-eda`
-  credential whose environment the audit tool now reads). Times, the
-  watcher list and the orchestrator names are seed vars;
-  `self_check_fail_job` and `definitions_check_fail_job` decide whether a
-  broken path or drift fails the job. A site that seeds the orchestrator
-  credential (`AO_CLIENT_ID` set) now puts `aap_orchestrator_aap_credential`,
-  `aap_orchestrator_aap_integration` and `aap_orchestrator_service_account`
-  in its vars file (the names it already passes to `tools/ao_sync.py`), or
-  disables `aap_definitions_check_schedule`; the seed refuses to run,
-  before creating anything, until one of those is done.
-- The two playbooks that span every array (apply baseline and the self
-  check) write the shared alert log one array at a time: `lineinfile` is
-  read-modify-rename, and two arrays writing at once could lose a record.
-- Run twice: every playbook a template launches now honours the contract
-  that a second launch with the same extra vars leaves the array as it is
-  and says so. Expand volume treats a volume already at the size as done;
-  replicate now and protect now read the newest eda snapshot and request
-  nothing inside a cooldown (`replicate_now_cooldown_s`,
-  `protect_now_cooldown_s`; protect now also stops ratcheting the
-  eradication delay); the capacity request is keyed on `request_key` and
-  reuses a request already awaiting approval; the reclaim accepts a
-  request already done; the Alertmanager silence reuses an active silence
-  and expires only an active one; the DR drill names its copy for the
-  launch, leaves a drill in flight alone and removes a copy older than
-  `dr_drill_stale_s` that a dead launch left; the switchover marks planned
-  work only on a source still promoted, and the three DR playbooks wait
-  for a pod mid-change to settle before judging; `orchestrator_post.yml`
-  records `pending` instead of posting when an execution is already
-  handling the same event for the same array; ticket records carry a
-  `ticket_key`, and `orchestrator_dedupe: false` turns the pending check
-  off. `tests/e2e_run_twice.sh` runs seven of the playbooks twice on real
-  arrays (expand volume, replicate now, protect now, capacity request and
-  reclaim, the Alertmanager silence and, when opted in, the DR switchover);
-  `tests/unit/test_playbook_idempotent.py` pins the guards of the rest, and
-  docs/VERIFICATION.md records which second runs happened live.
-- An alert that opens and resolves between two polls is first seen already
-  resolving; the alerts rulebook now notifies once for it, at one severity
-  below its own, instead of routing it through the runbook map as if it
-  were still open. Seen live: a pod stretch's alerts open and resolve
-  inside one 30 s poll. From the review of the lifecycle: `closing` is
-  emitted once (a later touch of the resolving alert is an update, not a
-  second resolved notice, and an alert next seen already closed gets its
-  resolved notice before the closed line), an alert the array sets back to
-  open after closing is routed again as `reopened` (logged inside a
-  maintenance window), the identify LED is cleared on recovery inside a
-  maintenance window too, the hardware rules' hourly throttle is keyed on
-  the component's `episode` so one back after recovering is lit and
-  recorded at once, and runbook 13 refuses a credential for another array.
-- The alert lifecycle: `closing` is the resolved signal (the array holds a
-  resolved alert there for a day before `closed`), so the alerts rulebook
-  notifies once at one severity below the alert's with the time it was
-  open (`resolved_after_s`), routes an alert again when its severity rises
-  (`severity_raised`, `previous_severity`) and logs the `closed` event a day
-  later; the plugin emits `purefa_hardware_recovered` when a component
-  leaves the issue set and the health rulebook clears the identify LED it
-  lit when it is still lit; the runbook map falls through from
-  code to component type (`alert_runbooks_by_type`) to default, and code 13
-  (NTP) reapplies the baseline servers through `runbooks/13.yml`.
-- Planned work no longer pages: `dr_switchover.yml` tags the promoted
-  source pod `eda/planned_work` (an ISO time) before it demotes, the
-  plugin stamps `planned` on the replica-link events of that pod and of the
-  link's other side while the tag is fresher than `planned_work_max_age`
-  (default 15 minutes; a demoted pod refuses tag changes, so the target is
-  marked through the source and the tag expires rather than being cleared),
-  and the replication rulebook logs those events instead of notifying; the
-  failover-and-failback workflow also silences the
-  `FlashArrayReplicaLink.*` rules for both arrays in Alertmanager around
-  each switchover through `playbooks/alertmanager_silence.yml` (the
-  "FlashArray - Alertmanager silence" template, `aap_alertmanager_url`; a
-  recorded no-op without one, and an Alertmanager that does not answer is
-  recorded rather than fatal). The ledger had the critical page a planned
-  switchover produced.
+- The QoS cap understands volume groups. The array refuses a volume limit
+  on a member of a group with its own, so the telemetry signal reports the
+  group and `qos_cap_scope` chooses a warning (the default), a cap on the
+  whole group or an attempt on the volume with the refusal recorded.
+- The Slack approval bot keeps its cards on disk, so a restart edits them
+  instead of posting again, and rewrites each card with its outcome and who
+  decided. It reminds in the thread at half and ninety percent of the
+  decision window, posts a critical message for an undecided approval, and
+  can route a second project's cards to its own channel.
+- The seed creates three controller schedules: the nightly DR drill, the
+  weekly self check, in which every array tests its alert e-mail, syslog
+  and phone-home paths, and the nightly definitions check, which runs the
+  orchestrator sync in check mode and the activation audit. A site that
+  seeds the orchestrator credential names the three orchestrator
+  identities in its vars file or disables the definitions-check schedule,
+  or the seed refuses to run.
+- The playbooks that span every array write the shared alert log one array
+  at a time, so parallel writers cannot lose a record.
+- Every template playbook honours the run-twice contract: a second launch
+  with the same extra vars leaves the array as it is and says so. Each
+  playbook recognises work already done or in flight, and the orchestrator
+  handoff records pending when an execution is handling the same event
+  (`orchestrator_dedupe: false` turns that off).
+- The alert lifecycle is modelled. A resolved alert is notified once, one
+  severity below its own; an alert whose
+  severity rises or which the array reopens is routed again; the health
+  rulebook clears the identify LED it lit when the component recovers; and
+  the runbook map falls through from alert code to component type
+  (`alert_runbooks_by_type`) to default.
+- Planned work does not page: the switchover tags the source pod before
+  demoting, the plugin marks both sides' replica-link events as planned
+  while the tag is fresh, and the replication rulebook logs them instead
+  of notifying. The failover-and-failback
+  workflow also silences the replica-link rules in Alertmanager around
+  each switchover, a recorded no-op without `aap_alertmanager_url`.
 - The loop watches itself: the plugin counts consecutive failed polls per
-  array and signal and flags `escalate` on `purefa_poll_error` at its
-  `poll_error_escalate` argument (default 10); the health rulebook pages at
-  warning on the first failure of a streak, the other polling rulebooks
-  record theirs at info, and every rulebook pages at critical once its
-  streak escalates, instead of a debug line nobody reads.
-  `tools/activation_audit.py` compares every FlashArray activation's extra
-  vars with what the seed would render, flags example placeholders and
-  disabled activations, and with `--recreate` recreates the drifted ones,
-  keeping a create the gateway answered with an error but the controller
-  carried out;
-  the seed refuses to
-  render extra vars that would post the orchestrator handoff to the example
-  URL. Found live: the capacity activation had carried
-  `orchestrator.example.com` for two days after a tree push replaced the
-  site vars file.
-- `tools/ao_sync.py` ignores the canvas `position` the UI saves on a node
-  or trigger, so a dragged box no longer publishes a new version, and
-  `--check` exits 1 when any definition would be created, updated or
-  published, for CI and schedules.
-- `notify.yml` posts to Slack only at or above `slack_min_severity` (an
-  extra var, else `SLACK_MIN_SEVERITY` in the environment, else warning);
-  every record still reaches the alert log, and the job says when a record
-  stayed out of the channel: a resolved notice one severity below a
-  warning alert's is info and stays in the log.
-- `dr_demote.yml` eradicates the undo-demote pod an earlier demotion left
-  when `eradicate_undo_demote` is true, as `dr_switchover.yml` does, and
-  the DR failover test workflow's revert node passes it; without the flag
-  the play refuses and names the pods. Live, a failover test's revert after
-  a switchover of the same link failed on the module's refusal and the pod
-  stayed promoted until the undo-demote pod was eradicated by hand and the
-  demote job relaunched. The record and the artifacts carry
-  `undo_demote_eradicated`. Verified live afterwards: a test's revert
-  eradicated the earlier undo-demote pod and demoted the pod, both
-  approvals from Slack.
+  array and signal, the health rulebook pages at warning on the first
+  failure of a streak and every rulebook at critical once the streak
+  reaches the threshold (10 by default). `tools/activation_audit.py`
+  compares every FlashArray activation's extra vars with what the seed
+  would render and recreates the drifted ones on request.
+- The orchestrator sync tool ignores the canvas position the UI saves on a
+  node, so a dragged box does not publish a new version, and its check mode
+  exits 1 when any definition would change.
+- Notifications reach Slack only at or above `slack_min_severity` (warning
+  by default); every record still reaches the alert log, and the job says
+  when a record stayed out of the channel.
+- The demote playbook eradicates the undo-demote pod an earlier demotion
+  left when `eradicate_undo_demote` is true, as the switchover does;
+  without the flag the play refuses and names the pods.
 
 ## 0.3.1 (2026-11-09)
 
-The QoS cap holds up under a real load: `qos_cap.yml` caps only when it
-tightens, changes nothing when run twice, and a lift leaves the volume as
-the cap found it, limit or none; the telemetry source counts a lift's
-normal polls from the cap; the pod guards render the array's message for
-a missing pod. Verified against the two Purity//FA 6.10.6 arrays and
-Ansible Automation Platform 2.7: the cap under a fio load through its
-Slack approval, the platform's job-failure notification, and both
-supported-base images running on the platform;
-[docs/VERIFICATION.md](docs/VERIFICATION.md) has the ledger.
+The QoS cap holds up under a real load: it caps only when it tightens,
+changes nothing when run twice, and a lift leaves the volume as the cap
+found it; the pod guards report the array's message for a missing pod.
+Verified on Purity//FA 6.10.6 and Ansible Automation Platform 2.7;
+docs/VERIFICATION.md has the ledger.
 
-- The pod guards of `dr_promote.yml`, `dr_demote.yml` and
-  `dr_switchover.yml` report the array's message for a missing pod ("Pod
-  does not exist.") instead of an undefined-variable error: the message's
-  default branch is evaluated even when the read returned an error, so the
-  fields it names now tolerate absence; a unit test renders every guard
-  message for a missing pod.
-- Verified (VERIFICATION.md): the platform's Slack notification on a job
-  failure, from a switchover launched against a pod that does not exist;
-  the QoS cap under a real fio load from the platform host over iSCSI,
-  twice through the day-2 route with its approval from Slack, on a volume
-  with its own 1000-IOPS limit (recorded, enforced at 500, restored) and on
-  one without (lifted to no limit, not the maximum); the two supported-base
-  ansible-builder images running on the platform, the execution environment
-  under a notify job and a guarded switchover job and the decision
-  environment under the alertmanager activation taking an alert through its
-  rule to a job.
-- A lifted cap leaves the volume without a limit again: `qos_cap.yml`
-  removes the limit through the API with an empty string, because
-  `purefa_volume` sends the 100000000 maximum for `iops_qos: 0`, which
-  reads back as a limit (100M in the GUI); a real previous limit is still
-  restored through the module (HARDWARE_NOTES.md). The collection's
-  master now clears a limit properly (`QosPatch`, 1.47.0); the API path
-  stays until a release carries it.
-- The lift's "normal for `qos_lift_normal_polls` polls" counts from the cap:
-  the telemetry signal resets a volume's normal-poll counter when it
-  becomes capped, so a cap requested through the day-2 route on a volume
-  whose latency was already normal lasts those polls instead of being
-  lifted at the next one (seen live: lifted after 34 seconds, "normal for
-  10 polls").
-- `qos_cap.yml` is idempotent: a cap on a volume that already carries the
-  `qos_cap` tag and a lift on a volume without it change nothing. Live, two
-  lift jobs ran 19 seconds apart; the second found the tags gone and
-  cleared the limit the first had just restored.
-- `qos_cap.yml` never loosens a limit: when the volume's own IOPS limit is
-  already at or below `cap_iops` the cap run writes the tags and leaves the
-  limit alone, so a lift restores the same value; `applied_iops` reports
-  the limit in force. A unit test renders the condition and the artifact.
-- The undo-demote refusal is the `purefa_pod` module's, not the array's:
-  the array allows a second demotion and adds another undo-demote pod.
-  everpure.flasharray's master now carries an `eradicate_undo` option on
-  the module (1.47.0) that eradicates them inside the demote; the
-  switchover's own step stays until a release carries it.
+- The pod guards of the DR playbooks report the array's message for a
+  missing pod instead of an undefined-variable error.
+- A lifted cap leaves the volume without a limit: the lift clears it
+  through the API, because the collection module writes the array's
+  maximum for a zero limit; a real previous limit is restored through the
+  module.
+- The lift's normal-poll count starts from the cap, so a day-2 cap on a
+  volume whose latency was normal lasts the configured polls.
+- The cap is idempotent and never loosens a limit: a repeated cap or lift
+  changes nothing, and a volume whose own limit is at or below the
+  requested cap keeps it, so a lift restores the same value.
+- The undo-demote refusal is the collection module's, not the array's; the
+  switchover's own eradicate step stays until a collection release carries
+  the module's option.
 
 ## 0.3.0 (2026-11-09)
 
-The syslog path is live on the platform from both arrays, with the audit
-and alert layouts parsed into fields; notifications reach Slack and
-approvals come back from it through a bot with identities of its own; a
-planned ActiveDR failover and failback runbook joins the orchestrator
-workflows, now nine behind nineteen job templates, and `tools/ao_sync.py`
-imports the definitions into a live orchestrator. Exercised against the
-two Purity//FA 6.10.6 arrays, Ansible Automation Platform 2.7 and a live
-orchestrator; [docs/VERIFICATION.md](docs/VERIFICATION.md) has the
-ledger.
+The syslog path runs on the platform from both arrays, with the audit and
+alert layouts parsed into fields. Notifications reach Slack and approvals
+come back through a bot. A planned ActiveDR failover and failback runbook
+joins the orchestrator workflows, and a sync tool imports the definitions
+into a live orchestrator. Verified on Purity//FA 6.10.6, Ansible Automation
+Platform 2.7 and a live orchestrator; docs/VERIFICATION.md has the ledger.
 
-- Every approval node names the group `approvers` beside `admins`, so the
-  people who decide and the Slack bot's orchestrator user can sit in a
-  group of their own; the orchestrator resolves approver names when it
-  creates an approval and takes users and groups, not service accounts.
-- A planned ActiveDR failover and failback runbook. `playbooks/dr_switchover.yml`
-  demotes the link's source pod with quiesce, waits for the link to report
-  the target's copy complete, promotes the target pod and records both
-  pods' states and the link's new direction; the same playbook with the
-  sides swapped fails back. A pod cannot be demoted again while the
-  undo-demote pod of an earlier demotion exists, so with
-  `eradicate_undo_demote` true the playbook eradicates those pods first
-  and reports them in `undo_demote_eradicated`; without it the play
-  refuses and names them. `orchestrator/dr_failover_failback.json` runs
-  it behind two approvals and sets the variable, and `aap/seed.yml`
-  creates the `FlashArray - DR switchover` job template.
-- `tools/ao_sync.py` asks the orchestrator for `/api/v1/service_accounts`
-  (the path it used did not exist; the first live run found it) and
-  compares a file with its export without `credential_names` and without an
-  empty `extra_vars`, neither of which the export carries. Verified live as
-  the service account: create, update and unchanged. The dry run says a
-  changed definition would publish a new version and no longer guesses
-  its number.
-- `purefa_syslog` parses what Purity//FA 6.10.6 sends: lines without a
-  `<PRI>`, a pid on the program, the command layout of `purity.audit`
-  (`[user (local)]@array(id) command. Message ID: N UTC Time: ... Array
-  Name: x`, giving `command`, `subcommand`, `arguments`, `action`,
-  `utc_time` and `message_kind: command`) beside the session layout, and
-  the severity from the text when there is no priority. New `programs`
-  option (vars `syslog_programs`): the array forwards its controllers'
-  whole system log, so only `purity.alert`, `purity.audit` and
-  `purity.test` are emitted by default and the rest is dropped and
-  counted. `syslog.yml` skips session records by `message_kind`.
-- `tools/ao_sync.py` imports the orchestrator definitions into an
-  orchestrator the way orchestrator/README.md ("Importing") describes:
-  creates the workflows the project lacks, updates the existing ones by
-  name, fills the `REPLACE_AT_SYNC` placeholders from `--aap-credential`,
-  `--aap-integration` and `--service-account`, validates first, publishes,
-  reports workflows no file defines and never deletes; `--dry-run` writes
-  nothing. A changed definition is published as the next version, the
-  live contract (a version's PATCH changes metadata only). Standard
-  library only; `tests/unit/test_ao_sync.py` drives it against an
-  in-process mock of the API.
-- `tools/ao_lint.py` knows loop nodes: `iterate` and `complete` ports, the
-  body's return edge (`to_port: iterate`) as the one allowed back edge
-  (`loop_ports`), and the loop parameter keys.
-- A second orchestrator route: a protection group whose replication is
-  overdue or stuck is handed over when `orchestrator_enabled` is true, and
-  `orchestrator/replication_overdue_approval.json` gates the immediate
-  replicated snapshot behind an approval (`orchestrator_paths.replication`).
-- `orchestrator_fallback_local` (default false): a capacity handoff that
-  produced no execution raises the local request anyway.
-- Slack: `notify.yml` posts every notification to an incoming webhook when
-  `SLACK_WEBHOOK_URL` is set (env file, or the new `Slack webhook`
-  credential the seed attaches to the notify template); the seed also
-  creates a Slack notification template for job failures and the
-  controller-tier workflow's approval events when a bot token and channel
-  are set.
-- `slack/approval_bot.py`: a Slack Socket Mode bot that posts pending
-  orchestrator and controller approvals as cards with Approve and Reject
-  buttons and carries the decision back with the Slack user's name
-  (`SLACK_APPROVERS` limits who may click). Unit-tested with fakes.
-- `replicate_now.yml` publishes job artifacts (`pgroup`, `snapshot_suffix`,
-  `changed`, ...), and a unit test checks that every `${node.artifacts.key}`
-  a definition reads is published by that template's playbook.
-- `purefa_syslog` counts the array's own service accounts as automation
-  (`system_users`, default `pure_datainsights`; `purity` writes with auth
-  source `system`), so the human-action rule stays quiet for the array's
-  scheduled snapshots and tag housekeeping.
-- The ansible-builder definitions build: `python_interpreter` under
-  `dependencies` pins the base image's Python 3.12, and each collection
-  directory names its own `dest` under `additional_build_files`. The
-  decision environment from `decision-environment/execution-environment.yml`
-  is built on a `vfs` image store and runs `alertmanager.yml` through a
-  posted alert to a notify record; the two supported-base definitions build
-  there as well (PACKAGING.md has the rootless-overlay caveat).
-- `aap/decision-environment.yml` excludes `systemd-python` from the pip
-  stage: `ansible.eda`'s requirements name it, it has no wheel, and the
-  supported base carries no Python headers or compiler to build it.
-- Links people can open: `aap/seed.yml` sets the platform's base URL for
-  notification links (`TOWER_URL_BASE`, from `aap_url_base`, the gateway
-  URL by default), and the bot's controller cards link to `AAP_UI_URL`
-  when set.
-- `purefa_syslog` parses the `purity.alert` layout Purity//FA 6.10.6 sends
-  (level word, subject, `[code]`, description, support-case sentence,
-  `Severity:`, UTC and array time, array name, domain, knowledge base link,
-  suggested action) into fields, grades the event by the severity word and
-  stops the UTC trailer at `Array Time:`; the syslog alert rule grades an
-  info alert as info, names the code in the subject and passes
-  `alert_code`. The bot keeps the channel id Slack returns (chat.update
-  refuses the channel name) and a failed card update no longer stops the
-  poll.
-- The Slack text of `notify.yml` carries a real line break between the
-  subject line and the detail (a `'\n'` literal inside a Jinja expression
-  is two characters under Ansible's backslash doubling), names the array
-  once, drops carriage returns and escapes `&`, `<` and `>`; a unit test
-  refuses escape literals inside Jinja expressions outside `regex_*`
-  filters. The admin-authentication drift notice names the baseline values
-  beside the observed ones.
-- Verified since 0.2.0 (VERIFICATION.md): the syslog path live on the
-  platform from both arrays; the Alertmanager chain into the platform's
-  activation, with the capacity rule under a lab override and the
-  replica-link rule on a real pause; the DR drill schedule firing on its
-  own; the capacity handoff from a running activation through approval to
-  the reclaim; the overdue-replication route through its approval to the
-  replicated snapshot, once approved from Slack through the bot; the
-  notify template posting to Slack from the platform; an approval nobody
-  decided expiring and failing its execution at the approval node, with
-  `fallback_decision` making no difference; live `purity.alert` lines from
-  both arrays (a scratch pod stretched between them: an info line from
-  each and a critical one, parsed into fields and graded by the rebuilt
-  decision environment) and the array's test line over UDP, with the
-  arrays replaying queued lines after an 80-minute listener outage; the scrape-failure rule through Alertmanager to the
-  platform's activation, firing and resolved; the platform's Slack
-  notification on a controller-tier approval and the bot's card for it,
-  clicked from the channel;
-  the alerts signal against a Purity//FA 6.12.4 array; the planned
-  failover and failback on the lab's ActiveDR link, both ways, with the
-  link reversed in between, then again with both approvals given from
-  Slack by the bot's user, the undo-demote pods of the first run
-  eradicated on the way and a duplicate launch of the failback (the
-  gateway answered 503 after the job was created) absorbed by the
-  playbook changing nothing the second time.
+- Every approval node names the group `approvers` beside the admins, so the
+  people who decide and the bot's orchestrator user can sit in a group of
+  their own; an undecided approval expires and fails its execution whatever
+  the fallback decision says.
+- A planned ActiveDR failover and failback runbook: the switchover playbook
+  demotes the source pod, waits for the target's copy and promotes the
+  target pod; with the sides swapped it fails back.
+  With `eradicate_undo_demote` true it first eradicates the undo-demote
+  pods of earlier demotions, otherwise it refuses and names them; an
+  orchestrator definition runs it behind two approvals.
+- `tools/ao_sync.py` imports the orchestrator definitions: it creates the
+  workflows the project lacks, updates the existing ones by name,
+  validates, publishes a changed definition as the next version and never
+  deletes; a dry run writes nothing.
+- The orchestrator linter knows loop nodes, their ports and the one allowed
+  back edge.
+- A second orchestrator route hands over a protection group whose
+  replication is overdue or stuck and gates the immediate replicated
+  snapshot behind an approval; `orchestrator_fallback_local` raises the
+  local capacity request when a handoff produced no execution.
+- The syslog source parses what Purity//FA 6.10.6 sends, the audit and
+  alert layouts into fields graded by the severity word. By default only
+  the alert, audit and test programs are emitted (`syslog_programs`) and
+  the rest of the controllers' system log is dropped and counted; the
+  array's own service accounts count as automation, so the human-action
+  rule stays quiet for the array's scheduled work.
+- The notify playbook posts every notification to an incoming webhook when
+  `SLACK_WEBHOOK_URL` is set, and the seed creates a Slack notification
+  template for job failures and controller-tier approval events when a bot
+  token and channel are set.
+- A Slack Socket Mode bot posts pending orchestrator and controller
+  approvals as cards with Approve and Reject buttons and carries the
+  decision back with the Slack user's name; `SLACK_APPROVERS` limits who
+  may click.
+- The immediate replication playbook publishes job artifacts, and a unit
+  test checks that every artifact a definition reads is published.
+- The ansible-builder definitions build on the supported base, and the
+  decision environment builds on a vfs image store (docs/PACKAGING.md has
+  the rootless-overlay caveat).
+- The seed sets the platform's base URL for notification links
+  (`aap_url_base`, the gateway URL by default).
 
 ## 0.2.0 (2026-11-07)
 
 The project runs on Ansible Automation Platform 2.7 and drives the
 automation orchestrator: ten rulebook activations, eighteen job templates,
-the controller-tier approval workflow and seven orchestrator workflows,
-exercised against the two Purity//FA 6.10.6 arrays, a 2.7 installation and
-a live orchestrator; the Prometheus path is exercised against the arrays'
-native exporters. [docs/VERIFICATION.md](docs/VERIFICATION.md) has the
-ledger.
+the controller-tier approval workflow and seven orchestrator workflows.
+Verified on Purity//FA 6.10.6, a 2.7 installation and a live orchestrator;
+docs/VERIFICATION.md has the ledger.
 
-### Collection and decision environment
-
-- The repository is the collection `sdodsley.flasharray_eda` (`galaxy.yml`,
-  `meta/runtime.yml`, `make collection`); the rulebooks name their sources
-  by FQCN (`sdodsley.flasharray_eda.purefa_events`,
-  `sdodsley.flasharray_eda.purefa_syslog`) and CI builds and installs the
-  collection before the unit tests.
-- The decision environment builds and installs the collection at image
-  build time, so activations resolve the sources without `--source-dir`;
-  `ANSIBLE_COLLECTIONS_PATH` in the image also names the base image's
-  `ansible.eda` directory ([docs/PACKAGING.md](docs/PACKAGING.md)).
-
-### Ansible Automation Platform
-
-- `FlashArray fleet` credential type: one credential carries every array as
-  a JSON list, injected as `purefa_fleet_json` (controller) and
-  `purefa_arrays` (EDA). `playbooks/tasks/resolve_array.yml` picks the
-  target array's URL and token in every array-facing playbook, and both
-  plugins accept `arrays` as a JSON or YAML string.
-- Platform rulebooks under `extensions/eda/rulebooks/platform/`, generated
-  by `tools/platform_rulebooks.py` and checked by a unit test: every
-  `run_playbook` becomes `run_job_template` in `aap_organization`; the
-  webhook rulesets are left out. The config sources fall back to the fleet
-  list when `config_arrays` is unset.
-- `aap/seed.yml`: seven more job templates (eighteen, one per playbook;
-  `FlashArray - post orchestrator event` is now `FlashArray - orchestrator
-  post`), the `Platform user - flasharray-eda` EDA credential (the built-in
-  Red Hat Ansible Automation Platform type) for the `run_job_template`
-  actions, one activation per platform rulebook with the fleet credential
-  and the site vars laid over the example file, enabled ten seconds apart
-  when `aap_eda_activations_enabled` is true; `aap_eda_de_pull_policy`.
-  [aap/README.md](aap/README.md) covers the image stores of a containerized
-  platform.
-
-### Orchestrator
-
-- Four more definitions: `day2_qos_cap.json`, `day2_protect_now.json`,
-  `day2_identify_led.json` and `dr_failover_test.json`, an ActiveDR
-  failover test behind two approvals (`playbooks/dr_promote.yml`,
-  `playbooks/dr_demote.yml`).
-- All seven definitions follow the contract of the 2026.8 release:
-  unwrapped trigger bodies (`${trigger.event...}`), `credential_names`,
-  `approver_groups`, `decision_window`, `schedule_type` with `cron` and
-  `missed_schedule_policy`. `tools/ao_lint.py` checks the parameter keys
-  of every trigger and node type (`parameter_keys`).
-
-### Monitoring
-
-- `prometheus/flasharray.rules.yml` follows the names and labels of the
-  array's native OpenMetrics exporter on Purity//FA 6.10.6
-  (`namespace=purefa`, status as a label, `array_name` as a target label);
-  `prometheus/prometheus.example.yml` and
-  `prometheus/alertmanager.example.yml` are the scrape and routing
-  configurations.
+- The repository is the collection `sdodsley.flasharray_eda`; the rulebooks
+  name their sources by FQCN, and CI builds and installs the collection
+  before the unit tests.
+- The decision environment installs the collection at image build time, so
+  activations resolve the sources without a source directory
+  (docs/PACKAGING.md).
+- A fleet credential type carries every array as a JSON list for controller
+  jobs and EDA activations; every array-facing playbook picks the target
+  array's URL and token from it.
+- Platform rulebooks, generated from the local ones and checked by a unit
+  test: every run-playbook action becomes a job template launch and the
+  webhook rulesets are left out.
+- The seed creates one job template per playbook (eighteen), a platform
+  user credential for the launches, and one activation per platform
+  rulebook with the fleet credential and the site vars, enabled when
+  `aap_eda_activations_enabled` is true.
+- Four more orchestrator definitions: the day-2 QoS cap, immediate
+  protection and identify LED, and an ActiveDR failover test behind two
+  approvals. All seven follow the contract of the 2026.8 orchestrator
+  release, and the linter checks the parameter keys of every trigger and
+  node type.
+- The Prometheus rules follow the names and labels of the array's native
+  OpenMetrics exporter; example scrape and Alertmanager routing
+  configurations sit beside them.
 
 ## 0.1.0 (2026-11-06)
 
 First release of flasharray-eda: Event-Driven Ansible for standalone
-FlashArrays, a prototype. Validated against two Purity//FA 6.10.6 arrays
-(REST 2.46); the syslog listener and the Prometheus rules are tested with
-replayed input. [docs/VERIFICATION.md](docs/VERIFICATION.md) lists what was
-exercised on hardware, [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the
-array, SDK and collection facts, and [docs/DESIGN.md](docs/DESIGN.md) the
-design.
+FlashArrays, a prototype. Validated on Purity//FA 6.10.6 (REST 2.46); the
+syslog listener and the Prometheus rules are tested with replayed input.
+docs/VERIFICATION.md lists what was exercised on hardware,
+docs/HARDWARE_NOTES.md the array, SDK and collection facts, and
+docs/DESIGN.md the design.
 
-### Event sources
-
-- `purefa_events` polls the REST API for alerts, audits, health, telemetry,
-  replication and config signals, reading each array's URL and token from
-  the environment variables named by `fa_url_env` and `api_token_env`.
-  Options include `request_timeout`, `growth_volumes`,
-  `drr_drop_threshold_pct` and `snapshot_growth_threshold_pct`. It reads
-  protection group transfers newest first, pages audits past `audit_batch`
-  and reports an overflow as a `purefa_poll_error`, always reports volumes
-  carrying the `eda/qos_cap` tag, honours the per-array lock for telemetry,
-  and carries `DOCUMENTATION` and `EXAMPLES` blocks.
-- `purefa_syslog` receives the arrays' syslog stream. It validates `arrays`
-  as a mapping, filters senders with `allowed_sources`, takes `array` on
-  audit lines from the message's own "Array name" field and emits one event
+- The events source polls the REST API for alerts, audits, health,
+  telemetry, replication and config signals, reading each array's URL and
+  token from named environment variables.
+- The syslog source receives the arrays' syslog stream, filters senders by
+  an allow list, takes the array name from the message and emits one event
   shape for every line.
-- Both plugins accept `automation_users` as a list or a comma-separated
-  string.
-
-### Rulebooks
-
 - Ten rulebooks: alerts, change control, config drift, health, replication
   (with the DR drill), capacity (with the approval gate), performance (QoS
   cap with hysteresis), anomaly, syslog and alertmanager.
-- `anomaly.yml` is one multi-event condition bounded by a 15 minute timeout
-  and carries no throttle (ansible-rulebook rejects `once_within` on a
-  multi-event condition).
-- The replay rulebooks under `tests/` are rule-for-rule copies of the real
-  ones, throttles included; a unit test enforces it.
-- Listener hardening: the approvals webhook requires a bearer token
-  (`APPROVAL_TOKEN`), the git-push webhook a GitHub-style
-  `X-Hub-Signature-256` HMAC (`GIT_WEBHOOK_SECRET`), the syslog listener
-  binds `syslog_host` and filters with `syslog_allowed_sources`, and the
-  Alertmanager listener binds `alertmanager_host`.
-
-### Playbooks
-
-- Act on the arrays through `everpure.flasharray` 1.46.0 or later.
-- `alert_runbook.yml` includes `runbooks/<code>.yml` relative to itself.
-  Every alert-log record carries time, kind, severity and array;
-  `identify_led.yml` accepts a `severity` extra var.
-- `expand_volume.yml` grows a volume (day-2) behind size and name guards.
-- Every playbook a workflow or orchestrator node may follow ends with an
-  `ansible.builtin.set_stats` task (`remediate_ntp.yml`,
-  `remediate_dns.yml` and `preferred_array.yml` record their work in the
-  alert log only) that
-  publishes job artifacts for workflow and orchestrator nodes (`request_id`
-  / `candidate_count` / `candidates`, `failed_count` / `drills`, `old_size`
-  / `new_size`, ...; the keys are listed in
-  [orchestrator/README.md](orchestrator/README.md)).
-- `capacity_request.yml` publishes `candidates` as the request file's
-  `{volumes, snapshots}` dict in full. `capacity_reclaim.yml` rebuilds the
-  request from the `array` (or `at_risk_array`) and `candidates` extra vars
-  when the request file is absent and the launch sets
-  `rebuild_from_artifacts: true`, so an approved request completes as a
-  later job in a fresh execution environment.
-
-### Orchestrator handoff
-
-- A per-site switch `orchestrator_enabled` (default false) routes the
-  capacity-at-risk rule to `playbooks/orchestrator_post.yml`, which obtains
-  a client-credentials token from Red Hat's automation orchestrator and
-  posts the event to the workflow's EDA trigger as a `flasharray-eda/1`
-  envelope ([docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md)). A 202 is
-  recorded with its execution id; 401, 403, 413, a connection failure or a
-  body over 1000000 bytes is recorded as a warning and never fails the
-  rule. With the switch off, the request file and the approvals webhook
-  handle the approval locally.
-- Credentials are the `AO_CLIENT_ID` / `AO_CLIENT_SECRET` environment
-  variables (`env.example`; `run.sh` forwards them with `--env-vars`).
-  Vars: `orchestrator_url`, `orchestrator_paths`,
-  `orchestrator_validate_certs`.
-- `orchestrator/` holds three workflow definitions (capacity reclaim with
-  approval, day-2 expand volume, nightly DR drill) with `REPLACE_AT_SYNC`
-  placeholders for per-environment ids, and `job_templates.txt`
-  ([orchestrator/README.md](orchestrator/README.md)). `tools/ao_lint.py`
-  lints them offline; `make lint-ao` runs it in `make check` and CI.
-
-### Ansible Automation Platform
-
-- `aap/seed.yml` seeds AAP 2.7: organization, credential types,
-  credentials from the environment, inventory, project, execution
-  environment, eleven job templates, the controller-tier capacity workflow
-  and the EDA objects with activations disabled
-  ([aap/README.md](aap/README.md)).
-- The `FlashArray API` credential type carries the array's inventory name
-  (`array_name`) and injects it as `credential_array`; every array-facing
-  playbook refuses to run when that is not the array it was asked to act
-  on. The orchestrator's capacity nodes pick the event's array's
-  credential, and the DR drill template takes the credential of its first
-  drill's target array.
-
-### Launcher and configuration
-
-- `run.sh` launches one rulebook. `env.sh` (sourced by `run.sh` and the
-  end-to-end scripts) loads `$HOME/.flasharray-eda.env` (template
-  `env.example`), activates `./venv` or uses `ansible-rulebook` from the
-  PATH, and passes `APPROVAL_TOKEN`, `GIT_WEBHOOK_SECRET`, `AO_CLIENT_ID`
-  and `AO_CLIENT_SECRET` to ansible-rulebook with `--env-vars` when set.
-- `vars/example.yml` documents every variable the rulebooks reference; the
-  example admin-authentication baseline uses hardened values.
-- `.gitignore` covers env files, local vars and inventory files, real
-  baselines and the ansible-builder context.
-
-### Monitoring, packaging and decision environment
-
-- Prometheus rules for the array's native OpenMetrics exporter
-  (`prometheus/flasharray.rules.yml`), consumed by the alertmanager rulebook
-  through `ansible.eda.alertmanager`.
-- A decision environment on `quay.io/ansible/ansible-rulebook:v1.3.2`: the
-  Containerfile and the ansible-builder definition produce the same tree
-  and both build the collection from the checkout. CI does not build the image.
-- [docs/PACKAGING.md](docs/PACKAGING.md) lists the steps to move the
-  content into the `everpure.flasharray` collection.
-
-### Tests
-
-- Unit tests for the plugins (against a fake SDK client) and static checks
-  over the rulebooks (schema, variables, playbooks, replay drift), run by
-  `make check` and GitHub Actions.
-- `tests/unit/test_ao_lint.py`: every linter rule has a fixture, and the
-  expand-volume form and playbook agree on sizes.
-  `tests/unit/test_playbook_artifacts.py`: artifacts, credential guard,
-  seed.
-- `tests/mock_orchestrator.py` (standard library) mocks the token and EDA
-  webhook endpoints; `tests/unit/test_orchestrator_bridge.py` runs the
-  handoff playbook against it (skipped without `ansible-playbook`);
-  `tests/replay_capacity.yml` replays one capacity event through the real
-  rules for an end-to-end run with ansible-rulebook.
-- The end-to-end scripts (`tests/e2e_sources.sh`,
-  `tests/e2e_change_control.sh`, `tests/e2e_replication.sh`,
-  `tests/e2e_approvals.sh`) run against real arrays, write only under
-  `tests/out/`, take array and object names from the environment, and
-  refuse the eradicate step on an array with pending-eradication objects
-  unless `E2E_ERADICATE_ALL=1`.
-
-### Repository
-
+- Listener hardening: the approvals webhook requires a bearer token, the
+  git-push webhook an HMAC signature, and the syslog and Alertmanager
+  listeners bind a configured host.
+- The playbooks act on the arrays through everpure.flasharray 1.46.0 or
+  later: per-code alert runbooks, an identify LED and a day-2 expand
+  volume behind size and name guards.
+- Every playbook a workflow or orchestrator node may follow publishes job
+  artifacts, and the capacity reclaim rebuilds its request from them when
+  `rebuild_from_artifacts` is set, so an approved request completes as a
+  later job.
+- `orchestrator_enabled` (default false) routes the capacity-at-risk rule
+  to a handoff playbook that posts the event to the orchestrator workflow's
+  EDA trigger; a failed post is recorded as a warning and never fails the
+  rule, and with the switch off the approvals webhook handles the approval
+  locally.
+- The orchestrator directory holds three workflow definitions (capacity
+  reclaim with approval, day-2 expand volume, nightly DR drill) with
+  placeholders for per-environment ids; a linter checks them offline in CI
+  (orchestrator/README.md).
+- The seed playbook seeds AAP 2.7 with the organization, credentials,
+  inventory, project, execution environment, eleven job templates, the
+  controller-tier capacity workflow and the EDA objects, activations
+  disabled (aap/README.md).
+- The array API credential type carries the array's inventory name, and
+  every array-facing playbook refuses to run against another array.
+- The launcher runs one rulebook, loads the environment file
+  (`env.example` is the template) and forwards the secrets to
+  ansible-rulebook; the example vars file documents every variable the
+  rulebooks reference.
+- Prometheus rules for the array's native OpenMetrics exporter, consumed by
+  the alertmanager rulebook.
+- A decision environment on the ansible-rulebook 1.3.2 image;
+  docs/PACKAGING.md lists the steps to move the content into the
+  everpure.flasharray collection.
+- Unit tests for the plugins and static checks over the rulebooks run under
+  make check and GitHub Actions.
+- The end-to-end scripts run against real arrays, write only under the
+  tests output directory and refuse the eradicate step on an array with
+  pending-eradication objects unless `E2E_ERADICATE_ALL=1`.
 - Apache-2.0; SPDX headers on every Python and shell file.

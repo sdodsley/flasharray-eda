@@ -10,25 +10,32 @@ complement the notifications `playbooks/notify.yml` posts through the
 incoming webhook and the platform's own Slack notification template
 (README.md, "Notifications"); neither of those can take a decision.
 
-A card follows its approval to the end. While the approval waits, the bot
-reminds the channel in the card's thread at half and at ninety percent of
-the decision window (the second reminder mentions the approvers, or
-`SLACK_ESCALATE`, and is shown in the channel). When the approval leaves
-the queue the bot reads how it ended and rewrites the card: approved or
-rejected and by whom, whether from here or in a UI; cancelled; or expired.
-An expired orchestrator approval fails its execution with nothing done and
-nobody told (orchestrator/README.md), so the bot also posts a critical
-message in the channel, with the mentions, and launches the controller's
-notify template for a critical record in the alert log, the way every
-other critical finding is recorded; a timed-out controller approval sends
-its workflow down the failure edge, whose own notify node is the record,
-so it gets the channel message only. A read of the final status that fails
-is retried on the next polls, and an approval still unreadable once its
-window has passed is treated as expired rather than forgotten; one the
-system still reports pending (left out of a list page) keeps its card. The
-posted cards are kept in `STATE_DIR`, so a restart edits the cards it
-posted instead of posting them again and still closes them when their
-approvals end.
+A card follows its approval to the end:
+
+- While the approval waits, the bot reminds the channel in the card's
+  thread at half and at ninety percent of the decision window. The second
+  reminder mentions the approvers, or `SLACK_ESCALATE`, and is shown in
+  the channel.
+- When the approval leaves the queue the bot reads how it ended and
+  rewrites the card: approved or rejected and by whom, whether from here
+  or in a UI; cancelled; or expired.
+- An expired orchestrator approval fails its execution with nothing done
+  and nobody told (orchestrator/README.md, "Placeholders"), so the bot
+  also posts a critical message in the channel, with the mentions, and
+  launches the controller's notify template for a critical record in the
+  alert log, the way every other critical finding is recorded.
+- A timed-out controller approval sends its workflow down the failure
+  edge, whose own notify node is the record, so it gets the channel
+  message only.
+- A read of the final status that fails is retried on the next polls. An
+  approval still unreadable once its window has passed is treated as
+  expired rather than forgotten; one the system still reports pending
+  (left out of a list page) keeps its card.
+- A second click on an approval already decided is refused by the
+  platform and reported back as an ephemeral message.
+- The posted cards are kept in `STATE_DIR`, so a restart edits the cards
+  it posted instead of posting them again and still closes them when
+  their approvals end.
 
 ## The Slack app
 
@@ -46,17 +53,18 @@ One app in the workspace, created at api.slack.com/apps:
 
 - **Orchestrator:** a user login (`AO_USERNAME` with `AO_PASSWORD_FILE`)
   for a user who is in a group the approval nodes name (`approvers` in the
-  shipped definitions) and holds the `project-user` role on the project. A
-  service account (`AO_CLIENT_ID` and `AO_CLIENT_SECRET`) can list the
-  approvals but cannot decide them: the orchestrator accepts users and
-  groups as approvers, not service accounts. The decision is recorded as
-  that identity with `via Slack by <user> (<id>)` in the decision notes.
+  shipped definitions) and holds the `project-user` role on the project,
+  nothing wider. A service account (`AO_CLIENT_ID` and `AO_CLIENT_SECRET`)
+  can list the approvals but cannot decide them: the orchestrator accepts
+  users and groups as approvers, not service accounts. The decision is
+  recorded as that identity with `via Slack by <user> (<id>)` in the
+  decision notes.
 - **Controller:** a token (`AAP_TOKEN` or `AAP_TOKEN_FILE`) of a user with
   the approve permission on the workflows and, for the record of an
   expired approval, the execute permission on `NOTIFY_TEMPLATE`
-  (`FlashArray - notify`). Controller approvals carry no notes field; the
-  platform's activity stream records the token's user, the bot's log
-  records the Slack user.
+  (`FlashArray - notify`), nothing wider. Controller approvals carry no
+  notes field; the platform's activity stream records the token's user,
+  the bot's log records the Slack user.
 
 Who may click: `SLACK_APPROVERS`, a comma-separated list of Slack user
 ids. Empty means anyone in the channel, which is a lab setting; set it
@@ -74,11 +82,11 @@ Standalone:
     python slack/approval_bot.py
 
 As a container beside the other listeners, with the two passwords handed
-over as podman secrets rather than carried in the environment (every
+over as podman secrets rather than carried in the environment. Every
 `*_FILE` variable reads its value from a file; a secret is mounted
 readable under `/run/secrets/<name>`, where a 600-mode file bind-mounted
 from the host would be unreadable to the image's non-root user under
-rootless uid mapping):
+rootless uid mapping:
 
     podman secret create ao-admin /path/to/ao-admin-password
     podman secret create aap-token /path/to/aap-token
@@ -94,39 +102,28 @@ rootless uid mapping):
       sh -c 'pip install -q slack_sdk && python /app/approval_bot.py'
 
 `POLL_SECONDS` (default 30) is how often the two approval queues are read.
-A card is posted once per approval. The cards the bot posted are written
-to `cards.json` under `STATE_DIR` (`--state-dir` on the command line)
-after every change, so a restart picks them up (the `U` on the volume
-makes the directory writable by the image's non-root user under rootless
-podman, after which the host user reads it with `podman unshare cat`;
-without it every write fails and the bot says so once and runs on in
-memory): an approval still pending
-keeps its card, one that ended while the bot was down gets its card
-rewritten with the outcome on the first poll. Without a state directory
-the record lives in memory and a restart posts a fresh card for every
-approval still pending, while the earlier card keeps its buttons (a click
-on either decides the same approval). The decision window comes from the
-approval itself (`timeout_at` in the orchestrator, `approval_expiration`
-in the controller; a controller node with no timeout has no window and no
+A card is posted once per approval. `SLACK_CHANNEL` may be a name: Slack
+accepts it for the post and the bot keeps the channel id the post returns
+for the card's later updates. The decision window comes from the approval
+itself (`timeout_at` in the orchestrator, `approval_expiration` in the
+controller; a controller node with no timeout has no window and no
 reminders). Nothing secret is logged.
 
-Verified against a workspace: the bot connects over Socket Mode, posts the
-card for a pending orchestrator approval within one poll, and a click on
-Approve decides it (the orchestrator records the approval under the bot's
-identity with the Slack user in the decision notes) and the execution
-resumes. A pending controller approval is posted and decided the same way
-(the controller-tier workflow launched by hand, approved from the channel,
-recorded as the bot's platform user). Deployed, the bot holds a service
-account with the project-user role and a platform user with the Approve
-role on the workflow, nothing wider; a second click on an approval already
-decided is refused by the platform and reported back as an ephemeral
-message.
-`SLACK_CHANNEL` may be a name: Slack accepts it for the post and the bot
-keeps the channel id the post returns for the card's later updates.
+The cards the bot posted are written to `cards.json` under `STATE_DIR`
+(`--state-dir` on the command line) after every change, so a restart picks
+them up: an approval still pending keeps its card, one that ended while
+the bot was down gets its card rewritten with the outcome on the first
+poll. The `U` on the volume makes the directory writable by the image's
+non-root user under rootless podman, after which the host user reads it
+with `podman unshare cat`; without it every write fails and the bot says
+so once and runs on in memory. Without a state directory the record lives
+in memory and a restart posts a fresh card for every approval still
+pending, while the earlier card keeps its buttons (a click on either
+decides the same approval).
 
 Two projects on one Slack app share one bot. Socket Mode hands each button
 click to one of the app's open connections, so a second bot instance on
-the same app would lose the clicks meant for the other; instead the one
+the same app would lose the clicks meant for the other. Instead the one
 instance polls both systems (its identities need the approve rights on
 both projects' workflows and execute on both notify templates) and
 `SLACK_ROUTES` sends each project's cards to its own channel by the prefix
@@ -134,13 +131,11 @@ of the workflow name, for example `Other=#other-project`, with
 `NOTIFY_ROUTES` naming that project's notify template for the expiry
 record. A second Slack app, with its own tokens and bot instance, is the
 other way to keep the projects apart.
-The reminders, the expiry handling and the state were exercised against
-the lab orchestrator with a throwaway four-minute approval nobody decided:
-the card, the two reminders in its thread, the rewrite as expired, the
-critical message and the critical notify record, with the bot restarted
-mid-window and the card kept; and against the controller with an approval
-denied by API, which the bot read and rewrote as rejected by that user
-([docs/VERIFICATION.md](../docs/VERIFICATION.md)).
+
+The runs that prove the bot against a workspace, an orchestrator and a
+controller (the card, the click, the reminders, the expiry message and
+record, and the state across a restart) are in
+[docs/VERIFICATION.md](../docs/VERIFICATION.md).
 
 ## Variables
 

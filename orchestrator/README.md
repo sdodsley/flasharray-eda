@@ -4,23 +4,21 @@ Workflow definitions for Red Hat's automation orchestrator (the Ansible
 Automation Platform 2.7 add-on; upstream project Syntara), in the JSON the
 orchestrator imports and exports (`schema_version` 2.0.0: `triggers`,
 `nodes`, `edges`). They do not replace the rulebooks: `ansible-rulebook`
-still decides what an array event means. What the orchestrator adds is the
-part a rulebook cannot do well, a human approval that pauses the run, a
-schedule with a missed-run policy, and an audit record of who decided what.
-Every node that touches an array is still one of this project's playbooks,
-launched as an AAP job template.
+decides what an array event means. The orchestrator adds what a rulebook
+cannot do well: a human approval that pauses the run, a schedule with a
+missed-run policy, and an audit record of who decided what. Every node
+that touches an array is one of this project's playbooks, launched as an
+AAP job template.
 
-The capacity definition is verified on the upstream orchestrator code at
-the tag Red Hat ships as the 2026.8 release (API 1.3.1): it validates,
-imports, publishes and runs from the EDA trigger through the approval to
-the reclaim, and the replication definition runs the same way through its
-approval to the replicate-now job ("Checked against a live instance"
-below). Every definition
-follows the node schemas of that release and `tools/ao_lint.py` checks them
-offline. The product add-on is generally available for
-OpenShift-based Ansible Automation Platform 2.7 only; no timeline is
-published for the containerized topology, and its API (1.3.1) is described
-as a technology preview that may change (docs/ORCHESTRATOR.md).
+Every definition follows the node schemas of the upstream orchestrator
+code at the tag Red Hat ships as the 2026.8 release (API 1.3.1), and
+`tools/ao_lint.py` checks them offline. The contract facts those schemas
+fix are under "Checked against a live instance" below. The runs that prove
+the capacity and replication definitions end to end, from the EDA trigger
+through the approval to the reclaim or replicate-now job, are in
+docs/ORCHESTRATOR.md, "Verified against a live orchestrator". Which
+platform topologies the add-on ships for, and the status of its API, are
+in docs/ORCHESTRATOR.md.
 
 ## The definitions
 
@@ -40,22 +38,24 @@ Approval nodes always have two distinct successors: `approved` and
 `rejected` never share a node (the linter enforces it), because a shared
 successor would run on either decision.
 
-The day-2 definitions have one rule in common, which
-`tests/unit/test_ao_lint.py` checks: the form declares and requires exactly
-the inputs the job node reads, every input is passed whole (`${trigger.x}`
-on its own keeps a boolean or integer's type), the node carries
-`credential_names` for the requested array, and nothing site-specific
-(`alert_log`) is in the node.
+The day-2 definitions share one rule, which `tests/unit/test_ao_lint.py`
+checks:
+
+- the form declares and requires exactly the inputs the job node reads;
+- every input is passed whole (`${trigger.x}` on its own keeps a boolean
+  or integer's type);
+- the node carries `credential_names` for the requested array;
+- nothing site-specific (`alert_log`) is in the node.
 
 ## The event envelope
 
-The capacity and replication definitions expect what the EDA bridge
-(`playbooks/orchestrator_post.yml`, run by the capacity and replication
-rulebooks when `orchestrator_enabled` is true; the paths are
-`orchestrator_paths.capacity` and `orchestrator_paths.replication` in the
-vars file and the contract is in `docs/ORCHESTRATOR.md`) sends to
-`POST {orchestrator_url}/api/v1/webhooks/eda/<path>` with a service
-account bearer token; for the capacity route:
+The capacity and replication definitions expect the body the EDA bridge
+sends. The bridge is `playbooks/orchestrator_post.yml`, run by the
+capacity and replication rulebooks when `orchestrator_enabled` is true; it
+posts to `POST {orchestrator_url}/api/v1/webhooks/eda/<path>` with a
+service account bearer token. The paths are `orchestrator_paths.capacity`
+and `orchestrator_paths.replication` in the vars file, and the contract is
+in `docs/ORCHESTRATOR.md`. The body for the capacity route:
 
 ```json
 {"event": {"schema": "flasharray-eda/1", "event_type": "purefa_capacity",
@@ -67,18 +67,19 @@ account bearer token; for the capacity route:
                     "pending_eradication_snapshots": 40}}}
 ```
 
-The orchestrator passes the body through unwrapped (the trigger's output is
-the request body itself, and the trigger's id is an alias of `trigger`), so
-the nodes read `${trigger.event.array}` and `${trigger.event.data.<field>}`;
-`data` carries the `purefa_capacity` event fields unchanged. The trigger's
-`input_schema` (JSON Schema draft-07) requires the envelope keys and the
-array-name pattern the playbooks assert on.
+The orchestrator passes the body through unwrapped: the trigger's output
+is the request body itself, and the trigger's id is an alias of `trigger`.
+The nodes read `${trigger.event.array}` and
+`${trigger.event.data.<field>}`; `data` carries the `purefa_capacity` event
+fields unchanged. The trigger's `input_schema` (JSON Schema draft-07)
+requires the envelope keys and the array-name pattern the playbooks assert
+on.
 
 ## Job templates and what they must carry
 
 `job_templates.txt` lists every template name the definitions and the
 platform rulebooks (`extensions/eda/rulebooks/platform/`, generated by
-`tools/platform_rulebooks.py`) launch; `make lint-ao` refuses a definition
+`tools/platform_rulebooks.py`) launch. `make lint-ao` refuses a definition
 that names anything else, and the unit tests check that every listed name
 is used by one or the other. The nodes pass only what comes from the event,
 the form or an earlier node; everything site-specific is set on the job
@@ -104,41 +105,47 @@ The protect-now playbook acts on every local protection group of the
 array, so its form has no protection-group input.
 
 `request_dir` should be a path that outlives a job and is shared by the
-request and reclaim templates (a host directory exposed to isolated jobs
-and the same instance group, see aap/README.md, "Paths inside the
-execution environment"); the execution environment's /tmp that
-`aap/vars/example.yml` defaults to is discarded when the request job ends,
-up to 24 hours before the reclaim job starts. The reclaim node therefore
-also passes `array` and `candidates` (the request job's artifacts), and
-`capacity_reclaim.yml` rebuilds the request from them when the file is not
-there, so the approval still eradicates exactly what the request listed; a
-shared `request_dir` keeps the request and its outcome in one file. The
-rebuild happens only when the launch also carries `rebuild_from_artifacts:
-true`, as the node does; a launch without it is refused when the request
-file is absent. Because the rebuild lets a launch name its own candidates,
-execute on **FlashArray - capacity reclaim** must be held only by the
-controller-tier workflow and the orchestrator's AAP credential, never by
-people: a direct launch of that template with execute rights is the right
-to eradicate any object already pending eradication.
+request and reclaim templates: a host directory exposed to isolated jobs
+and the same instance group (aap/README.md, "Paths inside the execution
+environment"). The execution environment's /tmp that `aap/vars/example.yml`
+defaults to is discarded when the request job ends, up to 24 hours before
+the reclaim job starts. The reclaim node also passes `array` and
+`candidates` (the request job's artifacts), and `capacity_reclaim.yml`
+rebuilds the request from them when the file is not there, so the approval
+eradicates exactly what the request listed; a shared `request_dir` keeps
+the request and its outcome in one file. The rebuild happens only when the
+launch also carries `rebuild_from_artifacts: true`, as the node does; a
+launch without it is refused when the request file is absent. Because the
+rebuild lets a launch name its own candidates, execute on **FlashArray -
+capacity reclaim** must be held only by the controller-tier workflow and
+the orchestrator's AAP credential, never by people: a direct launch of
+that template with execute rights is the right to eradicate any object
+already pending eradication.
 
 The templates need the inventory of this project (one host per array) and
 array credentials. `aap/seed.yml` attaches the **FlashArray fleet**
-credential to every template (one JSON list of arrays, from which
+credential to every template: one JSON list of arrays, from which
 `playbooks/tasks/resolve_array.yml` picks the target array's `fa_url` and
-`api_token` at run time), and also creates one **FlashArray API**
-credential per array (`FlashArray - <array>`, injecting `fa_url`,
-`api_token` and `credential_array`). The two capacity nodes set
-`credential_names` to `FlashArray - ${trigger.event.array}`, the event's
-own array, and the day-2 job nodes to `FlashArray - ${trigger.array}`, the
-array the form asked for (the node resolves the names in the organization
-at launch): a per-array credential on the launch takes precedence over the
-fleet, and the playbooks refuse to run when `credential_array` is not the
-array they were asked to act on. The DR failover test nodes set
-`credential_names` to `FlashArray - ${trigger.target_array}`, the DR-side
-array the form asked for, and the replicate-now node to
-`FlashArray - ${trigger.event.array}`; only the DR-drill node, which acts
-on every replication target, uses what its template carries. Pick a
-specific array's credential on a node the same way.
+`api_token` at run time. It also creates one **FlashArray API** credential
+per array (`FlashArray - <array>`, injecting `fa_url`, `api_token` and
+`credential_array`). A per-array credential on the launch takes precedence
+over the fleet, and the playbooks refuse to run when `credential_array` is
+not the array they were asked to act on. A node resolves `credential_names`
+in the organization at launch, after interpolation, so an expression picks
+the array's own credential:
+
+- the two capacity nodes set `credential_names` to
+  `FlashArray - ${trigger.event.array}`, the event's own array;
+- the day-2 job nodes set it to `FlashArray - ${trigger.array}`, the array
+  the form asked for;
+- the DR failover test nodes set it to
+  `FlashArray - ${trigger.target_array}`, the DR-side array the form asked
+  for;
+- the replicate-now node sets it to `FlashArray - ${trigger.event.array}`;
+- only the DR-drill node, which acts on every replication target, uses
+  what its template carries.
+
+Pick a specific array's credential on a node the same way.
 
 The condition nodes route on job artifacts, which the playbooks publish
 with `set_stats` so the orchestrator sees them as
@@ -161,13 +168,6 @@ with `set_stats` so the orchestrator sees them as
   `groups_snapshotted`, `groups_failed` and `eradication_delay_days`.
 - **FlashArray - identify LED** publishes `array`, `component`, `led_state`
   (`on` or `off`), `led_changed` and `led_error`.
-- The run-twice flags a node may route on: expand volume `already_at_size`,
-  replicate now and protect now `skipped` (and the suffix that already
-  exists), capacity request `already_raised`, capacity reclaim
-  `already_done` and `nothing_pending`, Alertmanager silence `reused` and
-  `already_expired`, DR drill `skipped_count` (a copy older than
-  `dr_drill_stale_s`, default 1800 s, is removed before the drill as a dead
-  launch's leftover).
 - **FlashArray - replicate now** publishes `array`, `pgroup`, `reason`,
   `snapshot_suffix` and `changed`.
 - **FlashArray - DR promote** and **FlashArray - DR demote** publish
@@ -184,6 +184,13 @@ with `set_stats` so the orchestrator sees them as
   after, `link_direction_after`, `link_status_after`, `undo_demote_eradicated`
   (the undo-demote pods eradicated before the demotion, usually none) and
   `changed`; the failover and failback notifies report them.
+- The run-twice flags a node may route on: expand volume `already_at_size`,
+  replicate now and protect now `skipped` (and the suffix that already
+  exists), capacity request `already_raised`, capacity reclaim
+  `already_done` and `nothing_pending`, Alertmanager silence `reused` and
+  `already_expired`, DR drill `skipped_count` (a copy older than
+  `dr_drill_stale_s`, default 1800 s, is removed before the drill as a dead
+  launch's leftover).
 
 `${<node_id>.job_url}` is the orchestrator's own output for an AAP node
 (the job's URL in automation controller) and is what the notify nodes
@@ -202,39 +209,39 @@ definition is imported:
 
 `organization_name` is `FlashArray`, the organization `aap/seed.yml`
 creates (`aap_organization`); change both together if the templates live
-elsewhere. Approvers are named, not identified: `approver_groups` (and
+elsewhere.
+
+Approvers are named, not identified: `approver_groups` (and
 `approver_users`) take group and user names, so they are not placeholders.
 The shipped definitions name two groups: `admins`, the built-in group every
 instance has, and `approvers`, a group to create for the people who decide
-and for the Slack bot's orchestrator user; the orchestrator resolves the
+and for the Slack bot's orchestrator user. The orchestrator resolves the
 names when it creates an approval, so a named group must exist by then,
 and a service account cannot be an approver, only a user. Change the names
-to the groups that should decide. `decision_window` is 86400
-seconds (24 hours), 3600 for the overdue-replication route; an approval
-nobody decides within it expires.
+to the groups that should decide.
+
+`decision_window` is 86400 seconds (24 hours), 3600 for the
+overdue-replication route; an approval nobody decides within it expires.
 `fallback_decision` (`approve` or `reject`) names the port an expired
-approval takes; the shipped definitions leave it unset, so an approval
-nobody decides within the window is recorded as expired (decided by the
-orchestrator's worker, note "Approval decision window expired") and the
-execution fails at the approval node with neither port taken, which is
-the right outcome for an action nobody asked for, and a silent one: the
-orchestrator tells nobody. `slack/approval_bot.py` makes it loud, with
-reminders at half and ninety percent of the window, a critical message in
-the channel and a critical notify record when the approval expires
-(slack/README.md). `fallback_decision`
-is accepted by the schema and ignored by the engine of this release: with
-`reject` set and a one-minute window, a throwaway copy expired the same
-way and its rejected branch was skipped, so the field stays out of the
-shipped definitions.
+approval takes. The schema accepts the field and the engine of the 2026.8
+release ignores it (docs/VERIFICATION.md), so the shipped definitions
+leave it unset. An approval nobody decides within the window is recorded
+as expired (decided by the orchestrator's worker, note "Approval decision
+window expired") and the execution fails at the approval node with
+neither port taken. That is the right outcome for an action nobody asked
+for, and a silent one: the orchestrator tells nobody.
+`slack/approval_bot.py` makes it loud, with reminders at half and ninety
+percent of the window, a critical message in the channel and a critical
+notify record when the approval expires (slack/README.md).
 
 ## Importing
 
 The orchestrator stores a workflow as numbered versions; webhook, EDA and
-scheduled runs use the published one, so an import is a create followed by
-a publish, and a change is a publish that carries the new definition, which
-the orchestrator stores as the next version (a PATCH on a version changes
-only its name and description). `tools/ao_sync.py` does all of that for
-every definition in this directory (standard library only, Python 3.9+):
+scheduled runs use the published one. An import is a create followed by a
+publish. A change is a publish that carries the new definition, which the
+orchestrator stores as the next version (a PATCH on a version changes only
+its name and description). `tools/ao_sync.py` does all of that for every
+definition in this directory (standard library only, Python 3.9+):
 
 ```
 export AO_CLIENT_ID=nx_sa_... AO_CLIENT_SECRET=...
@@ -247,34 +254,44 @@ python tools/ao_sync.py --url https://orchestrator.example.com \
 It authenticates as the service account in `AO_CLIENT_ID` and
 `AO_CLIENT_SECRET` (`POST /api/v1/auth/token`, `grant_type=client_credentials`,
 15 minute lifetime, not refreshable; read from the environment only, never
-from the command line, never printed or written to disk), resolves the
+from the command line, never printed or written to disk). It resolves the
 project (`--project`, default `default`) and the names that fill the
-placeholders (`--aap-credential` and `--aap-integration` go on every
-`aap_job_template` and `aap_workflow_job_template` node whose `credential_id`
-is `REPLACE_AT_SYNC`, as `credential_id` and `integration_id`;
-`--service-account` fills the EDA trigger's `authorized_service_account_ids`),
-and stops before writing anything when the token, the project or a name does
-not resolve; a placeholder still left after substitution fails its
-definition. Each definition is then validated by the orchestrator
-(`POST /api/v1/workflows/validate`; an invalid one is reported with its
-findings and not imported), created when the project has no workflow of its
-name (`POST /api/v1/workflows`), updated when the exported current version
-differs (`POST /api/v1/workflows/{id}/versions/{version}/publish` with the
-new definition and `expected_version` in the body, which the orchestrator
-stores and publishes as the next version; no PATCH is sent), left alone
-when it is equal, and published (the same call with an empty body) after a
-create or when the current version has never been published. It prints
-one line per definition (`created`, `updated` or `unchanged`, and the
-published version) and `extra: <name>` for each workflow of the project that
-no file defines; `--dry-run` validates and reports the decisions without
-writing; `--check` does the same and exits 1 when any definition would be
-created, updated or published, so a CI job or a schedule can say that the
-live orchestrator has drifted from the files; `--only FILE`, with every file still on the command line, writes one definition without making the others
-extras; the exit status is 1 when anything failed. Publishing a scheduled
-trigger is what creates its schedule; unpublishing deletes it.
-`GET /api/v1/workflows/{id}/versions/{version}/export` and the UI's export
-button return the same JSON this directory holds, so a change made on the
-canvas can be exported and committed here.
+placeholders: `--aap-credential` and `--aap-integration` go on every
+`aap_job_template` and `aap_workflow_job_template` node whose
+`credential_id` is `REPLACE_AT_SYNC`, as `credential_id` and
+`integration_id`; `--service-account` fills the EDA trigger's
+`authorized_service_account_ids`. It stops before writing anything when
+the token, the project or a name does not resolve, and a placeholder still
+left after substitution fails its definition. Each definition is then:
+
+- validated by the orchestrator (`POST /api/v1/workflows/validate`; an
+  invalid one is reported with its findings and not imported);
+- created when the project has no workflow of its name
+  (`POST /api/v1/workflows`);
+- updated when the exported current version differs
+  (`POST /api/v1/workflows/{id}/versions/{version}/publish` with the new
+  definition and `expected_version` in the body, which the orchestrator
+  stores and publishes as the next version; no PATCH is sent);
+- left alone when it is equal;
+- published (the same call with an empty body) after a create or when the
+  current version has never been published.
+
+It prints one line per definition (`created`, `updated` or `unchanged`,
+and the published version) and `extra: <name>` for each workflow of the
+project that no file defines. The exit status is 1 when anything failed.
+The options:
+
+- `--dry-run` validates and reports the decisions without writing;
+- `--check` does the same and exits 1 when any definition would be
+  created, updated or published, so a CI job or a schedule can say that
+  the live orchestrator has drifted from the files;
+- `--only FILE`, with every file still on the command line, writes one
+  definition without making the others extras.
+
+Publishing a scheduled trigger is what creates its schedule; unpublishing
+deletes it. `GET /api/v1/workflows/{id}/versions/{version}/export` and the
+UI's export button return the same JSON this directory holds, so a change
+made on the canvas can be exported and committed here.
 
 A sync from this directory **never deletes**: it creates the workflows
 that are missing, updates by name the ones that exist, substitutes the
@@ -290,54 +307,65 @@ python tools/ao_lint.py orchestrator/*.json --allowed-templates orchestrator/job
 ```
 
 It needs nothing but the standard library and prints one line per problem
-as `file:node:rule:message`. The rules: `schema_version` is `2.0.0`; the
-top-level keys are present; ids match `^[a-zA-Z_][a-zA-Z0-9_]*$` and are
-unique across triggers and nodes; only the known trigger and node types;
-every edge has `from`/`to` (plus `from_port`, `to_port`) naming existing
-ids and never ending at a trigger; every trigger and node of a type with a
-known parameter schema carries only the parameters that schema lists
-(`parameter_keys`: the orchestrator refuses an unknown key), a scheduled
-trigger has `schedule_type` and the matching `cron` or `interval`, a webhook
-or EDA trigger its `webhook_path` and `authorized_service_account_ids`; an
-approval node
-lists approvers and has `approved` and `rejected` edges to different nodes;
-a condition node has an expression and `true` and `false` edges; a switch
-has a `default_port` and complete cases; a loop node has `iterate` and
-`complete` edges and its body returns to it over an edge with `to_port:
-iterate`, the one back edge allowed (`loop_ports`); a converge node has at
-least two incoming edges and any other node at most one, a loop's return
-aside; no other cycle; at most 200
-nodes, 500 edges and 1.5 MB; every
-`aap_job_template` or `aap_workflow_job_template` node has
-`organization_name`, a `credential_id` and its template
-(`job_template_name` or `job_template_id`; `workflow_job_template_name` or
-`workflow_job_template_id`), a name being one from the allowed list when
-that is given; every agentic node has `credential_id` and `prompt`; no
-`http_request` to a bare IP address; every `${name...}` expression names a
-node, a trigger id (an alias of `trigger`) or one of the `trigger`,
-`workflow_context` and `loop` namespaces, and a
-node it names runs before the referencing node (not on a parallel branch
-or later); every `${trigger...}` reads what the trigger exposes
-(`trigger_ref`: a top-level key of the body for a webhook or EDA trigger
-and a property of the `input_schema` for a manual trigger, anything when the
-trigger declares no `input_schema`; `scheduled_at` or `triggered_at` for a
-scheduled trigger);
-every node has an incoming edge (`unreachable`); `from_port` appears only
-on edges leaving an approval, condition, switch or loop node; and every
-condition and switch-case expression, with each `${...}` replaced by a
-name, parses into the safe evaluator's operators only (`==`, `!=`, `>`,
-`<`, `>=`, `<=`, `and`, `or`, `not`, `in`, names and literals; no `&&`,
-arithmetic or function calls).
+as `file:node:rule:message`. The rules:
+
+- `schema_version` is `2.0.0` and the top-level keys are present;
+- ids match `^[a-zA-Z_][a-zA-Z0-9_]*$` and are unique across triggers and
+  nodes; only the known trigger and node types;
+- every edge has `from`/`to` (plus `from_port`, `to_port`) naming existing
+  ids and never ending at a trigger;
+- every trigger and node of a type with a known parameter schema carries
+  only the parameters that schema lists (`parameter_keys`: the
+  orchestrator refuses an unknown key);
+- a scheduled trigger has `schedule_type` and the matching `cron` or
+  `interval`; a webhook or EDA trigger has its `webhook_path` and
+  `authorized_service_account_ids`;
+- an approval node lists approvers and has `approved` and `rejected` edges
+  to different nodes; a condition node has an expression and `true` and
+  `false` edges; a switch has a `default_port` and complete cases;
+- a loop node has `iterate` and `complete` edges and its body returns to
+  it over an edge with `to_port: iterate`, the one back edge allowed
+  (`loop_ports`); a converge node has at least two incoming edges and any
+  other node at most one, a loop's return aside; no other cycle;
+- at most 200 nodes, 500 edges and 1.5 MB;
+- every `aap_job_template` or `aap_workflow_job_template` node has
+  `organization_name`, a `credential_id` and its template
+  (`job_template_name` or `job_template_id`; `workflow_job_template_name`
+  or `workflow_job_template_id`), a name being one from the allowed list
+  when that is given; every agentic node has `credential_id` and `prompt`;
+  no `http_request` to a bare IP address;
+- every `${name...}` expression names a node, a trigger id (an alias of
+  `trigger`) or one of the `trigger`, `workflow_context` and `loop`
+  namespaces, and a node it names runs before the referencing node (not on
+  a parallel branch or later);
+- every `${trigger...}` reads what the trigger exposes (`trigger_ref`: a
+  top-level key of the body for a webhook or EDA trigger and a property of
+  the `input_schema` for a manual trigger, anything when the trigger
+  declares no `input_schema`; `scheduled_at` or `triggered_at` for a
+  scheduled trigger);
+- every node has an incoming edge (`unreachable`); `from_port` appears only
+  on edges leaving an approval, condition, switch or loop node;
+- every condition and switch-case expression, with each `${...}` replaced
+  by a name, parses into the safe evaluator's operators only (`==`, `!=`,
+  `>`, `<`, `>=`, `<=`, `and`, `or`, `not`, `in`, names and literals; no
+  `&&`, arithmetic or function calls).
 
 ## Checked against a live instance
 
 Contract facts read from the node schemas and the engine of the upstream
-code at the tag Red Hat ships as the 2026.8 release (API 1.3.1); the
-sections above follow them:
+code at the tag Red Hat ships as the 2026.8 release (API 1.3.1). The
+sections above follow them; the runs that confirm them are in
+docs/ORCHESTRATOR.md, "Verified against a live orchestrator", and
+docs/VERIFICATION.md.
 
 - A webhook or EDA body is passed through unwrapped: the trigger's output
   is the request body, read as `${trigger.<top-level key>}`, and the
   trigger's id is registered as a second name for the same output.
+- A full-span `${...}` expression keeps its type: `candidate_targets` and
+  `top_growers` reach the playbook as lists, `used_pct` as a float.
+  `credential_names` is interpolated before the names are resolved, so
+  `FlashArray - ${trigger.event.array}` selects the event array's
+  credential.
 - Approval nodes take `approver_groups` and `approver_users` (names),
   `prompt`, `decision_window` (seconds) and `fallback_decision`; their
   ports are `approved` and `rejected`, and the decision recorded is one of
@@ -374,31 +402,36 @@ sections above follow them:
   `approval:decide` and still cannot decide, so the Slack bot's
   orchestrator identity is a user in a group the nodes name.
 - A launch the platform answers with a 503 may still have created the
-  job: the gateway timed out after the controller had accepted one, the
-  node retried and launched the template again, and the execution
-  recorded the second job. A playbook behind an AAP node must be safe to
-  run twice, and every template here is: a second launch with the same
-  extra vars leaves the array as it is, reports changed false and says so
-  in its record and artifacts. The switchover leaves a side already where
-  it should be (and waits for a pod mid-change to settle before judging);
-  expand volume treats a volume already at the size as done
-  (`already_at_size`); replicate now and protect now read the newest eda
-  snapshot first and request nothing inside their cooldown (`skipped`);
-  the capacity request is keyed on `request_key` and reuses a request
-  already awaiting approval (`already_raised`); the reclaim accepts a
-  request already done with the same action (`already_done`); the
-  Alertmanager silence reuses an active silence of its own (`reused`) and
-  expires one only while it is active (`already_expired`); the DR drill
-  names its copy for the launch and leaves a drill in flight alone
-  (`skipped`); `orchestrator_post.yml` lists the executions still open and,
-  when one carries the same event type for the same array and scope (the
-  protection group, volume, pod or component the event names), records
-  `pending` with that execution's id instead of posting again. `notify`
-  and the ticket record are a message per launch by design (the record
-  carries a `ticket_key` a backend can deduplicate on).
-  `tests/e2e_run_twice.sh` launches the ones it covers twice on real arrays
-  (expand, replicate now, protect now, capacity request and reclaim, the
-  Alertmanager silence and, opted in, the switchover);
+  job: the gateway times out after the controller has accepted one, the
+  node retries and launches the template again, and the execution records
+  the second job. A playbook behind an AAP node must be safe to run twice,
+  and every template here is: a second launch with the same extra vars
+  leaves the array as it is, reports changed false and says so in its
+  record and artifacts. The guards:
+  - the switchover leaves a side already where it should be (and waits for
+    a pod mid-change to settle before judging);
+  - expand volume treats a volume already at the size as done
+    (`already_at_size`);
+  - replicate now and protect now read the newest eda snapshot first and
+    request nothing inside their cooldown (`skipped`);
+  - the capacity request is keyed on `request_key` and reuses a request
+    already awaiting approval (`already_raised`);
+  - the reclaim accepts a request already done with the same action
+    (`already_done`);
+  - the Alertmanager silence reuses an active silence of its own
+    (`reused`) and expires one only while it is active (`already_expired`);
+  - the DR drill names its copy for the launch and leaves a drill in
+    flight alone (`skipped`);
+  - `orchestrator_post.yml` lists the executions still open and, when one
+    carries the same event type for the same array and scope (the
+    protection group, volume, pod or component the event names), records
+    `pending` with that execution's id instead of posting again.
+
+  `notify` and the ticket record are a message per launch by design (the
+  record carries a `ticket_key` a backend can deduplicate on).
+  `tests/e2e_run_twice.sh` launches the ones it covers twice on real
+  arrays (expand, replicate now, protect now, capacity request and
+  reclaim, the Alertmanager silence and, opted in, the switchover);
   `tests/unit/test_playbook_idempotent.py` pins the guards of the rest.
 - `GET /api/v1/approvals?status=pending` lists the approvals waiting
   (`id`, `execution_id`, `node_name`, `prompt`); `PATCH
@@ -411,19 +444,9 @@ sections above follow them:
   answers `status` `expired`, `decided_by` the worker and the note, which
   is how the bot tells an expiry from a decision made in the UI.
 
-Verified with a run of the capacity workflow (docs/ORCHESTRATOR.md,
-"Verified against a live orchestrator"): a full-span `${...}` expression
-keeps its type (`candidate_targets` and `top_growers` reach the playbook
-as lists, `used_pct` as a float); `credential_names` is interpolated
-before the names are resolved, so `FlashArray - ${trigger.event.array}`
-selects the event array's credential; artifacts and `job_url` surface as
-described; the condition takes its `true` port; the approval node pauses
-the execution for the `admins` group, and its `approved` port runs the
-reclaim with the request rebuilt from artifacts.
-
-Loop wiring, read from the validator of the same code (no shipped
-definition uses a loop yet): the body hangs off the loop node's `iterate`
-port and returns to it over an edge with `to_port: iterate`, which the
-orchestrator treats as the feedback edge; `complete` continues after the
-last iteration. A `for_each` loop takes `items`, a `do_while` loop
-`condition`, both `max_iterations`.
+No shipped definition uses a loop. Loop wiring, from the validator of the
+same code: the body hangs off the loop node's `iterate` port and returns
+to it over an edge with `to_port: iterate`, which the orchestrator treats
+as the feedback edge; `complete` continues after the last iteration. A
+`for_each` loop takes `items`, a `do_while` loop `condition`, both
+`max_iterations`.

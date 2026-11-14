@@ -6,20 +6,21 @@ the bridge playbook, its mock and its tests. The workflow definitions that
 consume the events are orchestrator/capacity_reclaim_approval.json and
 orchestrator/replication_overdue_approval.json (orchestrator/README.md).
 
-Verified: the bridge runs against `tests/mock_orchestrator.py` from the
+The contract follows the upstream Syntara documentation and the 1.3.1
+API. The bridge is tested against `tests/mock_orchestrator.py`, from the
 unit test and from ansible-rulebook 1.3.2 replaying one event through the
 real capacity rules (`tests/replay_capacity.yml`), and end to end against
 the upstream orchestrator code at the tag Red Hat ships as the 2026.8
 release (API 1.3.1): token, post, 202, workflow execution, approval and
 reclaim, and the replication route through its approval to the replicated
-snapshot ("Verified against a live orchestrator" below). The contract
-comes from the upstream Syntara documentation and the 1.3.1 API; what no
-run has exercised is listed under "Limitations".
+snapshot ("Verified against a live orchestrator" below;
+docs/VERIFICATION.md is the dated ledger). What no run has exercised is
+listed under "Limitations".
 
 Availability: Red Hat ships the automation orchestrator as an add-on to
 Ansible Automation Platform 2.7 for OpenShift-based deployments only. No
-timeline is published for the containerized (non-OpenShift) topology,
-and the one configuration-as-code collection that targets its API (1.3.1)
+timeline is published for the containerized (non-OpenShift) topology.
+The one configuration-as-code collection that targets its API (1.3.1)
 describes that API as a technology preview that may change.
 
 ## What moves, what stays
@@ -27,10 +28,9 @@ describes that API as a technology preview that may change.
 Two rules move: capacity at risk, and a protection group whose replication
 is overdue or stuck (an approval then gates the immediate replicated
 snapshot, `orchestrator/replication_overdue_approval.json`). Everything
-else stays in EDA:
-polling, the gates (`maintenance_active`, `automation_users`, the per-site
-switches), the throttles, notifications, the QoS cap and the replication
-actions.
+else stays in EDA: polling, the gates (`maintenance_active`,
+`automation_users`, the per-site switches), the throttles, notifications,
+the QoS cap and the replication actions.
 
 `orchestrator_enabled` (vars) is the switch:
 
@@ -49,21 +49,22 @@ actions.
 
 The switch is a literal in the rule's condition (`vars.orchestrator_enabled
 == true` / `== false`), because rulebook conditions take no filters or
-defaults; a `vars/local-<site>.yml` must carry the key, as
+defaults. A `vars/local-<site>.yml` must carry the key, as
 `vars/example.yml` does.
 
 The capacity rule has a 24 hour per-array throttle, the replication rule
 one hour per array and protection group. A handoff that fails (the
 orchestrator is down, the token is refused, the service account is not
 bound) is recorded as a warning and is not retried until the throttle
-window has passed; nothing is written locally in that case unless
+window has passed. Nothing is written locally in that case unless
 `orchestrator_fallback_local` is on. Watch the alert log for
-`orchestrator_post` records with `severity: warning`. An approval the
-orchestrator is waiting for is decided in its UI, or from Slack through
-`slack/approval_bot.py`, which lists the pending approvals
+`orchestrator_post` records with `severity: warning`.
+
+An approval the orchestrator is waiting for is decided in its UI, or from
+Slack through `slack/approval_bot.py`. The bot lists the pending approvals
 (`GET /api/v1/approvals?status=pending`) and decides one with
 `PATCH /api/v1/approvals/{id}` (`status`, and `decision_notes` naming the
-Slack user); the decision is recorded under the bot's own orchestrator
+Slack user). The decision is recorded under the bot's own orchestrator
 identity (slack/README.md).
 
 ## The contract
@@ -143,8 +144,7 @@ reads `${trigger.event.array}`, `${trigger.event.data.used_pct}` and so on
 The body must stay under the orchestrator's 1 MB limit. The playbook
 measures `to_json` output and refuses anything over 1000000 bytes without
 a request (`stage: size_check`, `status: null`). A capacity event is a few
-hundred bytes; the limit matters only if a future route forwards large
-lists.
+hundred bytes.
 
 The replication route sends the same envelope with `event_type`
 `purefa_pg_replication` and the replication signal's fields in `data`:
@@ -173,9 +173,9 @@ environment; the definition files use the placeholder `REPLACE_AT_SYNC`:
 }
 ```
 
-The shipped trigger also carries an `input_schema` that requires the
-envelope keys (`schema`, `event_type`, `array`, `maintenance_active`,
-`observed_at`, `data`) and the array-name pattern the playbooks assert on.
+The trigger carries an `input_schema` that requires the envelope keys
+(`schema`, `event_type`, `array`, `maintenance_active`, `observed_at`,
+`data`) and the array-name pattern the playbooks assert on.
 
 A webhook trigger and an EDA trigger may share a path; the EDA endpoint is
 `/api/v1/webhooks/eda/<path>`, the plain webhook `/api/v1/webhooks/<path>`.
@@ -201,8 +201,8 @@ second post).
 
 Environment (`env.example`): `AO_CLIENT_ID` and `AO_CLIENT_SECRET`, the
 client credentials of an orchestrator service account. The playbook reads
-them with `lookup('env')`; `run.sh` also forwards them to ansible-rulebook
-with `--env-vars` when they are set, like `APPROVAL_TOKEN`. They never sit
+them with `lookup('env')`; `run.sh` forwards them to ansible-rulebook with
+`--env-vars` when they are set, as it does `APPROVAL_TOKEN`. They never sit
 in a vars file. Without them the playbook fails with a message naming
 both variables and sends nothing.
 
@@ -224,8 +224,8 @@ extra var (aap/README.md). On a containerized platform a job's execution
 environment reaches an orchestrator on the same host only as
 `https://host.containers.internal:<port>`; the host's own address and
 loopback both point back at the container. That is the URL the credential
-carries. Verified with the capacity activation handing a live event over
-(VERIFICATION.md, "Exercised on a platform").
+carries. The capacity activation handing a live event over is recorded in
+docs/VERIFICATION.md ("Exercised on a platform").
 
 ## The alert-log record
 
@@ -284,8 +284,8 @@ a vars file with `orchestrator_enabled: true` and the mock's URL, run the
 replay). Expected: one `orchestrator_post` record with status 202 and the
 envelope as one line in the record file.
 
-`tests/unit/test_orchestrator_bridge.py` does the same without a shell:
-it serves the mock in a thread on a free port, checks the mock's own
+`tests/unit/test_orchestrator_bridge.py` does the same without a shell.
+It serves the mock in a thread on a free port, checks the mock's own
 answers (200, 401, 403, 413, 202), then runs the playbook with
 `ansible-playbook` for the accepted case, a wrong secret, an unbound path,
 an unreachable orchestrator (a closed port; recorded as `status: -1`), an
@@ -312,19 +312,20 @@ about ten seconds.
 
 ## Verified against a live orchestrator
 
-Exercised end to end on the upstream orchestrator code at the tag Red Hat
-ships as the 2026.8 release (API 1.3.1), run from its own compose file
-beside the containerized platform of aap/README.md, with one array as the
-at-risk array and a second in `others`:
+The end-to-end run uses the upstream orchestrator code at the tag Red Hat
+ships as the 2026.8 release (API 1.3.1), from its own compose file beside
+the containerized platform of aap/README.md, with one array as the
+at-risk array and a second in `others`. docs/VERIFICATION.md carries the
+dated entry. What each stage does:
 
 - **Setup through `/api/v1`.** A service account with one client
-  credential (`AO_CLIENT_ID` is its identifier; the secret is shown once);
-  an `Ansible Automation Platform` credential (platform admin, basic auth)
+  credential (`AO_CLIENT_ID` is its identifier; the secret is shown once).
+  An `Ansible Automation Platform` credential (platform admin, basic auth)
   and an `ansible_automation_platform` integration that validates
-  `success`, through which `GET /api/v1/proxies/aap/job_templates` lists
-  the FlashArray templates and the array credentials of aap/seed.yml;
-  `orchestrator/capacity_reclaim_approval.json` with its two placeholders
-  substituted passes `POST /api/v1/workflows/validate` with no findings,
+  `success`; through it `GET /api/v1/proxies/aap/job_templates` lists the
+  FlashArray templates and the array credentials of aap/seed.yml.
+  `orchestrator/capacity_reclaim_approval.json`, with its two placeholders
+  substituted, passes `POST /api/v1/workflows/validate` with no findings,
   is created as version 1 and published.
 - **The bridge.** `playbooks/orchestrator_post.yml` with `AO_CLIENT_ID`
   and `AO_CLIENT_SECRET` in the environment and a `purefa_capacity` event:
@@ -336,39 +337,38 @@ at-risk array and a second in `others`:
   launches with `credential_names` interpolated to
   `FlashArray - <event array>` and resolved by name in the organization,
   and with its extra_vars typed as sent (`candidate_targets` and
-  `top_growers` lists, `used_pct` a float, the byte counts integers); its
+  `top_growers` lists, `used_pct` a float, the byte counts integers). Its
   `set_stats` surface as `${capacity_request.artifacts.*}` (`request_id`,
   `at_risk_array`, `candidate_count`, `candidates`) and its job URL as
-  `job_url`; the condition evaluates `true`; **FlashArray - notify** runs;
-  the approval node creates an approval for the `admins` group carrying
-  the prompt from the definition and pauses the execution
+  `job_url`. The condition evaluates `true`, **FlashArray - notify** runs,
+  and the approval node creates an approval for the `admins` group
+  carrying the prompt from the definition and pauses the execution
   (`approval_pending: true`, `status: paused`).
 - **After approval.** Granted in the orchestrator UI (the approval record
   carries `decision: approved`, who decided and when), the execution
-  resumes on its own: **FlashArray - capacity reclaim** runs with the
+  resumes on its own. **FlashArray - capacity reclaim** runs with the
   event array's credential and the request rebuilt from the job artifacts
   (`rebuilt_from: job artifacts`; `candidates` arrives as a dict and
-  `rebuild_from_artifacts` as a boolean); candidates that are members of a
+  `rebuild_from_artifacts` as a boolean). Candidates that are members of a
   protection group snapshot are refused by the array and nothing is
   eradicated (`result: refused`); the rejected-branch notify is skipped and
   the execution completes. This is the outcome the controller-tier
   workflow of aap/README.md reaches through its own approval node.
 - **The replication route.** `orchestrator/replication_overdue_approval.json`
-  imported and published the same way; the bridge posts an overdue event
-  for the protection group replicating between the two arrays (202, an
-  execution); the execution notifies, pauses at its one-hour approval, and
-  on approval **FlashArray - replicate now** runs with the event array's
-  credential, creates the immediate replicated snapshot and publishes
-  `pgroup`, `snapshot_suffix` and `changed`, which the closing notify
-  reads. A definition that reads an artifact the job did not publish fails
-  at that node at run time, not at validation, which is why the unit tests
-  cross-check artifacts against `set_stats` and why a corrected definition
-  is published as the next version with the definition in the publish body.
-  One execution's approval was given from Slack through
-  `slack/approval_bot.py` and is recorded with the Slack user in its
-  decision notes; another, which nobody decided within the hour, expired
-  and failed the execution at the approval node (orchestrator/README.md,
-  "Placeholders").
+  is imported and published the same way. The bridge posts an overdue
+  event for the protection group replicating between the two arrays (202,
+  an execution); the execution notifies, pauses at its one-hour approval,
+  and on approval **FlashArray - replicate now** runs with the event
+  array's credential, creates the immediate replicated snapshot and
+  publishes `pgroup`, `snapshot_suffix` and `changed`, which the closing
+  notify reads. A definition that reads an artifact the job does not
+  publish fails at that node at run time, not at validation; the unit
+  tests therefore cross-check artifacts against `set_stats`, and a
+  corrected definition is published as the next version with the
+  definition in the publish body. An approval decided from Slack through
+  `slack/approval_bot.py` is recorded with the Slack user in its decision
+  notes; an approval nobody decides within the hour expires and fails the
+  execution at the approval node (orchestrator/README.md, "Placeholders").
 
 ### Running the upstream compose beside a containerized platform
 
