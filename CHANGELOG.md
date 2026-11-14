@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The seed's enabled-flag enforcement touches FlashArray activations
+  only. The EDA API ignores the name filter on its activation list and
+  returns every activation on the platform, so the loop that enables or
+  disables now picks ours out by name; on a platform shared with another
+  project the old loop set that project's activations too (seen live from
+  the other direction: another project's seed disabled all ten of ours,
+  and the nightly definitions check reported it two hours later).
+
 ## 0.4.0 (2026-11-14)
 
 The platform now runs the loop's housekeeping on schedules (the nightly DR

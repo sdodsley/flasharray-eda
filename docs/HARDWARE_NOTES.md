@@ -346,6 +346,13 @@ are written around; [aap/README.md](../aap/README.md) has the longer form.
   restart policy tries again, each attempt holding a slot. While the host
   is that busy the gateway answers API calls with 502, 503 and also 403,
   so a tool that reads the platform retries all three.
+- The EDA API's activation list honours an exact `name=` and nothing
+  else: `name__startswith`, `name__istartswith` and `search` all return
+  every activation on the platform, so a loop that enables, disables or
+  deletes "our" activations has to pick them out by name itself. Seen
+  live on a platform shared with another project: that project's seed,
+  enforcing its enabled flag over the unfiltered list, disabled every
+  FlashArray activation, and ours would have done the same to its.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under

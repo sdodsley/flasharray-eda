@@ -783,6 +783,10 @@
       register: all_activations
       no_log: true
 
+    # The EDA API ignores name__startswith (and search) on the activation
+    # list and returns every activation on the platform, so the loop picks
+    # the FlashArray ones out by name: on a platform shared with another
+    # project, an unfiltered loop sets that project's activations too.
     - name: Enforce the enabled flag on every FlashArray activation
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/eda/v1/activations/{{ item.id }}/{{ 'enable' if aap_eda_activations_enabled | bool else 'disable' }}/"
@@ -791,7 +795,7 @@
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         status_code: [200, 202, 204]
-      loop: "{{ all_activations.json.results }}"
+      loop: "{{ all_activations.json.results | selectattr('name', 'match', '^FlashArray rulebook - ') | list }}"
       loop_control:
         label: "{{ item.name }}"
         # ten activations starting in the same second contend for the EDA

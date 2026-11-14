@@ -560,6 +560,43 @@ def test_fleet_credential_type_files_parse_and_match(repo_root):
     assert eda == {"extra_vars": {"purefa_arrays": "{{ arrays }}"}}
 
 
+def _find_task(tasks, name):
+    for task in tasks:
+        if task.get("name") == name:
+            return task
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                found = _find_task(task[key], name)
+                if found:
+                    return found
+    return None
+
+
+def test_seed_enforces_the_enabled_flag_on_flasharray_activations_only(repo_root):
+    """The EDA API ignores name__startswith on the activation list and returns
+    every activation on the platform, so the loop that enables or disables
+    picks the FlashArray ones out by name; another project's seed with an
+    unfiltered loop disabled all ten of ours."""
+    play = _seed(repo_root)[0]
+    task = _find_task(
+        play["tasks"], "Enforce the enabled flag on every FlashArray activation"
+    )
+    assert task is not None
+    loop = task["loop"]
+    match = re.search(r"selectattr\('name', 'match', '([^']+)'\)", loop)
+    assert match, loop
+    pattern = re.compile(match.group(1))
+    names = [
+        "FlashArray rulebook - alerts",
+        "Other rulebook - alerts",
+        "FlashArray rulebook - performance",
+    ]
+    assert [n for n in names if pattern.match(n)] == [
+        "FlashArray rulebook - alerts",
+        "FlashArray rulebook - performance",
+    ]
+
+
 def test_every_rulebook_gets_an_activation_name(repo_root):
     """The seed derives activation names from the rulebook files; every file
     must be a plain name that survives the template."""
