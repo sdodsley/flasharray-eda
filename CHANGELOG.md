@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-11-14)
+
+A maintenance release. The seed's enabled-flag enforcement acts on
+FlashArray activations only, which matters on a platform shared with
+another project, and the documentation describes the tree as it stands
+instead of the order it was built in, with the changelog contracted to
+match.
+
+Upgrading from 0.4.0: sync the controller project and run `aap/seed.yml`
+again; nothing else changes.
 
 - The seed enforces the enabled flag on FlashArray activations only. The
   EDA API ignores the name filter on its activation list, so the seed picks
