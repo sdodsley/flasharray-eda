@@ -1,6 +1,46 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-11-14)
+
+The platform now runs the loop's housekeeping on schedules (the nightly DR
+drill, the weekly notification-path self check, the nightly definitions
+drift check), the Slack approval bot remembers its cards across restarts,
+says how each approval ended, reminds the channel and expires what nobody
+decided, and can serve a second project on its own channel; planned work no
+longer pages; the loop pages when its own polls keep failing and audits its
+activations against the seed; an alert's whole lifecycle is modelled; the
+playbooks behind the templates can be run twice; and the QoS cap knows
+about volume groups. Verified against the two Purity//FA 6.10.6 arrays and
+Ansible Automation Platform 2.7 with the automation orchestrator;
+[docs/VERIFICATION.md](docs/VERIFICATION.md) has the ledger.
+
+Upgrading from 0.3.1, in this order. Sync both platform projects (the seed
+syncs a project only when it creates it): the controller project before the
+seed runs again, because three new templates name playbooks only the new
+revision holds, and the EDA project before any activation is recreated.
+Rebuild the decision environment and get it into the store the activation
+workers use (`make de`, then push and pull, or `podman save | podman
+--remote load` with `aap_eda_de_pull_policy: never`; aap/README.md, "Images
+on a containerized platform"): the event source plugin changed and the
+platform rulebooks read fields only the new one emits, so on the old image
+the noisy-neighbour cap rule never matches and nothing says so. Run
+`aap/seed.yml` again: it adds the three templates, the platform token
+credential and the three schedules from the new `aap_*_schedule` vars; a
+site that seeds the orchestrator credential now names
+`aap_orchestrator_aap_credential`, `aap_orchestrator_aap_integration` and
+`aap_orchestrator_service_account` in its vars file (the names it already
+passes to `tools/ao_sync.py`) or disables `aap_definitions_check_schedule`,
+or the seed refuses to run before creating anything. Then publish the four
+changed orchestrator definitions with `tools/ao_sync.py` (the
+failover-and-failback workflow launches the new silence template); the
+nightly definitions check fails until this is done. Then
+`tools/activation_audit.py --recreate`: an activation keeps the rulebook
+and extra vars it was created with, and `vars/example.yml` gained
+`qos_cap_scope` and `alert_runbooks_by_type`, so the audit reports all ten
+activations drifted and recreates all ten. Finally recreate the bot
+container with a writable `STATE_DIR` volume (slack/README.md); its
+platform token user also needs execute on `FlashArray - notify`, or the
+record of an expired approval is only a warning in the bot's log.
 
 - The QoS cap knows about volume groups. The array refuses a volume limit
   on a member of a group that has its own (the two are exclusive), which is
