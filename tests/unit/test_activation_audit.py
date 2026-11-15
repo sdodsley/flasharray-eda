@@ -159,6 +159,14 @@ class Handler(BaseHTTPRequestHandler):
             if store.list_503:
                 store.list_503 -= 1
                 return self._send(503, {"detail": "gateway"})
+            if store.list_403:
+                store.list_403 -= 1
+                return self._send(403, {"detail": "forbidden"})
+            if store.list_drop:
+                # the gateway closes the connection without an answer
+                store.list_drop -= 1
+                self.close_connection = True
+                return
             return self._send(
                 200,
                 {
@@ -278,6 +286,8 @@ class Store:
         self.truncate_400 = 0  # creates refused 400 with the body cut short
         self.ghost_html = 0  # creates carried out but answered with an HTML page
         self.list_503 = 0  # activations lists answered 503
+        self.list_403 = 0  # activations lists answered 403 (the gateway under load)
+        self.list_drop = 0  # activations lists whose connection is dropped
         self.list_503_after_delete = 0  # ... armed by the next delete
         self.detail_503 = 0  # activation details answered 503
         self.detail_503_after_create = 0  # ... armed by the next create
@@ -393,6 +403,63 @@ def test_recreate_touches_only_the_drifted_and_keeps_the_enabled_flag(
     assert "3 activation(s), 1 wrong" in out.err
 
 
+def test_list_rides_out_a_long_gateway_outage(audit, store, files, capsys, monkeypatch):
+    """The gateway answers 5xx and 403 for minutes while the platform is busy
+    and sometimes drops the connection; a read is retried for two minutes
+    rather than the handful of seconds a nightly check cannot afford to
+    fail on."""
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [_activation(7, "FlashArray rulebook - alerts", good)]
+    store.list_503 = 9
+    store.list_403 = 3
+    store.list_drop = 2
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(audit.time, "sleep", lambda s: None)
+    code = audit.main(["--url", store.url, *files])
+    out = capsys.readouterr()
+    assert code == 0
+    assert "1 activation(s), 0 wrong" in out.err
+    lists = [c for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
+    assert len(lists) == 15  # 14 transient answers, then the page
+    assert all("page_size=20" in c[1] for c in lists)
+
+
+def test_list_gives_up_after_the_retry_budget(audit, store, files, capsys, monkeypatch):
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [_activation(7, "FlashArray rulebook - alerts", good)]
+    store.list_503 = 1000
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(audit.time, "sleep", lambda s: None)
+    code = audit.main(["--url", store.url, *files])
+    out = capsys.readouterr()
+    assert code == 1
+    assert "HTTP 503" in out.err
+    lists = [c for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
+    assert len(lists) == audit.RETRY_ATTEMPTS
+
+
+def test_recreate_enable_creates_the_new_activation_enabled(
+    audit, store, files, capsys, monkeypatch
+):
+    """After another project's sweep disabled the activations, --recreate
+    alone would faithfully recreate them disabled; --enable says the new one
+    runs."""
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [
+        _activation(
+            8,
+            "FlashArray rulebook - capacity",
+            dict(good, alerts_interval=30),
+            enabled=False,
+        ),
+    ]
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(audit.time, "sleep", lambda s: None)
+    code = audit.main(["--url", store.url, *files, "--recreate", "--enable"])
+    assert code == 0
+    assert len(store.created) == 1 and store.created[0]["is_enabled"] is True
+
+
 def _run_recreate(audit, store, files, monkeypatch):
     # a clock that only sleeps move, so every deadline in the tool is reached
     # in one pass and a loop that should have stopped fails fast
@@ -443,13 +510,13 @@ def test_recreate_finds_the_create_the_gateway_kept_answering_errors_to(
             8, "FlashArray rulebook - capacity", dict(good, alerts_interval=30)
         ),
     ]
-    # the client's first four attempts are answered 503 and do nothing; the
-    # fifth is carried out and answered 503 as well, so the client gives up
-    store.answer_503 = 4
+    # the client's attempts but the last are answered 503 and do nothing; the
+    # last is carried out and answered 503 as well, so the client gives up
+    store.answer_503 = audit.RETRY_ATTEMPTS - 1
     store.ghost_create = 1
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
-    assert len(_posts(store)) == 5  # looked up by name, not posted again
+    assert len(_posts(store)) == audit.RETRY_ATTEMPTS  # then looked up by name
     assert len(store.created) == 1
     assert "had gone through as id 101" in out.out
     assert code == 0
@@ -595,7 +662,9 @@ def test_recreate_waits_out_a_list_error_after_the_delete(
         ),
         _activation(9, "FlashArray rulebook - health", dict(good, alerts_interval=31)),
     ]
-    store.list_503_after_delete = 5  # the client's five attempts all fail once
+    store.list_503_after_delete = (
+        audit.RETRY_ATTEMPTS + 2
+    )  # one whole read fails, the next read rides out the rest
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert "could not read the activations list" in out.out
@@ -617,7 +686,7 @@ def test_recreate_says_so_when_the_list_stays_unreadable_after_the_delete(
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert store.created == []
-    assert "the activations list could not be read for 120 s" in out.err
+    assert "the activations list could not be read for 300 s" in out.err
     assert "still listed" not in out.err
     assert "check whether id 8 is gone, then run aap/seed.yml" in out.err
     assert code == 1
@@ -652,7 +721,7 @@ def test_recreate_waits_out_a_detail_error_after_the_create(
         ),
         _activation(9, "FlashArray rulebook - health", dict(good, alerts_interval=31)),
     ]
-    store.detail_503_after_create = 5
+    store.detail_503_after_create = audit.RETRY_ATTEMPTS + 2  # one whole read fails
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert "could not read FlashArray rulebook - capacity (id 101)" in out.out

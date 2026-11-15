@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `tools/activation_audit.py` rides out a busy gateway: transient answers
+  (5xx, 403, a dropped connection on a read) are retried for two minutes
+  instead of seconds, the activation list is read in pages of twenty, the
+  wait for the list after a delete lasts the name-release window, and
+  `--recreate --enable` creates the new activation enabled whatever flag
+  the old one carried. The nightly definitions check no longer fails on a
+  single 500 from the gateway.
+
 ## 0.4.1 (2026-11-14)
 
 A maintenance release. The seed's enabled-flag enforcement acts on

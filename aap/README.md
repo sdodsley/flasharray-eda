@@ -385,7 +385,7 @@ activation with what the seed would render today:
 ```
 export AAP_TOKEN=...            # a platform token with EDA read (and write for --recreate)
 python tools/activation_audit.py --url https://<gateway> --vars vars/<site>.yml \
-    [--organization FlashArray] [--allow KEY]... [--recreate] [--insecure] [--json]
+    [--organization FlashArray] [--allow KEY]... [--recreate [--enable]] [--insecure] [--json]
 ```
 
 It prints one line per activation: `ok`, or the keys whose values differ,
@@ -399,9 +399,13 @@ disabled and the audit exits 1 until they are enabled.
 
 `--recreate` deletes each activation whose vars differ from the expected
 ones and creates it again with those vars and the same project, rulebook,
-decision environment, credentials, policies and enabled flag, waiting for
-it to run (a create the gateway answers with an error but the controller
-carried out is found by name and kept). A placeholder-only, disabled or
+decision environment, credentials, policies and enabled flag (`--enable`
+creates it enabled whatever flag the old one carried, for the activations
+a sweep switched off), waiting for it to run (a create the gateway answers
+with an error but the controller carried out is found by name and kept).
+The gateway's transient answers (5xx, 403, a dropped connection on a
+read) are retried for two minutes, and the activation list is read in
+pages of twenty. A placeholder-only, disabled or
 stopped activation is reported, not recreated, and nothing is recreated
 while the expected vars themselves still carry a placeholder (fix the site
 file first). Each delete and create is printed as it happens, old id and

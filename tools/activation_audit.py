@@ -70,6 +70,16 @@ ENV_TOKEN = "AAP_TOKEN"
 ENV_URL = ("AAP_HOSTNAME", "CONTROLLER_HOST")
 ENV_VERIFY = ("AAP_VALIDATE_CERTS", "CONTROLLER_VERIFY_SSL")
 TIMEOUT_SECONDS = 60
+# the gateway answers 500, 502, 503, 504 and also 403 while the platform is
+# busy, for minutes at a time; a read is retried for this long before the
+# audit gives up (a write is retried on those answers too, a dropped
+# connection only on a read, whose repeat is harmless)
+RETRY_ATTEMPTS = 24
+RETRY_PAUSE_SECONDS = 5
+TRANSIENT_STATUS = (403, 500, 502, 503, 504)
+# the activation list in small pages: one large page outlives the
+# gateway's worker timeout on a busy platform
+LIST_PAGE_SIZE = 20
 DELETE_WAIT_SECONDS = 120
 NAME_WAIT_SECONDS = 300
 NAME_TAKEN = "activation with this name already exists"
@@ -194,7 +204,8 @@ class Client:
             self.context.check_hostname = False
             self.context.verify_mode = ssl.CERT_NONE
 
-    def request(self, method, path, body=None, retries=5):
+    def request(self, method, path, body=None, retries=None):
+        retries = RETRY_ATTEMPTS if retries is None else retries
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
             self.base + path,
@@ -213,8 +224,8 @@ class Client:
                     raw = response.read()
                     status = response.status
             except urllib.error.HTTPError as exc:
-                if exc.code in (500, 502, 503, 504) and attempt + 1 < retries:
-                    time.sleep(3)
+                if exc.code in TRANSIENT_STATUS and attempt + 1 < retries:
+                    time.sleep(RETRY_PAUSE_SECONDS)
                     continue
                 try:
                     detail = exc.read()[:300].decode(errors="replace")
@@ -222,6 +233,9 @@ class Client:
                     detail = BODY_UNREADABLE
                 raise AuditError(f"{method} {path}: HTTP {exc.code} {detail}") from None
             except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+                if method == "GET" and attempt + 1 < retries:
+                    time.sleep(RETRY_PAUSE_SECONDS)
+                    continue
                 raise AuditError(f"{method} {path}: {exc}") from None
             if not raw:
                 return status, None
@@ -233,6 +247,9 @@ class Client:
                     f"{raw[:100]!r}"
                 ) from None
         raise AuditError(f"{method} {path}: gave up after {retries} attempts")
+
+    def list_activations(self):
+        return self.list_all(f"/api/eda/v1/activations/?page_size={LIST_PAGE_SIZE}")
 
     def list_all(self, path):
         items = []
@@ -261,9 +278,10 @@ def orchestrator_attached(detail):
     )
 
 
-def recreate(client, detail, extra_var_text, say, wait_seconds=360):
+def recreate(client, detail, extra_var_text, say, wait_seconds=360, enabled=None):
     """Delete the activation and create it again with new extra vars and the
-    same everything else, saying what happens as it happens; returns the new
+    same everything else (the enabled flag too, unless `enabled` says
+    otherwise), saying what happens as it happens; returns the new
     activation's id and status."""
     old_id = detail["id"]
     name = detail["name"]
@@ -280,7 +298,9 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
         ],
         "restart_policy": detail.get("restart_policy") or "on-failure",
         "log_level": detail.get("log_level") or "error",
-        "is_enabled": bool(detail.get("is_enabled", True)),
+        "is_enabled": (
+            bool(detail.get("is_enabled", True)) if enabled is None else bool(enabled)
+        ),
     }
     missing = [
         k
@@ -305,24 +325,31 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
         # its retry is then refused (404, or 409 while deleting): the list decides
         delete_note = f" (the delete was answered {str(exc)[-100:]})"
         say(f"the delete of {name} was answered {str(exc)[-100:]}; watching the list")
-    deadline = time.monotonic() + DELETE_WAIT_SECONDS
+    # the list decides whether the delete went through; while the gateway
+    # cannot be read the wait lasts the name-release window, so a busy
+    # platform does not leave the activation deleted and not recreated
+    started = time.monotonic()
     list_error = None
-    while time.monotonic() < deadline:
+    gone = False
+    while time.monotonic() - started < (
+        NAME_WAIT_SECONDS if list_error else DELETE_WAIT_SECONDS
+    ):
         time.sleep(5)
         try:
-            listed = client.list_all("/api/eda/v1/activations/?page_size=200")
+            listed = client.list_activations()
         except AuditError as exc:
             list_error = exc
             say(f"could not read the activations list ({exc}); trying again")
             continue
         list_error = None
         if not any(a.get("id") == old_id for a in listed):
+            gone = True
             break
-    else:
+    if not gone:
         if list_error is not None:
             raise AuditError(
                 f"{name}: the activations list could not be read for "
-                f"{DELETE_WAIT_SECONDS} s after the delete ({list_error})"
+                f"{NAME_WAIT_SECONDS} s after the delete ({list_error})"
                 f"{delete_note}; check whether id {old_id} is gone, then run "
                 "aap/seed.yml to create it again"
             )
@@ -350,7 +377,7 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
         try:
             same_name = [
                 a
-                for a in client.list_all("/api/eda/v1/activations/?page_size=200")
+                for a in client.list_activations()
                 if a.get("name") == name and a.get("id") != old_id
             ]
             if same_name:
@@ -471,6 +498,12 @@ def main(argv=None):
         help="delete and recreate every activation whose vars differ from the expected ones",
     )
     parser.add_argument(
+        "--enable",
+        action="store_true",
+        help="with --recreate, create the new activation enabled whatever flag the "
+        "old one carried (after a sweep disabled it)",
+    )
+    parser.add_argument(
         "--insecure",
         action="store_true",
         help="do not verify the TLS certificate (default: AAP_VALIDATE_CERTS or "
@@ -501,7 +534,7 @@ def main(argv=None):
     try:
         activations = [
             a
-            for a in client.list_all("/api/eda/v1/activations/?page_size=200")
+            for a in client.list_activations()
             if str(a.get("name", "")).startswith(PREFIX)
         ]
         if not activations:
@@ -544,7 +577,9 @@ def main(argv=None):
                     text = yaml.safe_dump(
                         expected, default_flow_style=False, sort_keys=False
                     )
-                    new_id, state = recreate(client, detail, text, say)
+                    new_id, state = recreate(
+                        client, detail, text, say, enabled=True if args.enable else None
+                    )
                     entry["recreated"] = {
                         "old_id": detail["id"],
                         "new_id": new_id,
