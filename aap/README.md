@@ -451,7 +451,9 @@ does and does not change:
 - Every run sets `aap_eda_activations_enabled` on every FlashArray
   activation (and on those only: the EDA API ignores the name filter on
   its activation list, so the seed picks them out by name), so a site whose
-  activations are running keeps the key true in its vars file.
+  activations are running keeps the key true in its vars file. The seed
+  reads the activation list in one page of 200 and refuses to continue
+  when the controller reports more pages.
 - The two projects are synced when the seed creates them and not on later
   runs, and the job templates do not update the project on launch. After a
   push, sync the controller project (and the EDA project, before recreating

@@ -597,6 +597,35 @@ def test_seed_enforces_the_enabled_flag_on_flasharray_activations_only(repo_root
     ]
 
 
+def test_seed_refuses_an_activation_list_it_did_not_read_whole(repo_root):
+    """The seed reads the activation list in one page and never follows the
+    controller's next link; rather than miss activations past the page and
+    create duplicates, it refuses to go on when more pages exist, before
+    creating and before enforcing the enabled flag."""
+    play = _seed(repo_root)[0]
+    guards = [
+        task
+        for task in _all_tasks(play["tasks"])
+        if str(task.get("name", "")).startswith(
+            "Refuse an activation list with more pages than the seed reads"
+        )
+    ]
+    assert len(guards) == 2
+    checks = {guard["ansible.builtin.assert"]["that"][0] for guard in guards}
+    assert checks == {
+        "existing_activations.json.next is none",
+        "all_activations.json.next is none",
+    }
+
+
+def _all_tasks(tasks):
+    for task in tasks:
+        yield task
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                yield from _all_tasks(task[key])
+
+
 def test_every_rulebook_gets_an_activation_name(repo_root):
     """The seed derives activation names from the rulebook files; every file
     must be a plain name that survives the template."""

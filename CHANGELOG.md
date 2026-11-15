@@ -9,6 +9,9 @@
   `--recreate --enable` creates the new activation enabled whatever flag
   the old one carried. The nightly definitions check no longer fails on a
   single 500 from the gateway.
+- The seed refuses to go on when the activation list it read has more
+  pages than it fetched, instead of missing activations and creating
+  duplicates on a platform with more than one page of them.
 
 ## 0.4.1 (2026-11-14)
 

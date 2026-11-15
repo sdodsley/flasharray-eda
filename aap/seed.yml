@@ -754,6 +754,17 @@
       register: existing_activations
       no_log: true
 
+    - name: Refuse an activation list with more pages than the seed reads (before creating)
+      ansible.builtin.assert:
+        that:
+          - existing_activations.json.next is none
+        fail_msg: >-
+          the controller lists more activations than one page of 200 holds;
+          the seed reads one page, so raise the page size in aap/seed.yml or
+          remove activations that are no longer needed, or it would miss some
+          and create duplicates
+        quiet: true
+
     # The EDA controller names a rulebook by its path relative to the
     # project's extensions/eda/rulebooks directory, hence platform/<file>.
     - name: One rulebook activation per platform rulebook
@@ -782,6 +793,17 @@
         return_content: true
       register: all_activations
       no_log: true
+
+    - name: Refuse an activation list with more pages than the seed reads (before enforcing the flag)
+      ansible.builtin.assert:
+        that:
+          - all_activations.json.next is none
+        fail_msg: >-
+          the controller lists more activations than one page of 200 holds;
+          the seed reads one page, so raise the page size in aap/seed.yml or
+          remove activations that are no longer needed, or it would miss some
+          and create duplicates
+        quiet: true
 
     # The EDA API ignores name__startswith (and search) on the activation
     # list and returns every activation on the platform, so the loop picks
