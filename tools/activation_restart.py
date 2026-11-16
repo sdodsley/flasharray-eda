@@ -55,32 +55,61 @@ def wait_for_api(client, minutes, say):
         time.sleep(POLL_SECONDS)
 
 
-def restart_one(client, activation, minutes, attempts, say):
-    """Restart one activation and wait for it to run; a start that fails (the
-    websocket proxy not ready yet) is tried again up to `attempts` times."""
-    aid, name = activation["id"], activation["name"]
-    for attempt in range(1, attempts + 1):
-        say(f"restarting {name} (id {aid}, attempt {attempt} of {attempts})")
-        client.request("POST", f"/api/eda/v1/activations/{aid}/restart/", {})
-        deadline = time.monotonic() + minutes * 60
-        state = None
-        while time.monotonic() < deadline:
-            time.sleep(POLL_SECONDS)
-            try:
-                status, detail = client.request(
-                    "GET", f"/api/eda/v1/activations/{aid}/"
-                )
-            except AuditError as exc:
-                say(f"could not read {name} ({str(exc)[-80:]}); still waiting")
-                continue
-            state = detail.get("status") if isinstance(detail, dict) else state
-            if state == "running":
-                return True
-            if state in ("failed", "stopped", "error"):
+STARTING = ("starting", "pending", "workers offline")
+GRACE_SECONDS = 60
+
+
+def wait_running(client, aid, name, minutes, say, before=None):
+    """Wait for the activation to run. Returns "running", "ended" (it reached a
+    final state that is the result of this attempt) or "timeout". With
+    `before` (the restart count seen before a POST), a final state is only
+    taken as this attempt's result once the count has moved on, or after the
+    grace period, so a stale read right after the POST does not count."""
+    deadline = time.monotonic() + minutes * 60
+    started = time.monotonic()
+    while time.monotonic() < deadline:
+        time.sleep(POLL_SECONDS)
+        try:
+            status, detail = client.request("GET", f"/api/eda/v1/activations/{aid}/")
+        except AuditError as exc:
+            say(f"could not read {name} ({str(exc)[-80:]}); still waiting")
+            continue
+        if not isinstance(detail, dict):
+            continue
+        state = detail.get("status")
+        if state == "running":
+            return "running"
+        if state in ("failed", "stopped", "error"):
+            moved = before is None or detail.get("restart_count") != before
+            if moved or time.monotonic() - started >= GRACE_SECONDS:
                 say(
                     f"{name} ended {state}: {(detail.get('status_message') or '')[:100]}"
                 )
-                break
+                return "ended"
+    return "timeout"
+
+
+def restart_one(client, activation, minutes, attempts, say):
+    """Bring one activation to running: wait for one that is already starting;
+    otherwise restart it and wait, trying again up to `attempts` times when
+    the start fails (the websocket proxy not ready yet)."""
+    aid, name = activation["id"], activation["name"]
+    if activation.get("status") in STARTING:
+        say(f"{name} (id {aid}) is {activation.get('status')}; waiting for it")
+        if wait_running(client, aid, name, minutes, say) == "running":
+            return True
+    for attempt in range(1, attempts + 1):
+        say(f"restarting {name} (id {aid}, attempt {attempt} of {attempts})")
+        before = activation.get("restart_count")
+        try:
+            status, detail = client.request("GET", f"/api/eda/v1/activations/{aid}/")
+            if isinstance(detail, dict):
+                before = detail.get("restart_count", before)
+        except AuditError:
+            pass
+        client.request("POST", f"/api/eda/v1/activations/{aid}/restart/", {})
+        if wait_running(client, aid, name, minutes, say, before=before) == "running":
+            return True
     return False
 
 

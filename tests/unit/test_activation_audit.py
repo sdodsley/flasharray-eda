@@ -199,6 +199,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"results": rows, "next": None})
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
+                pending = a.get("_pending")
+                if pending:
+                    outcome, lag = pending
+                    if lag > 0:
+                        a["_pending"] = (outcome, lag - 1)
+                    else:
+                        a.pop("_pending")
+                        a["status"] = outcome
+                        a["restart_count"] = a.get("restart_count", 0) + 1
+                        if outcome == "failed":
+                            a["status_message"] = (
+                                "server rejected WebSocket connection: HTTP 502"
+                            )
+                if a.get("_starting_polls"):
+                    a["_starting_polls"] -= 1
+                    if a["_starting_polls"] == 0:
+                        a["status"] = "running"
                 if store.detail_503:
                     store.detail_503 -= 1
                     return self._send(503, {"detail": "gateway"})
@@ -279,14 +296,14 @@ class Handler(BaseHTTPRequestHandler):
                         and aid not in store.restart_failed_once
                     ):
                         store.restart_failed_once.add(aid)
-                        a["status"] = "failed"
-                        a["status_message"] = (
-                            "server rejected WebSocket connection: HTTP 502"
-                        )
+                        outcome = "failed"
                     elif aid in store.restart_never:
-                        a["status"] = "failed"
+                        outcome = "failed"
                     else:
-                        a["status"] = "running"
+                        outcome = "running"
+                    # the worker picks the restart up a little later: the next
+                    # `restart_lag` reads still show the old state and count
+                    a["_pending"] = (outcome, store.restart_lag)
                     return self._send(204, {})
             return self._send(404, {"detail": "not found"})
         self._send(404, {"detail": "not found"})
@@ -338,6 +355,7 @@ class Store:
         self.restart_fail_first = False  # a restart leaves the activation failed once
         self.restart_failed_once = set()
         self.restart_never = set()  # ids whose restart never comes up
+        self.restart_lag = 0  # reads after a restart that still show the old state
         self.url = None
 
 
@@ -946,6 +964,38 @@ def test_restart_tries_again_when_the_start_meets_the_proxy_too_early(
     assert code == 0
     assert store.restarts == [8, 8]
     assert "WebSocket" in out.out
+    assert "0 running, 1 restarted, 0 failed" in out.err
+
+
+def test_restart_is_not_fooled_by_a_stale_read_after_the_post(
+    restart_tool, store, capsys, monkeypatch
+):
+    """Right after the POST the activation can still read as failed with the
+    old restart count; the attempt is judged only once the count moves."""
+    store.activations = [
+        _activation(8, "FlashArray rulebook - capacity", {}, status="failed"),
+    ]
+    store.activations[0]["restart_count"] = 5
+    store.restart_lag = 3
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    out = capsys.readouterr()
+    assert code == 0
+    assert store.restarts == [8]  # one POST, not one per stale read
+    assert "0 running, 1 restarted, 0 failed" in out.err
+
+
+def test_restart_waits_for_an_activation_already_starting(
+    restart_tool, store, capsys, monkeypatch
+):
+    store.activations = [
+        _activation(8, "FlashArray rulebook - capacity", {}, status="starting"),
+    ]
+    store.activations[0]["_starting_polls"] = 2
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    out = capsys.readouterr()
+    assert code == 0
+    assert store.restarts == []  # waited, never posted
+    assert "is starting; waiting for it" in out.out
     assert "0 running, 1 restarted, 0 failed" in out.err
 
 
