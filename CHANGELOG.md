@@ -13,6 +13,11 @@
   the old one carried, and `--retry-minutes` sets the budget. The nightly
   definitions check passes ten minutes (`definitions_check_retry_minutes`),
   so another job's load on the platform at the same hour does not fail it.
+- `tools/activation_restart.py` waits for the EDA API after a host reboot
+  and restarts, one at a time, every FlashArray activation that is not
+  running, since the platform leaves an instance at its restart ceiling
+  failed and its early restarts race the websocket proxy; aap/README.md
+  shows the user unit that runs it at boot.
 - slack/README.md says how a rootless host applies the bot container's
   restart policy after a reboot (`podman-restart.service`); without it the
   bot, and anything else run the same way, stays exited.

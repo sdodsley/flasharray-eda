@@ -474,6 +474,35 @@ does and does not change:
   `tools/ao_sync.py` after the seed; the nightly definitions check names
   the files until it has run.
 
+## After a host reboot
+
+The platform's services come back through their systemd user units, but
+the activations need help: the activation worker marks an instance that
+had already reached its restart ceiling as failed and does not restart
+it, and the restarts it does attempt can meet the websocket proxy before
+it is ready and fail as well. `tools/activation_restart.py` waits for the
+EDA API (`--wait-minutes`, default 10), then reads each activation named
+for a platform rulebook file and restarts every one that is not running,
+waiting for each to run before the next (`--restart-minutes`, default 6,
+`--attempts`, default 3), so the host sees no start storm; it reads the
+platform as the audit does (`AAP_HOSTNAME`, `AAP_TOKEN`,
+`AAP_VALIDATE_CERTS`, or `--url` and `--insecure`) and exits 1 when an
+activation would not start. A user unit ordered after the EDA and gateway
+units runs it at boot:
+
+    [Unit]
+    After=automation-eda-api.service automation-eda-daphne.service
+    After=automation-eda-activation-worker-1.service automation-gateway-proxy.service
+    [Service]
+    Type=oneshot
+    Environment=AAP_HOSTNAME=<the gateway, as aap_hostname in the seed vars> AAP_VALIDATE_CERTS=false
+    ExecStart=/bin/bash -c 'AAP_TOKEN="$(cat %h/.config/aap/aap_token)" exec python3 %h/work/flasharray-eda/tools/activation_restart.py --wait-minutes 15'
+    [Install]
+    WantedBy=default.target
+
+The token is read from its file when the unit runs and never stored in
+the unit.
+
 ## Verified on a platform
 
 The seed and the controller-tier workflow are exercised on Ansible

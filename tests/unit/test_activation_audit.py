@@ -18,11 +18,22 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "activation_audit.py"
+RESTART_TOOL = ROOT / "tools" / "activation_restart.py"
 
 
 @pytest.fixture(scope="module")
 def audit():
     spec = importlib.util.spec_from_file_location("activation_audit", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+def restart_tool():
+    """tools/activation_restart.py imports activation_audit from its own
+    directory; both modules share one `time`, which the tests patch."""
+    spec = importlib.util.spec_from_file_location("activation_restart", RESTART_TOOL)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -156,6 +167,11 @@ class Handler(BaseHTTPRequestHandler):
         store.calls.append(("GET", self.path))
         if self.headers.get("Authorization") != "Bearer tok":
             return self._send(401, {"detail": "no"})
+        if self.path == "/api/eda/v1/status/":
+            if store.status_503:
+                store.status_503 -= 1
+                return self._send(503, {"detail": "starting"})
+            return self._send(200, {"status": "good"})
         if self.path.startswith("/api/eda/v1/activations/?"):
             if store.list_503:
                 store.list_503 -= 1
@@ -171,7 +187,12 @@ class Handler(BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             wanted = query.get("name", [None])[0]
             rows = [
-                {"id": a["id"], "name": a["name"]}
+                {
+                    "id": a["id"],
+                    "name": a["name"],
+                    "status": a.get("status"),
+                    "is_enabled": a.get("is_enabled"),
+                }
                 for a in store.activations
                 if wanted is None or wanted.lower() in a["name"].lower()  # icontains
             ]
@@ -248,6 +269,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(201, created)
         if self.path.endswith("/disable/"):
             return self._send(204, {})
+        if self.path.endswith("/restart/"):
+            aid = int(self.path.rsplit("/", 3)[-3])
+            for a in store.activations:
+                if a["id"] == aid:
+                    store.restarts.append(aid)
+                    if (
+                        store.restart_fail_first
+                        and aid not in store.restart_failed_once
+                    ):
+                        store.restart_failed_once.add(aid)
+                        a["status"] = "failed"
+                        a["status_message"] = (
+                            "server rejected WebSocket connection: HTTP 502"
+                        )
+                    elif aid in store.restart_never:
+                        a["status"] = "failed"
+                    else:
+                        a["status"] = "running"
+                    return self._send(204, {})
+            return self._send(404, {"detail": "not found"})
         self._send(404, {"detail": "not found"})
 
     def do_DELETE(self):
@@ -292,6 +333,11 @@ class Store:
         self.detail_503 = 0  # activation details answered 503
         self.detail_503_after_create = 0  # ... armed by the next create
         self.detail_empty_ids = set()  # details answered 200 with no body, once
+        self.status_503 = 0  # /status/ answered 503 (the API still starting)
+        self.restarts = []  # ids whose /restart/ was posted
+        self.restart_fail_first = False  # a restart leaves the activation failed once
+        self.restart_failed_once = set()
+        self.restart_never = set()  # ids whose restart never comes up
         self.url = None
 
 
@@ -857,6 +903,88 @@ def test_recreate_refuses_while_the_expected_vars_carry_a_placeholder(
     assert code == 1
     assert [c for c in store.calls if c[0] in ("DELETE", "POST")] == []
     assert "expected vars still carry placeholder orchestrator_url" in out.out
+
+
+def _restart_env(restart_tool, store, monkeypatch):
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(restart_tool.time, "sleep", lambda s: None)
+    monkeypatch.setattr(sys.modules["activation_audit"].time, "sleep", lambda s: None)
+    return ["--url", store.url, "--wait-minutes", "1", "--restart-minutes", "1"]
+
+
+def test_restart_waits_for_the_api_then_restarts_only_what_is_down(
+    restart_tool, store, capsys, monkeypatch
+):
+    """After a reboot the API is not there yet and some activations stay
+    failed at their restart ceiling; the tool waits, then restarts those and
+    only those, one at a time."""
+    good = {"alerts_interval": 60}
+    store.activations = [
+        _activation(7, "FlashArray rulebook - alerts", good),
+        _activation(8, "FlashArray rulebook - capacity", good, status="failed"),
+        _activation(9, "FlashArray rulebook - health", good, status="stopped"),
+    ]
+    store.status_503 = 3
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    out = capsys.readouterr()
+    assert code == 0
+    assert store.restarts == [8, 9]
+    assert "1 running, 2 restarted, 0 failed, 7 not created" in out.err
+    # the three 503s were absorbed by the client's own retries inside one read
+    assert len([c for c in store.calls if c[1] == "/api/eda/v1/status/"]) == 4
+
+
+def test_restart_tries_again_when_the_start_meets_the_proxy_too_early(
+    restart_tool, store, capsys, monkeypatch
+):
+    store.activations = [
+        _activation(8, "FlashArray rulebook - capacity", {}, status="failed"),
+    ]
+    store.restart_fail_first = True
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    out = capsys.readouterr()
+    assert code == 0
+    assert store.restarts == [8, 8]
+    assert "WebSocket" in out.out
+    assert "0 running, 1 restarted, 0 failed" in out.err
+
+
+def test_restart_reports_what_it_could_not_start(
+    restart_tool, store, capsys, monkeypatch
+):
+    store.activations = [
+        _activation(8, "FlashArray rulebook - capacity", {}, status="failed"),
+    ]
+    store.restart_never = {8}
+    code = restart_tool.main(
+        _restart_env(restart_tool, store, monkeypatch) + ["--attempts", "2"]
+    )
+    out = capsys.readouterr()
+    assert code == 1
+    assert store.restarts == [8, 8]
+    assert "1 failed" in out.err and ": FlashArray rulebook - capacity" in out.err
+
+
+def test_restart_gives_up_when_the_api_never_answers(
+    restart_tool, store, capsys, monkeypatch
+):
+    store.status_503 = 100000
+    monkeypatch.setattr(restart_tool.time, "monotonic", _FakeClock().monotonic)
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    assert code == 1
+    assert "did not answer within 1.0 minutes" in capsys.readouterr().err
+    assert store.restarts == []
+
+
+class _FakeClock:
+    """A clock that jumps a minute per reading, so a budget runs out fast."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        self.now += 60.0
+        return self.now
 
 
 def test_cli_refuses_a_rulebooks_dir_without_files(

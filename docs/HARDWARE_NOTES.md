@@ -370,6 +370,18 @@ the deployment.
   upstream for a while, so every reader gets 503s; a `name=` query and a
   single-object read answer in about a second, which is how the seed and
   the audit read activations.
+- After a host reboot the EDA activation worker marks an instance that had
+  already reached its restart ceiling as failed ("exited with code 143 ...
+  has reached the maximum number of restarts, restart policy is not
+  applicable") and does not restart it, and the restarts it does attempt
+  can meet the websocket proxy before it is ready ("server rejected
+  WebSocket connection: HTTP 502") and fail; a restart by id afterwards
+  succeeds. Containers started at boot by the user's units can also lose
+  podman's view of their root mount (`podman inspect` shows no MergedDir,
+  `podman exec --user <name>` fails with "no matching entries in passwd
+  file", a healthcheck that runs as a named user fails) while the
+  containers themselves run; a numeric user or no user works, and
+  `podman mount <container>` restores the view.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under

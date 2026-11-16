@@ -160,6 +160,8 @@ orchestrator/                          workflow definitions for the automation o
                                        (orchestrator/README.md)
 tools/ao_lint.py                       offline linter for those definitions (`make lint-ao`)
 tools/ao_sync.py                       imports the definitions into an orchestrator (orchestrator/README.md, "Importing")
+tools/activation_restart.py            after a host reboot, waits for the EDA API and restarts, one at a time, every
+                                       FlashArray activation that is not running (aap/README.md, "After a host reboot")
 tools/activation_audit.py              checks every FlashArray activation's extra vars against the vars files and,
                                        with --recreate, recreates the drifted ones (aap/README.md, "Checking the activations")
 slack/approval_bot.py                  Slack Socket Mode bot: approval cards with Approve/Reject buttons for the orchestrator
