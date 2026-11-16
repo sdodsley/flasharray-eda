@@ -101,6 +101,12 @@ rootless uid mapping:
       registry.access.redhat.com/ubi9/python-312 \
       sh -c 'pip install -q slack_sdk && python /app/approval_bot.py'
 
+On a rootless host the restart policy is applied after a reboot only by
+the user's `podman-restart.service`: enable it once with
+`systemctl --user enable --now podman-restart.service` (with
+`loginctl enable-linger` for that user), or the container stays
+exited until someone starts it.
+
 `POLL_SECONDS` (default 30) is how often the two approval queues are read.
 A card is posted once per approval. `SLACK_CHANNEL` may be a name: Slack
 accepts it for the post and the bot keeps the channel id the post returns

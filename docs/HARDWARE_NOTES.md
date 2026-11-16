@@ -346,6 +346,14 @@ the deployment.
   restart policy tries again, each attempt holding a slot. While the host
   is that busy the gateway answers API calls with 502, 503 and also 403,
   so a tool that reads the platform retries all three.
+- A rootless container's restart policy (`always`, `unless-stopped`) is
+  applied after a reboot only by the user's `podman-restart.service`
+  (`podman start --all --filter should-start-on-boot=true`); with the
+  service disabled every such container stays exited after a reboot,
+  which is how the approval bot, Prometheus, Alertmanager and the
+  automation orchestrator's own containers were found. The platform's
+  containers have systemd user units of their own and come back without
+  it.
 - The EDA API's activation list honours an exact `name=` and nothing
   else: `name__startswith`, `name__istartswith` and `search` all return
   every activation on the platform, so a loop that enables, disables or

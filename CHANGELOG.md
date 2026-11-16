@@ -10,6 +10,9 @@
   the old one carried, and `--retry-minutes` sets the budget. The nightly
   definitions check passes ten minutes (`definitions_check_retry_minutes`),
   so another job's load on the platform at the same hour does not fail it.
+- slack/README.md says how a rootless host applies the bot container's
+  restart policy after a reboot (`podman-restart.service`); without it the
+  bot, and anything else run the same way, stays exited.
 - The seed refuses to go on when the activation list it read has more
   pages than it fetched, instead of missing activations and creating
   duplicates on a platform with more than one page of them.
