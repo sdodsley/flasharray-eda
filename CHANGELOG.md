@@ -7,8 +7,9 @@
   instead of seconds, the activation list is read in pages of twenty, the
   wait for the list after a delete lasts the name-release window, and
   `--recreate --enable` creates the new activation enabled whatever flag
-  the old one carried. The nightly definitions check no longer fails on a
-  single 500 from the gateway.
+  the old one carried, and `--retry-minutes` sets the budget. The nightly
+  definitions check passes ten minutes (`definitions_check_retry_minutes`),
+  so another job's load on the platform at the same hour does not fail it.
 - The seed refuses to go on when the activation list it read has more
   pages than it fetched, instead of missing activations and creating
   duplicates on a platform with more than one page of them.

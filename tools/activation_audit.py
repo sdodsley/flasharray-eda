@@ -196,8 +196,11 @@ def audit_activation(detail, expected, allow=()):
 
 # ------------------------------------------------------------ the platform
 class Client:
-    def __init__(self, url, token, insecure=False):
+    def __init__(self, url, token, insecure=False, retry_attempts=None):
         self.base = url.rstrip("/")
+        self.retry_attempts = (
+            RETRY_ATTEMPTS if retry_attempts is None else retry_attempts
+        )
         self.token = token
         self.context = ssl.create_default_context()
         if insecure:
@@ -205,7 +208,7 @@ class Client:
             self.context.verify_mode = ssl.CERT_NONE
 
     def request(self, method, path, body=None, retries=None):
-        retries = RETRY_ATTEMPTS if retries is None else retries
+        retries = self.retry_attempts if retries is None else retries
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
             self.base + path,
@@ -509,6 +512,15 @@ def main(argv=None):
         help="do not verify the TLS certificate (default: AAP_VALIDATE_CERTS or "
         "CONTROLLER_VERIFY_SSL false in the environment)",
     )
+    parser.add_argument(
+        "--retry-minutes",
+        type=float,
+        default=RETRY_ATTEMPTS * RETRY_PAUSE_SECONDS / 60,
+        metavar="N",
+        help="how long to keep retrying the gateway's transient answers (5xx, 403, a "
+        "dropped connection on a read) before giving up (default 2; a nightly "
+        "check that must outlast another job's load passes more)",
+    )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
 
@@ -529,7 +541,12 @@ def main(argv=None):
     def say(text):
         print(text, file=sys.stderr if args.json else sys.stdout)
 
-    client = Client(url, token, insecure=insecure)
+    client = Client(
+        url,
+        token,
+        insecure=insecure,
+        retry_attempts=max(1, round(args.retry_minutes * 60 / RETRY_PAUSE_SECONDS)),
+    )
     report = []
     try:
         activations = [

@@ -22,6 +22,9 @@
   gather_facts: false
   vars:
     definitions_check_fail_job: true
+    # how long the activation audit keeps retrying the gateway's transient
+    # answers; a nightly run outlasts another job's load on the platform
+    definitions_check_retry_minutes: 10
     orchestrator_project: default
     orchestrator_aap_credential: ""
     orchestrator_aap_integration: ""
@@ -93,7 +96,8 @@
       ansible.builtin.command:
         argv: >-
           {{ [ansible_playbook_python, tools_dir ~ '/activation_audit.py', '--vars', expected_file.path, '--json',
-              '--organization', activation_organization] }}
+              '--organization', activation_organization,
+              '--retry-minutes', definitions_check_retry_minutes | string] }}
       register: audit_check
       changed_when: false
       failed_when: false

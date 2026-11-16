@@ -438,6 +438,20 @@ def test_list_gives_up_after_the_retry_budget(audit, store, files, capsys, monke
     assert len(lists) == audit.RETRY_ATTEMPTS
 
 
+def test_retry_minutes_sets_the_budget(audit, store, files, capsys, monkeypatch):
+    """The nightly check passes a longer budget than the default two minutes,
+    because another job's load can keep the gateway down for longer."""
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashArray", False)
+    store.activations = [_activation(7, "FlashArray rulebook - alerts", good)]
+    store.list_503 = 1000
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(audit.time, "sleep", lambda s: None)
+    code = audit.main(["--url", store.url, *files, "--retry-minutes", "1"])
+    assert code == 1
+    lists = [c for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
+    assert len(lists) == round(60 / audit.RETRY_PAUSE_SECONDS)
+
+
 def test_recreate_enable_creates_the_new_activation_enabled(
     audit, store, files, capsys, monkeypatch
 ):
