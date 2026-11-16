@@ -354,13 +354,22 @@ the deployment.
   automation orchestrator's own containers were found. The platform's
   containers have systemd user units of their own and come back without
   it.
-- The EDA API's activation list honours an exact `name=` and nothing
-  else: `name__startswith`, `name__istartswith` and `search` all return
-  every activation on the platform, so a loop that enables, disables or
-  deletes "our" activations has to pick them out by name itself. On a
-  platform shared with another project, a seed that enforces its enabled
-  flag over the unfiltered list disables the other project's activations
-  too.
+- The EDA API's activation list declares one name filter, `name=`, and it
+  is a case-insensitive substring match (`django_filters.CharFilter` with
+  `lookup_expr="icontains"` in eda-server's
+  `src/aap_eda/api/filters/activation.py`), not an exact one;
+  `name__startswith`, `name__istartswith` and `search` are undeclared and
+  ignored, so they return every activation on the platform. A reader that
+  asks for a name keeps only the rows named exactly so, and a loop that
+  enables, disables or deletes "our" activations picks them out by name
+  itself. On a platform shared with another project, a seed that enforces
+  its enabled flag over the unfiltered list disables the other project's
+  activations too. The list also takes about ten seconds whatever the
+  page size (no database time: the view's own work, with 25 activations),
+  at the gateway's limit, and a list the gateway times out ejects the API
+  upstream for a while, so every reader gets 503s; a `name=` query and a
+  single-object read answer in about a second, which is how the seed and
+  the audit read activations.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under

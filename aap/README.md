@@ -285,7 +285,7 @@ link into the platform.
   orchestrator credential injects (`aap_orchestrator_project` and the
   `aap_orchestrator_*` names fill the definitions' placeholders); it is
   skipped when that credential is not seeded. `tools/activation_audit.py`
-  compares every `FlashArray rulebook - *` activation's extra vars against
+  compares the extra vars of each activation named for a platform rulebook file (`FlashArray rulebook - <file>`) against
   the site vars the seed read (the site file laid over the example file,
   put on the template as `expected_activation_vars`; the audit renders what
   each activation should carry from them exactly as the seed does), through
@@ -379,8 +379,8 @@ placeholder, with nothing but a warning record in a job to show for it).
 Two checks stop that. The seed refuses to render extra vars whose
 `orchestrator_enabled` is true while `orchestrator_url` is still the
 example placeholder (unless the orchestrator credential injects it), and
-`tools/activation_audit.py` compares every `FlashArray rulebook - *`
-activation with what the seed would render today:
+`tools/activation_audit.py` compares each activation named for a platform
+rulebook file with what the seed would render today:
 
 ```
 export AAP_TOKEN=...            # a platform token with EDA read (and write for --recreate)
@@ -405,8 +405,13 @@ a sweep switched off), waiting for it to run (a create the gateway answers
 with an error but the controller carried out is found by name and kept).
 The gateway's transient answers (5xx, 403, a dropped connection on a
 read) are retried for two minutes (`--retry-minutes` changes that; the
-nightly definitions check passes ten, `definitions_check_retry_minutes`),
-and the activation list is read in pages of twenty. A placeholder-only, disabled or
+nightly definitions check passes ten, `definitions_check_retry_minutes`).
+Each expected activation, one per file in `extensions/eda/rulebooks/platform`
+(`--rulebooks`), is read with a `name=` query (a substring filter the audit
+narrows to the exact name) rather than by listing: the list
+takes ten seconds on a busy platform and a list the gateway times out
+ejects the API for a while. An activation the seed has not created yet is
+named as not created, not counted as wrong. A placeholder-only, disabled or
 stopped activation is reported, not recreated, and nothing is recreated
 while the expected vars themselves still carry a placeholder (fix the site
 file first). Each delete and create is printed as it happens, old id and
@@ -453,8 +458,11 @@ does and does not change:
   activation (and on those only: the EDA API ignores the name filter on
   its activation list, so the seed picks them out by name), so a site whose
   activations are running keeps the key true in its vars file. The seed
-  reads the activation list in one page of 200 and refuses to continue
-  when the controller reports more pages.
+  asks for each expected activation by its full name, one per platform
+  rulebook file, instead of listing them; the API's `name=` filter is a
+  substring match, so the seed keeps the exact match itself. An
+  activation whose rulebook file is gone is left as it is; delete it by
+  hand.
 - The two projects are synced when the seed creates them and not on later
   runs, and the job templates do not update the project on launch. After a
   push, sync the controller project (and the EDA project, before recreating

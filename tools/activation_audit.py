@@ -21,8 +21,10 @@ them from the site vars file laid over vars/example.yml, minus the keys the
 attached credentials inject (purefa_arrays and config_arrays from the fleet
 credential, orchestrator_url from the orchestrator credential when it is
 attached), plus aap_organization. This tool renders the same thing from the
-same files and compares it with every activation named
-"FlashArray rulebook - *": keys that differ, are missing or are extra, values
+same files and compares it with each activation named for a platform
+rulebook file ("FlashArray rulebook - <file>", one per file in
+extensions/eda/rulebooks/platform; --rulebooks names the directory): keys
+that differ, are missing or are extra, values
 that are still example placeholders (example.com, the documentation IP ranges,
 REPLACE_AT_), and activations that are disabled or not running. The exit
 status is 1 when anything is wrong, so a schedule can run it. With
@@ -77,9 +79,13 @@ TIMEOUT_SECONDS = 60
 RETRY_ATTEMPTS = 24
 RETRY_PAUSE_SECONDS = 5
 TRANSIENT_STATUS = (403, 500, 502, 503, 504)
-# the activation list in small pages: one large page outlives the
-# gateway's worker timeout on a busy platform
-LIST_PAGE_SIZE = 20
+# the activation list takes about ten seconds on a platform whatever the
+# page size, at the gateway's limit, and a list the gateway times out
+# ejects the API for a while; a name= query (a case-insensitive substring
+# filter, the only name filter the API declares) answers in a second, so
+# activations are read one by one, by the names the rulebook files imply,
+# and get_by_name keeps the exact match itself
+RULEBOOKS_DIR = ROOT / "extensions" / "eda" / "rulebooks" / "platform"
 DELETE_WAIT_SECONDS = 120
 NAME_WAIT_SECONDS = 300
 NAME_TAKEN = "activation with this name already exists"
@@ -251,8 +257,22 @@ class Client:
                 ) from None
         raise AuditError(f"{method} {path}: gave up after {retries} attempts")
 
-    def list_activations(self):
-        return self.list_all(f"/api/eda/v1/activations/?page_size={LIST_PAGE_SIZE}")
+    def get_by_name(self, name):
+        """The activation of exactly that name, or None. The API's name=
+        filter is a substring match answered in pages, so every page is read
+        and the exact match is kept here."""
+        path = "/api/eda/v1/activations/?name=" + urllib.parse.quote(name)
+        rows = [a for a in self.list_all(path) if a.get("name") == name]
+        return rows[0] if rows else None
+
+    def list_activations(self, names):
+        """The activations among `names` that exist, read one by one."""
+        found = []
+        for name in names:
+            activation = self.get_by_name(name)
+            if activation is not None:
+                found.append(activation)
+        return found
 
     def list_all(self, path):
         items = []
@@ -266,6 +286,13 @@ class Client:
                 nxt = nxt[nxt.index("/api/") :] if "/api/" in nxt else None
             path = nxt
         return items
+
+
+def expected_names(rulebooks_dir):
+    """The activation the seed creates for each platform rulebook file."""
+    return [
+        PREFIX + path.stem for path in sorted(pathlib.Path(rulebooks_dir).glob("*.yml"))
+    ]
 
 
 def _ref(detail, key):
@@ -339,13 +366,13 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360, enabled=None
     ):
         time.sleep(5)
         try:
-            listed = client.list_activations()
+            current = client.get_by_name(name)
         except AuditError as exc:
             list_error = exc
             say(f"could not read the activations list ({exc}); trying again")
             continue
         list_error = None
-        if not any(a.get("id") == old_id for a in listed):
+        if current is None or current.get("id") != old_id:
             gone = True
             break
     if not gone:
@@ -378,14 +405,10 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360, enabled=None
         # "already exists" on the retry): look the name up before deciding.
         found = None
         try:
-            same_name = [
-                a
-                for a in client.list_activations()
-                if a.get("name") == name and a.get("id") != old_id
-            ]
-            if same_name:
+            summary = client.get_by_name(name)
+            if summary is not None and summary.get("id") != old_id:
                 status, found = client.request(
-                    "GET", f"/api/eda/v1/activations/{same_name[0]['id']}/"
+                    "GET", f"/api/eda/v1/activations/{summary['id']}/"
                 )
         except AuditError as exc:
             say(
@@ -462,8 +485,9 @@ def _line(entry):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="activation_audit",
-        description="Compare every FlashArray activation's extra vars with what the seed "
-        "would render; optionally recreate the drifted ones.",
+        description="Compare the extra vars of each activation named for a platform "
+        "rulebook file with what the seed would render; optionally recreate the "
+        "drifted ones.",
     )
     parser.add_argument(
         "--url",
@@ -482,6 +506,13 @@ def main(argv=None):
         default=str(ROOT / "vars" / "example.yml"),
         metavar="FILE",
         help="the example vars file the site file is laid over (default vars/example.yml)",
+    )
+    parser.add_argument(
+        "--rulebooks",
+        default=str(RULEBOOKS_DIR),
+        metavar="DIR",
+        help="the platform rulebooks directory; one activation named for each file "
+        "is read (default extensions/eda/rulebooks/platform)",
     )
     parser.add_argument(
         "--organization",
@@ -536,6 +567,10 @@ def main(argv=None):
         site = yaml.safe_load(pathlib.Path(args.vars).read_text()) or {}
     except (OSError, yaml.YAMLError) as exc:
         parser.error(f"cannot read the vars files: {exc}")
+    names = expected_names(args.rulebooks)
+    if not names:
+        parser.error(f"no *.yml rulebook in {args.rulebooks}; give --rulebooks")
+    absent = []
 
     # progress goes to stdout as it happens, or to stderr when stdout is the JSON report
     def say(text):
@@ -549,11 +584,13 @@ def main(argv=None):
     )
     report = []
     try:
-        activations = [
-            a
-            for a in client.list_activations()
-            if str(a.get("name", "")).startswith(PREFIX)
-        ]
+        activations = client.list_activations(names)
+        absent[:] = [n for n in names if n not in {a.get("name") for a in activations}]
+        if absent:
+            print(
+                "not created (the seed makes them): " + ", ".join(absent),
+                file=sys.stderr,
+            )
         if not activations:
             print(
                 f"activation_audit: no activation named {PREFIX}* found",
@@ -640,6 +677,7 @@ def main(argv=None):
                 )
     print(
         f"activation_audit: {len(report)} activation(s), {wrong} wrong"
+        + (f", {len(absent)} not created" if absent else "")
         + (", drifted ones recreated" if args.recreate else ""),
         file=sys.stderr,
     )

@@ -573,49 +573,50 @@ def _find_task(tasks, name):
 
 
 def test_seed_enforces_the_enabled_flag_on_flasharray_activations_only(repo_root):
-    """The EDA API ignores name__startswith on the activation list and returns
-    every activation on the platform, so the loop that enables or disables
-    picks the FlashArray ones out by name; another project's seed with an
-    unfiltered loop disabled all ten of ours."""
+    """The EDA API's name= filter is a substring match and it honours no other
+    filter, so the loop that enables or disables keeps only the activations
+    named exactly for a platform rulebook file, each once; another project's
+    seed with an unfiltered loop disabled all ten of ours."""
     play = _seed(repo_root)[0]
-    task = _find_task(
-        play["tasks"], "Enforce the enabled flag on every FlashArray activation"
+    tasks = {t.get("name"): t for t in _all_tasks(play["tasks"])}
+    names = tasks["The activation each platform rulebook file names"]
+    expr = names["ansible.builtin.set_fact"]["platform_activation_names"]
+    assert "rulebooks/platform/*.yml" in expr
+    assert "regex_replace', '^', 'FlashArray rulebook - '" in expr
+    loop = tasks["Enforce the enabled flag on every FlashArray activation"]["loop"]
+    assert "selectattr('name', 'in', platform_activation_names)" in loop
+    assert "unique(attribute='id')" in loop
+    assert "'match'" not in loop
+
+
+def test_seed_reads_activations_by_exact_name(repo_root):
+    """The activation list's name= filter is a case-insensitive substring
+    match, the only name filter the API declares, and the list takes ten
+    seconds on a busy platform, so the seed asks for each expected activation
+    by its full name, one per platform rulebook file, keeping the exact match
+    in its own `when`, before creating and before enforcing the enabled flag;
+    the flag loop keeps only the exact names, each once."""
+    play = _seed(repo_root)[0]
+    tasks = {t.get("name"): t for t in _all_tasks(play["tasks"])}
+    for name in ("Activations that already exist", "Activations as they stand"):
+        task = tasks[name]
+        url = task["ansible.builtin.uri"]["url"]
+        assert "?page_size=200&name={{ ('FlashArray rulebook - '" in url
+        assert "| urlencode }}" in url
+        assert "rulebooks/platform/*.yml" in task["loop"]
+    create = tasks["One rulebook activation per platform rulebook"]
+    assert (
+        "existing_activations.results | map(attribute='json.results') | flatten"
+        in create["when"]
     )
-    assert task is not None
-    loop = task["loop"]
-    match = re.search(r"selectattr\('name', 'match', '([^']+)'\)", loop)
-    assert match, loop
-    pattern = re.compile(match.group(1))
-    names = [
-        "FlashArray rulebook - alerts",
-        "Other rulebook - alerts",
-        "FlashArray rulebook - performance",
-    ]
-    assert [n for n in names if pattern.match(n)] == [
-        "FlashArray rulebook - alerts",
-        "FlashArray rulebook - performance",
-    ]
-
-
-def test_seed_refuses_an_activation_list_it_did_not_read_whole(repo_root):
-    """The seed reads the activation list in one page and never follows the
-    controller's next link; rather than miss activations past the page and
-    create duplicates, it refuses to go on when more pages exist, before
-    creating and before enforcing the enabled flag."""
-    play = _seed(repo_root)[0]
-    guards = [
-        task
-        for task in _all_tasks(play["tasks"])
-        if str(task.get("name", "")).startswith(
-            "Refuse an activation list with more pages than the seed reads"
-        )
-    ]
-    assert len(guards) == 2
-    checks = {guard["ansible.builtin.assert"]["that"][0] for guard in guards}
-    assert checks == {
-        "existing_activations.json.next is none",
-        "all_activations.json.next is none",
-    }
+    assert "existing_activations.json" not in create["when"]
+    enforce = tasks["Enforce the enabled flag on every FlashArray activation"]
+    assert "map(attribute='json.results') | flatten" in enforce["loop"]
+    assert (
+        "selectattr('name', 'in', platform_activation_names) | unique(attribute='id')"
+        in enforce["loop"]
+    )
+    assert not [n for n in tasks if str(n).startswith("Refuse an activation list")]
 
 
 def _all_tasks(tasks):

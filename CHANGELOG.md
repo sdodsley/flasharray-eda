@@ -4,7 +4,10 @@
 
 - `tools/activation_audit.py` rides out a busy gateway: transient answers
   (5xx, 403, a dropped connection on a read) are retried for two minutes
-  instead of seconds, the activation list is read in pages of twenty, the
+  instead of seconds, each expected activation is read by its full name
+  instead of listing them all (the list takes ten seconds on a busy
+  platform and a timed-out list ejects the API for a while; the API's
+  `name=` filter is a substring match and the exact name is kept), the
   wait for the list after a delete lasts the name-release window, and
   `--recreate --enable` creates the new activation enabled whatever flag
   the old one carried, and `--retry-minutes` sets the budget. The nightly
@@ -13,9 +16,11 @@
 - slack/README.md says how a rootless host applies the bot container's
   restart policy after a reboot (`podman-restart.service`); without it the
   bot, and anything else run the same way, stays exited.
-- The seed refuses to go on when the activation list it read has more
-  pages than it fetched, instead of missing activations and creating
-  duplicates on a platform with more than one page of them.
+- The seed and the audit ask for each expected activation by its full
+  name, one per platform rulebook file, instead of reading the whole
+  activation list in one page, which was slow and could miss some. An
+  activation whose rulebook file is gone is neither audited nor has its
+  enabled flag set; delete it by hand.
 
 ## 0.4.1 (2026-11-14)
 

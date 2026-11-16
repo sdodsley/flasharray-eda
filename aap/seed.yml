@@ -744,26 +744,28 @@
     # ansible.eda.rulebook_activation cannot update an activation and, in
     # 2.13, creates it enabled whatever `enabled` says; so existing ones are
     # skipped and the enabled flag is enforced through the API afterwards.
+    # The activation list's name= filter is a case-insensitive substring
+    # match (icontains in eda-server's ActivationFilter, the only name filter
+    # the API declares; name__startswith and search are ignored and return
+    # everything) and the list takes about ten seconds on a busy platform,
+    # so the seed asks for each expected activation by its full name and
+    # keeps the exact match itself.
+    - name: The activation each platform rulebook file names
+      ansible.builtin.set_fact:
+        platform_activation_names: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | map('splitext') | map('first') | map('regex_replace', '^', 'FlashArray rulebook - ') | sort }}"
+
     - name: Activations that already exist
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashArray%20rulebook%20-"
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name={{ ('FlashArray rulebook - ' ~ (item | splitext | first)) | urlencode }}"
         headers:
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
       register: existing_activations
+      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | sort }}"
+      loop_control:
+        label: "{{ item }}"
       no_log: true
-
-    - name: Refuse an activation list with more pages than the seed reads (before creating)
-      ansible.builtin.assert:
-        that:
-          - existing_activations.json.next is none
-        fail_msg: >-
-          the controller lists more activations than one page of 200 holds;
-          the seed reads one page, so raise the page size in aap/seed.yml or
-          remove activations that are no longer needed, or it would miss some
-          and create duplicates
-        quiet: true
 
     # The EDA controller names a rulebook by its path relative to the
     # project's extensions/eda/rulebooks directory, hence platform/<file>.
@@ -781,34 +783,28 @@
         restart_policy: "{{ aap_eda_restart_policy }}"
         log_level: "{{ aap_eda_log_level }}"
         state: present
-      when: ('FlashArray rulebook - ' ~ (item | splitext | first)) not in (existing_activations.json.results | map(attribute='name') | list)
+      when: ('FlashArray rulebook - ' ~ (item | splitext | first)) not in (existing_activations.results | map(attribute='json.results') | flatten | map(attribute='name') | list)
       loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | sort }}"
 
     - name: Activations as they stand
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashArray%20rulebook%20-"
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name={{ ('FlashArray rulebook - ' ~ (item | splitext | first)) | urlencode }}"
         headers:
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
       register: all_activations
+      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | sort }}"
+      loop_control:
+        label: "{{ item }}"
       no_log: true
 
-    - name: Refuse an activation list with more pages than the seed reads (before enforcing the flag)
-      ansible.builtin.assert:
-        that:
-          - all_activations.json.next is none
-        fail_msg: >-
-          the controller lists more activations than one page of 200 holds;
-          the seed reads one page, so raise the page size in aap/seed.yml or
-          remove activations that are no longer needed, or it would miss some
-          and create duplicates
-        quiet: true
-
-    # The EDA API ignores name__startswith (and search) on the activation
-    # list and returns every activation on the platform, so the loop picks
-    # the FlashArray ones out by name: on a platform shared with another
-    # project, an unfiltered loop sets that project's activations too.
+    # name= is a substring match, so a query can also return an activation
+    # whose name merely contains the expected one (a hand-made copy, a
+    # rulebook file whose name extends another's), and one activation can
+    # come back from two queries: only the exact names are kept, each once.
+    # On a platform shared with another project, a loop over an unfiltered
+    # list would set that project's activations too.
     - name: Enforce the enabled flag on every FlashArray activation
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/eda/v1/activations/{{ item.id }}/{{ 'enable' if aap_eda_activations_enabled | bool else 'disable' }}/"
@@ -817,7 +813,7 @@
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         status_code: [200, 202, 204]
-      loop: "{{ all_activations.json.results | selectattr('name', 'match', '^FlashArray rulebook - ') | list }}"
+      loop: "{{ all_activations.results | map(attribute='json.results') | flatten | selectattr('name', 'in', platform_activation_names) | unique(attribute='id') | list }}"
       loop_control:
         label: "{{ item.name }}"
         # ten activations starting in the same second contend for the EDA

@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -167,15 +168,14 @@ class Handler(BaseHTTPRequestHandler):
                 store.list_drop -= 1
                 self.close_connection = True
                 return
-            return self._send(
-                200,
-                {
-                    "results": [
-                        {"id": a["id"], "name": a["name"]} for a in store.activations
-                    ],
-                    "next": None,
-                },
-            )
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            wanted = query.get("name", [None])[0]
+            rows = [
+                {"id": a["id"], "name": a["name"]}
+                for a in store.activations
+                if wanted is None or wanted.lower() in a["name"].lower()  # icontains
+            ]
+            return self._send(200, {"results": rows, "next": None})
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
                 if store.detail_503:
@@ -344,6 +344,9 @@ def test_cli_reports_drift_and_exits_one(audit, store, files, capsys, monkeypatc
         _activation(7, "FlashArray rulebook - alerts", good),
         _activation(8, "FlashArray rulebook - capacity", stale),
         _activation(9, "Something else", {}),
+        # the API's name= filter is a substring match: this one comes back
+        # from the alerts query and must be ignored
+        _activation(10, "FlashArray rulebook - alerts copy", stale),
     ]
     monkeypatch.setenv("AAP_TOKEN", "tok")
     code = audit.main(["--url", store.url, *files])
@@ -354,7 +357,12 @@ def test_cli_reports_drift_and_exits_one(audit, store, files, capsys, monkeypatc
     assert lines[1].startswith("FlashArray rulebook - capacity (id 8): ")
     assert "placeholder orchestrator_url" in lines[1]
     assert "Something else" not in out.out
-    assert "2 activation(s), 1 wrong" in out.err
+    assert "alerts copy" not in out.out
+    assert "2 activation(s), 1 wrong, 8 not created" in out.err
+    assert (
+        "not created (the seed makes them): FlashArray rulebook - alertmanager"
+        in out.err
+    )
     assert "tok" not in out.out + out.err
     # a clean fleet exits 0 and the JSON form carries the same report
     store.activations[1] = _activation(8, "FlashArray rulebook - capacity", good)
@@ -420,8 +428,9 @@ def test_list_rides_out_a_long_gateway_outage(audit, store, files, capsys, monke
     assert code == 0
     assert "1 activation(s), 0 wrong" in out.err
     lists = [c for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
-    assert len(lists) == 15  # 14 transient answers, then the page
-    assert all("page_size=20" in c[1] for c in lists)
+    names = len(audit.expected_names(audit.RULEBOOKS_DIR))
+    assert len(lists) == 14 + names  # 14 transient answers, then one read per name
+    assert all("?name=FlashArray" in c[1] for c in lists)
 
 
 def test_list_gives_up_after_the_retry_budget(audit, store, files, capsys, monkeypatch):
@@ -774,17 +783,20 @@ def test_recreate_keeps_waiting_when_the_lookup_itself_fails(
         ),
     ]
     store.name_held = 1
-    real_list_all = audit.Client.list_all
-    calls = {"n": 0}
+    real_get_by_name = audit.Client.get_by_name
+    state = {"failed": False}
 
-    def flaky_list_all(self, path):
-        # the list answers 5xx once, right after the create was refused
-        calls["n"] += 1
-        if calls["n"] == 3:
-            raise audit.AuditError(f"GET {path}: gave up after 5 attempts")
-        return real_list_all(self, path)
+    def flaky_get_by_name(self, name):
+        # the lookup answers 5xx once, right after the create was refused (the
+        # fake server has consumed name_held by then)
+        if store.name_held == 0 and not state["failed"]:
+            state["failed"] = True
+            raise audit.AuditError(
+                "GET /api/eda/v1/activations/?name=...: gave up after 24 attempts"
+            )
+        return real_get_by_name(self, name)
 
-    monkeypatch.setattr(audit.Client, "list_all", flaky_list_all)
+    monkeypatch.setattr(audit.Client, "get_by_name", flaky_get_by_name)
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert "could not look FlashArray rulebook - capacity up" in out.out
@@ -845,6 +857,19 @@ def test_recreate_refuses_while_the_expected_vars_carry_a_placeholder(
     assert code == 1
     assert [c for c in store.calls if c[0] in ("DELETE", "POST")] == []
     assert "expected vars still carry placeholder orchestrator_url" in out.out
+
+
+def test_cli_refuses_a_rulebooks_dir_without_files(
+    audit, store, files, capsys, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    empty = tmp_path / "no-rulebooks"
+    empty.mkdir()
+    with pytest.raises(SystemExit) as stop:
+        audit.main(["--url", store.url, *files, "--rulebooks", str(empty)])
+    assert stop.value.code == 2
+    assert "no *.yml rulebook" in capsys.readouterr().err
+    assert store.calls == []  # the platform was never asked
 
 
 def test_cli_needs_the_token_in_the_environment(tmp_path):
