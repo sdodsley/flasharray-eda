@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 (2026-11-17)
+
+The platform after a reboot. The audit and the seed ride out a busy
+gateway and read activations by name instead of listing them, the
+nightly definitions check has a retry budget, and
+`tools/activation_restart.py` with its user unit brings the FlashArray
+activations back after a host reboot, which the platform's own restart
+logic does not.
+
+Upgrading from 0.4.1: sync the controller project and run `aap/seed.yml`
+again so the definitions check carries `--retry-minutes`; install the
+post-boot unit from aap/README.md on the platform host if the activations
+should come back from a reboot without a hand.
 
 - `tools/activation_audit.py` rides out a busy gateway: transient answers
   (5xx, 403, a dropped connection on a read) are retried within a budget
