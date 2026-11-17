@@ -384,24 +384,18 @@ the deployment.
   `podman exec --user <name>` fails with "no matching entries in passwd
   file", a healthcheck that runs as a named user fails) while the
   containers themselves run; a numeric user or no user works, and
-  `podman mount <container>` restores the view, until the next time. The
-  cause: containers/storage counts the mounted layers in
-  `overlay-layers/mountpoints.json` under the run root, and that file can
-  lose the entries of running containers (one `podman rm -f` emptied it
-  while nine others ran); every podman command that exits then runs the
-  overlay driver's cleanup, which lazily unmounts the storage home and with
-  it every container root mount beneath it in the rootless pause namespace.
-  The containers run on; podman has lost their root. Container churn (the
-  activation containers, health checks, the boot itself) brings it back
-  after a repair. `skip_mount_home = "true"` under `[storage.options.overlay]`
-  in the user's `~/.config/containers/storage.conf` (rootless podman takes
-  only the driver name from the system file; then a `podman.service`
-  restart and one `podman mount` per running container) leaves the cleanup
-  nothing to unmount; it applies to every container of that user. The
-  detach chain is podman issue 30006 (open, unfixed through podman 6.2.0),
-  described there for a second store sharing the run root; a single default
-  store losing its entries under its own processes at boot is not described
-  upstream, and what writes the empty list is not known.
+  `podman mount <container>` restores the view, until the next time.
+  containers/storage counts the mounted layers in
+  `overlay-layers/mountpoints.json` under the run root; when that file
+  shows none for a store, every podman command that exits runs the overlay
+  driver's cleanup, which lazily unmounts the storage home and with it
+  every container root mount beneath it in the rootless pause namespace
+  (podman issue 30006, open, unfixed through podman 6.2.0). The containers
+  run on; podman has lost their root. `skip_mount_home = "true"` under
+  `[storage.options.overlay]` in a store's configuration leaves the cleanup
+  nothing to unmount for that store's processes; in the user's
+  `~/.config/containers/storage.conf` it covers the default store, which
+  the user's units and shell use.
 - As the EDA API comes back after a boot the activation worker is still
   marking the instances that did not survive the boot failed, so an
   activation read in that window shows its pre-boot `running` seconds
