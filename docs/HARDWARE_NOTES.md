@@ -397,7 +397,11 @@ the deployment.
   in the user's `~/.config/containers/storage.conf` (rootless podman takes
   only the driver name from the system file; then a `podman.service`
   restart and one `podman mount` per running container) leaves the cleanup
-  nothing to unmount; it applies to every container of that user.
+  nothing to unmount; it applies to every container of that user. The
+  detach chain is podman issue 30006 (open, unfixed through podman 6.2.0),
+  described there for a second store sharing the run root; a single default
+  store losing its entries under its own processes at boot is not described
+  upstream, and what writes the empty list is not known.
 - As the EDA API comes back after a boot the activation worker is still
   marking the instances that did not survive the boot failed, so an
   activation read in that window shows its pre-boot `running` seconds
