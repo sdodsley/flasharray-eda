@@ -59,6 +59,18 @@
       action:
         debug:
           msg: 'poll failed ({{ event.purefa_poll_error.signal }} on {{ event.purefa_poll_error.array }}): {{ event.purefa_poll_error.error }}'
+    - name: Destructive command by a human - notify
+      condition: event.purefa_audit.command is defined and event.purefa_audit.command in vars.destructive_commands and event.purefa_audit.subcommand in vars.destructive_subcommands and event.purefa_audit.by_automation == false and event.purefa_audit.system_user == false
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: '{{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} on {{ event.purefa_audit.array }}'
+              detail: 'arguments: {{ event.purefa_audit.arguments }} (interface {{ event.purefa_audit.user_interface }}, audit {{ event.purefa_audit.audit_id }})'
+              target_array: '{{ event.purefa_audit.array }}'
     - name: Governed setting changed by a human - reconcile from the baseline
       condition: event.purefa_audit.command is defined and event.purefa_audit.command in vars.governed_commands and event.purefa_audit.by_automation == false and event.purefa_audit.system_user == false and event.purefa_audit.maintenance_active == false
       throttle:
@@ -84,18 +96,6 @@
       action:
         debug:
           msg: 'maintenance window on {{ event.purefa_audit.array }}: {{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} {{ event.purefa_audit.arguments }}; not reconciled'
-    - name: Destructive command by a human - notify
-      condition: event.purefa_audit.command is defined and event.purefa_audit.command in vars.destructive_commands and event.purefa_audit.subcommand in vars.destructive_subcommands and event.purefa_audit.by_automation == false and event.purefa_audit.system_user == false
-      action:
-        run_job_template:
-          name: FlashArray - notify
-          organization: '{{ aap_organization }}'
-          job_args:
-            extra_vars:
-              severity: warning
-              subject: '{{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} on {{ event.purefa_audit.array }}'
-              detail: 'arguments: {{ event.purefa_audit.arguments }} (interface {{ event.purefa_audit.user_interface }}, audit {{ event.purefa_audit.audit_id }})'
-              target_array: '{{ event.purefa_audit.array }}'
     - name: Change by the automation account - log
       condition: event.purefa_audit.by_automation == true
       action:

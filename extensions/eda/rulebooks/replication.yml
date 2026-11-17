@@ -7,6 +7,8 @@
 # Actions (each gated by a var so a site can start with notify only):
 #   overdue or stuck protection group  -> replicate now (purefa_pgsnap remote: true,
 #                                         an immediate replicated snapshot)
+#   replication schedule off, target set -> notify (critical, hourly)
+#   snapshot schedule off, members present -> notify (warning, daily)
 #   stretched pod member offline       -> move host preferred arrays to the
 #                                         online side; move them back on recovery
 #   RPO breached for N polls           -> escalate to critical
@@ -362,6 +364,63 @@
               last completed {{ event.purefa_pg_replication.since_last_completed_s }}s ago,
               schedule every {{ event.purefa_pg_replication.frequency_ms }}ms,
               in progress={{ event.purefa_pg_replication.in_progress }},
+              targets={{ event.purefa_pg_replication.targets }}
+            target_array: "{{ event.purefa_pg_replication.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # A schedule switched off is never overdue (overdue needs an enabled
+    # schedule), so without these two rules it would go unnoticed. A group
+    # with a target and no replication schedule is a broken RPO contract:
+    # critical, hourly, silent inside a maintenance window. A local group
+    # with members and no snapshot schedule is a gap of its own: warning,
+    # once a day. Neither rule touches the schedule.
+    - name: Protection group replication schedule disabled with targets - notify
+      condition: >-
+        event.purefa_pg_replication.pgroup is defined and
+        event.purefa_pg_replication.schedule_disabled_with_targets == true and
+        event.purefa_pg_replication.maintenance_active == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: >-
+              Protection group {{ event.purefa_pg_replication.pgroup }} on {{ event.purefa_pg_replication.array }}
+              has its replication schedule disabled
+            detail: >-
+              targets={{ event.purefa_pg_replication.targets }},
+              schedule every {{ event.purefa_pg_replication.frequency_ms }}ms when enabled,
+              last completed {{ event.purefa_pg_replication.since_last_completed_s }}s ago,
+              members={{ event.purefa_pg_replication.member_count }}
+            target_array: "{{ event.purefa_pg_replication.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Protection group snapshot schedule disabled with members - notify
+      condition: >-
+        event.purefa_pg_replication.pgroup is defined and
+        event.purefa_pg_replication.snapshot_schedule_disabled == true and
+        event.purefa_pg_replication.maintenance_active == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_pg_replication.array
+          - event.purefa_pg_replication.pgroup
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: >-
+              Protection group {{ event.purefa_pg_replication.pgroup }} on {{ event.purefa_pg_replication.array }}
+              has its snapshot schedule disabled
+            detail: >-
+              members={{ event.purefa_pg_replication.member_count }},
+              snapshot schedule every {{ event.purefa_pg_replication.snapshot_frequency_ms }}ms when enabled,
               targets={{ event.purefa_pg_replication.targets }}
             target_array: "{{ event.purefa_pg_replication.array }}"
             alert_log: "{{ alert_log }}"

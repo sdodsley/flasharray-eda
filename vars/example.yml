@@ -99,6 +99,7 @@ governed_commands:
   - puresyslog
   - puresnmp
   - purealert
+  - purepgroup   # schedules and targets: a human's change is reported
 # Human-run destructive commands worth a notification in their own right.
 destructive_commands:
   - purevol

@@ -501,7 +501,14 @@ units runs it at boot:
     WantedBy=default.target
 
 The token is read from its file when the unit runs and never stored in
-the unit.
+the unit. The tool pauses once the API answers and makes a second pass
+over the activations (`--passes`, default 2), because the activation
+worker is still marking the instances that did not survive the boot failed
+as the API comes up, and a read in that window shows the old state. Its
+lines are in the system journal under the unit
+(`journalctl _SYSTEMD_USER_UNIT=<unit>.service`) and its exit status in
+`systemctl --user show <unit> -p ExecMainStatus`; the user's own journal
+may hold nothing.
 
 ## Verified on a platform
 

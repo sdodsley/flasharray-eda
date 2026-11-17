@@ -148,9 +148,11 @@ hundred bytes.
 
 The replication route sends the same envelope with `event_type`
 `purefa_pg_replication` and the replication signal's fields in `data`:
-`pgroup`, `targets`, `schedule_enabled`, `frequency_ms`, `last_completed`,
-`since_last_completed_s`, `overdue`, `stuck` and `in_progress` (the
-transfer under way, or null). The definition reads `${trigger.event.array}`
+`pgroup`, `targets`, `target_count`, `member_count`, `schedule_enabled`,
+`frequency_ms`, `last_completed`, `since_last_completed_s`, `overdue`,
+`schedule_disabled_with_targets`, `snapshot_schedule_enabled`,
+`snapshot_frequency_ms`, `snapshot_schedule_disabled`, `stuck` and
+`in_progress` (the transfer under way, or null). The definition reads `${trigger.event.array}`
 and `${trigger.event.data.pgroup}` for its notifications and the approval
 prompt, and passes `pgroup`, `since_last_completed_s`, `frequency_ms` and
 `in_progress` to the replicate-now job.

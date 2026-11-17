@@ -7,10 +7,14 @@ After a host reboot the platform's own restart logic is not enough: the
 activation worker marks an instance that had already reached its restart
 ceiling as failed and does not restart it, and the restarts it does attempt
 can meet the websocket proxy before it is ready and fail as well. This tool
-waits for the EDA API, then reads each activation named for a platform
-rulebook file (tools/activation_audit.py's names and client) and restarts
-every one that is not running, waiting for each to run before the next so
-the host sees no start storm. It is what a post-boot user unit runs.
+waits for the EDA API, pauses while the activation worker finishes marking
+the instances that did not survive the boot, then reads each activation
+named for a platform rulebook file (tools/activation_audit.py's names and
+client) and restarts every one that is not running, waiting for each to run
+before the next so the host sees no start storm. It makes up to --passes
+passes (default 2), since a read taken as the API comes up can still show
+an instance's pre-boot state, and reads an activation again right before
+acting on it. It is what a post-boot user unit runs.
 
 The platform is read as the audit reads it: AAP_HOSTNAME and AAP_TOKEN
 (AAP_VALIDATE_CERTS false for a lab certificate), or --url and --insecure.
@@ -37,6 +41,7 @@ from activation_audit import (  # noqa: E402
 
 STATUS_PATH = "/api/eda/v1/status/"
 POLL_SECONDS = 10
+SETTLE_SECONDS = 30
 
 
 def wait_for_api(client, minutes, say):
@@ -154,7 +159,19 @@ def main(argv=None):
         metavar="N",
         help="starts tried per activation (default 3)",
     )
+    parser.add_argument(
+        "--passes",
+        type=int,
+        default=2,
+        metavar="N",
+        help="passes over the activations (default 2): the second catches one the "
+        "worker marked failed only after the first pass read it running",
+    )
     args = parser.parse_args(argv)
+    if args.passes < 1:
+        parser.error("--passes must be at least 1")
+    if args.attempts < 1:
+        parser.error("--attempts must be at least 1")
 
     token = os.environ.get(ENV_TOKEN, "")
     if not token:
@@ -176,22 +193,57 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 1
+    # As the API comes up the activation worker is still marking the
+    # instances that did not survive the boot failed, so a read taken in that
+    # window can show the old state: the pass starts after a pause, and a
+    # later pass catches what an earlier one read as running.
+    time.sleep(SETTLE_SECONDS)
     running, restarted, failed, absent = [], [], [], []
     try:
-        for name in names:
-            activation = client.get_by_name(name)
-            if activation is None:
-                absent.append(name)
-                continue
-            if activation.get("status") == "running":
-                running.append(name)
-                continue
-            if restart_one(
-                client, activation, args.restart_minutes, args.attempts, say
-            ):
-                restarted.append(name)
-            else:
-                failed.append(name)
+        for pass_no in range(1, args.passes + 1):
+            pending = []
+            for name in names:
+                if name in absent or name in failed:
+                    continue
+                activation = client.get_by_name(name)
+                if activation is None:
+                    absent.append(name)
+                    continue
+                if activation.get("status") == "running":
+                    if name not in running and name not in restarted:
+                        running.append(name)
+                    continue
+                pending.append(activation)
+            if not pending:
+                break
+            if pass_no > 1:
+                say(
+                    f"pass {pass_no}: {len(pending)} activation(s) not running "
+                    "after the last pass"
+                )
+            for activation in pending:
+                name = activation["name"]
+                # the pass's reads are minutes old by the time a later
+                # activation's turn comes: read it again, and leave alone one
+                # the platform brought up meanwhile
+                fresh = client.get_by_name(name)
+                if fresh is not None:
+                    activation = fresh
+                if activation.get("status") == "running":
+                    if name not in running and name not in restarted:
+                        running.append(name)
+                    continue
+                if name in running:
+                    running.remove(name)
+                if restart_one(
+                    client, activation, args.restart_minutes, args.attempts, say
+                ):
+                    if name not in restarted:
+                        restarted.append(name)
+                else:
+                    if name in restarted:
+                        restarted.remove(name)
+                    failed.append(name)
     except AuditError as exc:
         print(f"activation_restart: {exc}", file=sys.stderr)
         return 1

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- The replication signal reads every local protection group and flags a
+  replication schedule switched off on a group with a target
+  (`schedule_disabled_with_targets`) and a snapshot schedule switched off on
+  a group with members (`snapshot_schedule_disabled`), which `overdue` cannot
+  see because it needs an enabled schedule. The replication rulebook
+  notifies on each (critical hourly, warning daily, silent in a maintenance
+  window) and never touches the schedule; `purepgroup` joins the example
+  governed commands so a human's schedule change is reported.
+
+- `tools/activation_restart.py` pauses once the EDA API answers and makes a
+  second pass over the activations (`--passes`, default 2): as the API comes
+  up the activation worker is still marking the instances that did not
+  survive the boot failed, and an activation read as running in that window
+  is failed a moment later.
+
 ## 0.4.2 (2026-11-17)
 
 The platform after a reboot. The audit and the seed ride out a busy

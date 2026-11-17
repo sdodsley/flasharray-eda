@@ -57,6 +57,9 @@ unless stated.
     CT0.
 - A protection group's `targets` are not on the group object at REST 2.46;
   `/protection-groups/targets` is one extra call per poll.
+- A protection group's `replication_schedule` and `snapshot_schedule` keep
+  their `frequency` when switched off (`enabled: false`), so a reader that
+  looks at the frequency alone takes a disabled schedule for a live one.
 - Transfers that completed before the poller started have no `started`; the
   DR drill picks the latest `completed`.
 - Connections to a stretched pod's volumes list the peer array's hosts as
@@ -376,12 +379,23 @@ the deployment.
   applicable") and does not restart it, and the restarts it does attempt
   can meet the websocket proxy before it is ready ("server rejected
   WebSocket connection: HTTP 502") and fail; a restart by id afterwards
-  succeeds. Containers started at boot by the user's units can also lose
+  succeeds. Containers started at boot by the user's units also lose
   podman's view of their root mount (`podman inspect` shows no MergedDir,
   `podman exec --user <name>` fails with "no matching entries in passwd
   file", a healthcheck that runs as a named user fails) while the
   containers themselves run; a numeric user or no user works, and
   `podman mount <container>` restores the view.
+- As the EDA API comes back after a boot the activation worker is still
+  marking the instances that did not survive the boot failed, so an
+  activation read in that window shows its pre-boot `running` seconds
+  before it turns `failed`; a reader that makes one pass misses it. The API
+  refuses connections for the first minutes while the platform's containers
+  start, and the first activation started then can fail the 60 s readiness
+  check and need a second attempt.
+- The host keeps no per-user journal (`journalctl --user` finds no files);
+  a user unit's output is in the system journal under
+  `_SYSTEMD_USER_UNIT=<unit>`, and its result in
+  `systemctl --user show <unit> -p ExecMainStatus -p ExecMainExitTimestamp`.
 - A rootless container's non-root user cannot read a 600-mode file
   bind-mounted from the host (the host user maps to the container's root,
   not to the image's user); a podman secret is mounted readable under

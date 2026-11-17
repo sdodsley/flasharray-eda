@@ -166,6 +166,13 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   instead and an approval with a one-hour window gates the snapshot
   (`orchestrator/replication_overdue_approval.json`). The group's schedule
   is never touched; one extra snapshot is sent.
+- A protection group whose replication schedule is off while it has a
+  target, or whose snapshot schedule is off while it has members: a
+  notification (critical and hourly for the first, warning and daily for
+  the second), silent inside a maintenance window. `overdue` cannot see
+  either, since it needs an enabled schedule, and the schedule is still
+  never touched. `purepgroup` is among the example governed commands, so a
+  human's schedule change is reported by change control.
 - Array connection `partially_connected`: the replication signal reads
   `/array-connections/path` and the failed paths are notified; paused or
   unhealthy links likewise.

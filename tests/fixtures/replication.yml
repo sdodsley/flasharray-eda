@@ -19,6 +19,12 @@ fixture_events:
       in_progress: null
       stuck_polls: 0
       stuck: false
+      target_count: 1
+      member_count: 1
+      schedule_disabled_with_targets: false
+      snapshot_schedule_enabled: true
+      snapshot_frequency_ms: 3600000
+      snapshot_schedule_disabled: false
   - purefa_stretched_pod:
       array: REPLAY_ARRAY
       maintenance_active: false

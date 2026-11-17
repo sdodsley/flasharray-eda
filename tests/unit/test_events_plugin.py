@@ -125,13 +125,17 @@ class FakeClient:
         )
 
     def get_protection_groups(self, **kw):
+        self.calls.append(("get_protection_groups", kw))
         return FakeResponse(self.pgroups)
 
     def get_protection_groups_targets(self, **kw):
+        self.calls.append(("get_protection_groups_targets", kw))
+        names = set(kw.get("group_names") or [])
         return FakeResponse(
             [
                 {"group": {"name": p["name"]}, "member": {"name": "array-b"}}
                 for p in self.pgroups
+                if p["name"] in names
             ]
         )
 
@@ -736,7 +740,10 @@ def pg_client(transfers):
         pgroups=[
             {
                 "name": "pg-prod",
+                "target_count": 1,
+                "volume_count": 3,
                 "replication_schedule": {"enabled": True, "frequency": HOUR_MS},
+                "snapshot_schedule": {"enabled": True, "frequency": HOUR_MS},
             }
         ],
         transfers=transfers,
@@ -796,6 +803,87 @@ def test_pg_overdue_and_stuck(events):
     client.transfers[1].update(completed=NOW_MS, progress=None)
     pg = poll()
     assert pg["in_progress"] is None and pg["overdue"] is False
+
+
+def test_pg_disabled_schedules_are_flagged_and_local_groups_are_read(events):
+    """A replication schedule switched off on a group with a target, and a
+    snapshot schedule switched off on a group with members, each get a flag;
+    overdue stays what it was (it needs an enabled schedule); an empty group
+    is flagged for neither; targets and transfers are read for the groups
+    with a target only, though every local group is listed."""
+    client = FakeClient(
+        pgroups=[
+            {
+                "name": "pg-off",
+                "target_count": 1,
+                "volume_count": 2,
+                "replication_schedule": {"enabled": False, "frequency": HOUR_MS},
+                "snapshot_schedule": {"enabled": True, "frequency": HOUR_MS},
+            },
+            {
+                "name": "pg-local",
+                "target_count": 0,
+                "volume_count": 4,
+                "host_count": 1,
+                "replication_schedule": {"enabled": True, "frequency": HOUR_MS},
+                "snapshot_schedule": {"enabled": False, "frequency": HOUR_MS},
+            },
+            {
+                "name": "pg-empty",
+                "target_count": 0,
+                "volume_count": 0,
+                "replication_schedule": {"enabled": False, "frequency": HOUR_MS},
+                "snapshot_schedule": {"enabled": False, "frequency": HOUR_MS},
+            },
+        ],
+        transfers=[transfer("pg-off", 1, completed=NOW_MS - 5 * HOUR_MS)],
+    )
+    out = events.poll_replication(FakeArray(client), {}, {})
+    by = {
+        e["purefa_pg_replication"]["pgroup"]: e["purefa_pg_replication"]
+        for e in out
+        if "purefa_pg_replication" in e
+    }
+    assert set(by) == {"pg-off", "pg-local", "pg-empty"}
+    off = by["pg-off"]
+    assert off["schedule_disabled_with_targets"] is True
+    assert (
+        off["overdue"] is False
+    )  # five hours since the last transfer, but no enabled schedule
+    assert off["targets"] == ["array-b"] and off["target_count"] == 1
+    assert off["member_count"] == 2
+    assert off["snapshot_schedule_enabled"] is True
+    assert off["snapshot_schedule_disabled"] is False
+    local = by["pg-local"]
+    assert local["snapshot_schedule_disabled"] is True
+    assert local["snapshot_frequency_ms"] == HOUR_MS and local["member_count"] == 5
+    assert local["schedule_disabled_with_targets"] is False and local["targets"] == []
+    assert local["last_completed"] is None and local["in_progress"] is None
+    assert local["overdue"] is False and local["stuck"] is False
+    empty = by["pg-empty"]
+    assert empty["snapshot_schedule_disabled"] is False
+    assert empty["schedule_disabled_with_targets"] is False
+    listing = next(kw for n, kw in client.calls if n == "get_protection_groups")
+    assert "target_count" not in listing["filter"]
+    assert "is_local='true'" in listing["filter"]
+    targets = next(kw for n, kw in client.calls if n == "get_protection_groups_targets")
+    assert targets["group_names"] == ["pg-off"]
+    transfer_calls = [
+        kw for n, kw in client.calls if n == "get_protection_group_snapshots_transfer"
+    ]
+    assert len(transfer_calls) == 1 and "pg-off" in transfer_calls[0]["filter"]
+
+
+def test_pg_without_schedule_objects_is_not_taken_for_disabled(events):
+    client = FakeClient(
+        pgroups=[{"name": "pg-bare", "target_count": 1, "volume_count": 1}],
+        transfers=[],
+    )
+    out = events.poll_replication(FakeArray(client), {}, {})
+    pg = next(e["purefa_pg_replication"] for e in out if "purefa_pg_replication" in e)
+    assert pg["schedule_disabled_with_targets"] is False
+    assert pg["snapshot_schedule_disabled"] is False
+    assert pg["schedule_enabled"] is None and pg["snapshot_schedule_enabled"] is None
 
 
 # --- capacity events across arrays -----------------------------------------

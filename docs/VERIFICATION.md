@@ -613,9 +613,17 @@ restart ceiling did: the activation worker marked those failed with the
 ceiling message and left them, the four below the ceiling ran once the
 websocket proxy was ready, and the other six were restarted by hand, by
 id, one at a time, each running within a minute. `tools/activation_restart.py`
-and its user unit were written from that reboot and installed afterwards;
-the unit has run only as a dry start against running activations (exit 0
-in seventeen seconds), and the host has not been rebooted since.
+and its user unit were written from that reboot. A second reboot
+(2026-11-17), with the unit installed, proved it: the API refused
+connections for six minutes while the host's load passed 100, the unit
+waited, then restarted nine activations one at a time (one needed a second
+attempt after a readiness timeout) and exited 0 after eighteen minutes.
+The tenth had read as running in the seconds before the worker marked it
+failed and was left behind, which is why the tool now pauses after the API
+answers and makes a second pass. The other project's unit ran alongside
+and finished first; every platform service, the orchestrator's stack and
+this project's containers came back under their units again, and the
+containers started at boot again had no root mount in podman's view.
 
 ## Replayed only
 
@@ -651,10 +659,10 @@ event takes the same path as a live one.
   workflow.
 - `tools/ao_sync.py` deleting or unpublishing anything: by design it never
   does, so the live run exercised create, update and unchanged only.
-- The post-boot unit at a real boot: `tools/activation_restart.py`'s
-  restart path is unit-tested, and live it has run only as the unit's dry
-  start, which found every activation running; the host has not been
-  rebooted since the unit was installed (above).
+- The post-boot tool's pause, second pass and re-read before acting at a
+  real boot: added after the reboot above left one activation behind; the
+  passes and the re-read are unit-tested, and the next reboot shows all
+  three.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

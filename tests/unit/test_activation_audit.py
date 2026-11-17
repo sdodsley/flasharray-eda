@@ -186,6 +186,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             wanted = query.get("name", [None])[0]
+            for a in store.activations:
+                _tick_death(a)
+            for a in store.activations:
+                _tick_death(a)
             rows = [
                 {
                     "id": a["id"],
@@ -196,9 +200,19 @@ class Handler(BaseHTTPRequestHandler):
                 for a in store.activations
                 if wanted is None or wanted.lower() in a["name"].lower()  # icontains
             ]
+            # the boot-time race: the worker marks the instance failed a
+            # moment after this read showed its pre-boot state
+            for a in store.activations:
+                if (
+                    a["id"] in store.flip_after_list
+                    and a.get("status") != store.flip_after_list[a["id"]]
+                    and any(r["id"] == a["id"] for r in rows)
+                ):
+                    a["status"] = store.flip_after_list.pop(a["id"])
             return self._send(200, {"results": rows, "next": None})
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
+                _tick_death(a)
                 pending = a.get("_pending")
                 if pending:
                     outcome, lag = pending
@@ -208,6 +222,10 @@ class Handler(BaseHTTPRequestHandler):
                         a.pop("_pending")
                         a["status"] = outcome
                         a["restart_count"] = a.get("restart_count", 0) + 1
+                        if outcome == "running" and a["id"] in store.restart_then_die:
+                            a["_dies_after_reads"] = 2
+                        if outcome == "running" and a["id"] in store.restart_then_die:
+                            a["_dies_after_reads"] = 2
                         if outcome == "failed":
                             a["status_message"] = (
                                 "server rejected WebSocket connection: HTTP 502"
@@ -299,6 +317,11 @@ class Handler(BaseHTTPRequestHandler):
                         outcome = "failed"
                     elif aid in store.restart_never:
                         outcome = "failed"
+                    elif (
+                        aid in store.restart_never_after_first
+                        and store.restarts.count(aid) > 1
+                    ):
+                        outcome = "failed"
                     else:
                         outcome = "running"
                     # the worker picks the restart up a little later: the next
@@ -325,6 +348,19 @@ class Handler(BaseHTTPRequestHandler):
             store.delete_503 -= 1
             return self._send(503, {"detail": "gateway"})
         self._send(204 if len(store.activations) < before else 404, {})
+
+
+def _tick_death(a):
+    """A restarted activation that dies again: it reads as running for the
+    reads counted down here, then as failed at its restart ceiling."""
+    if a.get("_dies_after_reads"):
+        a["_dies_after_reads"] -= 1
+        if a["_dies_after_reads"] == 0:
+            a.pop("_dies_after_reads")
+            a["status"] = "failed"
+            a["status_message"] = (
+                "exited with code 143. Has reached the maximum number of restarts"
+            )
 
 
 class Store:
@@ -356,6 +392,13 @@ class Store:
         self.restart_failed_once = set()
         self.restart_never = set()  # ids whose restart never comes up
         self.restart_lag = 0  # reads after a restart that still show the old state
+        self.flip_after_list = {}  # id -> status set right after a list read of it
+        self.restart_then_die = (
+            set()
+        )  # ids whose restart runs, then dies two reads later
+        self.restart_never_after_first = (
+            set()
+        )  # ids whose second and later restarts fail
         self.url = None
 
 
@@ -997,6 +1040,103 @@ def test_restart_waits_for_an_activation_already_starting(
     assert store.restarts == []  # waited, never posted
     assert "is starting; waiting for it" in out.out
     assert "0 running, 1 restarted, 0 failed" in out.err
+
+
+def test_restart_second_pass_catches_what_the_worker_failed_after_the_first_read(
+    restart_tool, store, capsys, monkeypatch
+):
+    """As the API comes up the worker is still marking the instances that did
+    not survive the boot failed: an activation read as running a moment
+    before is failed a moment later. The second pass restarts it."""
+    store.activations = [
+        _activation(7, "FlashArray rulebook - alerts", {}, status="failed"),
+        _activation(8, "FlashArray rulebook - capacity", {}),  # running, stale
+    ]
+    store.flip_after_list = {8: "failed"}
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    out = capsys.readouterr()
+    assert code == 0
+    assert sorted(store.restarts) == [7, 8]
+    assert "pass 2: 1 activation(s) not running" in out.out
+    assert "0 running, 2 restarted, 0 failed" in out.err
+
+
+def test_restart_single_pass_trusts_the_first_read(
+    restart_tool, store, capsys, monkeypatch
+):
+    store.activations = [_activation(8, "FlashArray rulebook - capacity", {})]
+    store.flip_after_list = {8: "failed"}
+    code = restart_tool.main(
+        _restart_env(restart_tool, store, monkeypatch) + ["--passes", "1"]
+    )
+    assert code == 0 and store.restarts == []
+    assert "1 running, 0 restarted, 0 failed" in capsys.readouterr().err
+
+
+def test_restart_leaves_alone_what_the_platform_brought_up_before_its_turn(
+    restart_tool, store, capsys, monkeypatch
+):
+    """The pass's reads are minutes old by the time a later activation's turn
+    comes; one the platform's own restart logic brought up meanwhile is read
+    again and left alone, and counted as running."""
+    store.activations = [
+        _activation(7, "FlashArray rulebook - alerts", {}, status="failed"),
+        _activation(8, "FlashArray rulebook - capacity", {}, status="failed"),
+    ]
+    store.flip_after_list = {8: "running"}  # comes up right after the pass read it
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    out = capsys.readouterr()
+    assert code == 0
+    assert store.restarts == [7]
+    assert "1 running, 1 restarted, 0 failed" in out.err
+
+
+def test_restart_counts_a_second_pass_failure_once(
+    restart_tool, store, capsys, monkeypatch
+):
+    """Restarted in pass 1, dead again by pass 2 and not restartable: counted
+    as failed, not as restarted and failed."""
+    store.activations = [
+        _activation(8, "FlashArray rulebook - capacity", {}, status="failed"),
+    ]
+    store.restart_then_die = {8}
+    store.restart_never_after_first = {8}
+    code = restart_tool.main(
+        _restart_env(restart_tool, store, monkeypatch) + ["--attempts", "2"]
+    )
+    out = capsys.readouterr()
+    assert code == 1
+    assert store.restarts == [8, 8, 8]  # pass 1 once, pass 2 twice
+    # the fake holds one of the ten expected activations, hence "9 not created"
+    assert (
+        "0 running, 0 restarted, 1 failed, 9 not created: FlashArray rulebook - capacity"
+        in out.err
+    )
+
+
+def test_restart_refuses_fewer_than_one_pass_or_attempt(
+    restart_tool, store, monkeypatch
+):
+    store.activations = [_activation(8, "FlashArray rulebook - capacity", {})]
+    for flag in ("--passes", "--attempts"):
+        with pytest.raises(SystemExit) as exc:
+            restart_tool.main(
+                _restart_env(restart_tool, store, monkeypatch) + [flag, "0"]
+            )
+        assert exc.value.code == 2
+    assert store.calls == []
+
+
+def test_restart_pauses_once_the_api_answers(restart_tool, store, monkeypatch):
+    """The settle pause comes after the API has answered, once."""
+    store.activations = [_activation(8, "FlashArray rulebook - capacity", {})]
+    store.status_503 = 2
+    argv = _restart_env(restart_tool, store, monkeypatch)
+    sleeps = []
+    monkeypatch.setattr(restart_tool.time, "sleep", sleeps.append)
+    assert restart_tool.main(argv) == 0
+    assert sleeps.count(restart_tool.SETTLE_SECONDS) == 1
+    assert sleeps.index(restart_tool.SETTLE_SECONDS) >= 2  # after the two 503 waits
 
 
 def test_restart_reports_what_it_could_not_start(

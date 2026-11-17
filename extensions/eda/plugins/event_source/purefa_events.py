@@ -170,8 +170,13 @@ purefa_stretched_pod    pod, members[{array,status,mediator_status,
                         pre_elected}], online_arrays[], offline_arrays[],
                         all_online, mediator_online, recovered (first
                         all-online poll after a degraded one)
-purefa_pg_replication   pgroup, targets[], schedule_enabled, frequency_ms,
-                        last_completed, since_last_completed_s, overdue,
+purefa_pg_replication   pgroup, targets[], target_count, member_count,
+                        schedule_enabled, frequency_ms, last_completed,
+                        since_last_completed_s, overdue,
+                        schedule_disabled_with_targets (a target set but the
+                        replication schedule off), snapshot_schedule_enabled,
+                        snapshot_frequency_ms, snapshot_schedule_disabled
+                        (members but the snapshot schedule off),
                         in_progress{name,progress,data_transferred},
                         stuck_polls, stuck
 purefa_config           purity_version, ntp_servers(_csv), dns_domain,
@@ -1452,16 +1457,22 @@ def poll_replication(arr, state, args):
         )
 
     stuck_after = int(args.get("stuck_transfer_polls", 3))
+    # Every local group, not only the replicating ones: a group with a target
+    # but its replication schedule off, or with members but its snapshot
+    # schedule off, is a gap `overdue` cannot see (overdue needs an enabled
+    # schedule), so each gets a flag of its own. Targets and transfers are
+    # read only for the groups that have a target.
     pgs = _items(
-        c.get_protection_groups(
-            filter="target_count>0 and destroyed='false' and is_local='true'"
-        ),
+        c.get_protection_groups(filter="destroyed='false' and is_local='true'"),
         "protection-groups",
     )
     targets_by_pg = {}
-    if pgs:
+    replicating = [p for p in pgs if p.get("target_count")]
+    if replicating:
         for t in _items(
-            c.get_protection_groups_targets(group_names=[p.get("name") for p in pgs]),
+            c.get_protection_groups_targets(
+                group_names=[p.get("name") for p in replicating]
+            ),
             "pg targets",
         ):
             targets_by_pg.setdefault(_name(t.get("group")), []).append(
@@ -1469,22 +1480,26 @@ def poll_replication(arr, state, args):
             )
     for pg in pgs:
         name = pg.get("name")
-        # Newest first. Purity sorts a null `completed` ahead of the values
-        # under a descending sort (checked on REST 2.46 and 2.54), so the
-        # queued and in-progress transfers lead and the newest completed one
-        # follows; `started` is null even on completed rows there, so it is
-        # no use as the key. Without a sort a page is the oldest retained
-        # transfers in name order, which made overdue fire for ever and
-        # stuck never. The limit only bounds a pathological backlog.
-        transfers = _items(
-            c.get_protection_group_snapshots_transfer(
-                filter=f"name='{name}.*'",
-                sort=["completed-"],
-                destroyed=False,
-                limit=PG_TRANSFER_ROWS,
-            ),
-            "pg transfers",
-        )
+        targets = targets_by_pg.get(name, [])
+        has_targets = bool(targets or pg.get("target_count"))
+        transfers = []
+        if has_targets:
+            # Newest first. Purity sorts a null `completed` ahead of the values
+            # under a descending sort (checked on REST 2.46 and 2.54), so the
+            # queued and in-progress transfers lead and the newest completed one
+            # follows; `started` is null even on completed rows there, so it is
+            # no use as the key. Without a sort a page is the oldest retained
+            # transfers in name order, which made overdue fire for ever and
+            # stuck never. The limit only bounds a pathological backlog.
+            transfers = _items(
+                c.get_protection_group_snapshots_transfer(
+                    filter=f"name='{name}.*'",
+                    sort=["completed-"],
+                    destroyed=False,
+                    limit=PG_TRANSFER_ROWS,
+                ),
+                "pg transfers",
+            )
         completed = [t.get("completed") for t in transfers if t.get("completed")]
         last = max(completed) if completed else None
         running = [
@@ -1505,15 +1520,22 @@ def poll_replication(arr, state, args):
             polls = 0
             st["progress"].pop(key, None)
         sched = pg.get("replication_schedule") or {}
+        snap = pg.get("snapshot_schedule") or {}
         freq = sched.get("frequency")
         since = round((now - last) / 1000) if last else None
+        members = sum(
+            int(pg.get(k) or 0)
+            for k in ("volume_count", "host_count", "host_group_count")
+        )
         events.append(
             {
                 "purefa_pg_replication": {
                     "array": arr.name,
                     "maintenance_active": maintenance_active,
                     "pgroup": name,
-                    "targets": targets_by_pg.get(name, []),
+                    "targets": targets,
+                    "target_count": pg.get("target_count"),
+                    "member_count": members,
                     "schedule_enabled": sched.get("enabled"),
                     "frequency_ms": freq,
                     "last_completed": last,
@@ -1523,6 +1545,16 @@ def poll_replication(arr, state, args):
                         and freq
                         and since is not None
                         and since * 1000 > 2 * freq
+                    ),
+                    # a schedule the array reports as switched off; a missing
+                    # schedule object is not taken for one
+                    "schedule_disabled_with_targets": bool(
+                        has_targets and sched.get("enabled") is False
+                    ),
+                    "snapshot_schedule_enabled": snap.get("enabled"),
+                    "snapshot_frequency_ms": snap.get("frequency"),
+                    "snapshot_schedule_disabled": bool(
+                        members and snap.get("enabled") is False
                     ),
                     "in_progress": (
                         {
