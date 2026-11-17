@@ -3,16 +3,20 @@
 ## Unreleased
 
 - `tools/activation_audit.py` rides out a busy gateway: transient answers
-  (5xx, 403, a dropped connection on a read) are retried for two minutes
-  instead of seconds, each expected activation is read by its full name
-  instead of listing them all (the list takes ten seconds on a busy
-  platform and a timed-out list ejects the API for a while; the API's
-  `name=` filter is a substring match and the exact name is kept), the
-  wait for the list after a delete lasts the name-release window, and
-  `--recreate --enable` creates the new activation enabled whatever flag
-  the old one carried, and `--retry-minutes` sets the budget. The nightly
-  definitions check passes ten minutes (`definitions_check_retry_minutes`),
-  so another job's load on the platform at the same hour does not fail it.
+  (5xx, 403, a dropped connection on a read) are retried within a budget
+  (`--retry-minutes`, two minutes by default), the wait for the list after
+  a delete lasts the name-release window, and `--recreate --enable`
+  creates the new activation enabled whatever flag the old one carried.
+  The nightly definitions check passes ten minutes
+  (`definitions_check_retry_minutes`), so another job's load on the
+  platform at the same hour does not fail it.
+- The seed, the audit and the restart tool read each expected activation
+  by its full name, one per platform rulebook file, instead of listing
+  every activation: the list takes ten seconds on a busy platform and a
+  timed-out list ejects the API for a while, and the API's `name=` filter
+  is a substring match, so the exact name is kept by the reader. An
+  activation whose rulebook file is gone is neither audited nor has its
+  enabled flag set; delete it by hand.
 - `tools/activation_restart.py` waits for the EDA API after a host reboot
   and restarts, one at a time, every FlashArray activation that is not
   running, since the platform leaves an instance at its restart ceiling
@@ -21,11 +25,6 @@
 - slack/README.md says how a rootless host applies the bot container's
   restart policy after a reboot (`podman-restart.service`); without it the
   bot, and anything else run the same way, stays exited.
-- The seed and the audit ask for each expected activation by its full
-  name, one per platform rulebook file, instead of reading the whole
-  activation list in one page, which was slow and could miss some. An
-  activation whose rulebook file is gone is neither audited nor has its
-  enabled flag set; delete it by hand.
 
 ## 0.4.1 (2026-11-14)
 

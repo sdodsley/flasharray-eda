@@ -604,6 +604,19 @@ tests: a controller approval timing out (the lab's node waits 24 hours),
 a Slack click racing the sweep, and a detail read failing as an approval
 leaves the queue.
 
+The platform after a reboot (2026-11-16). The host was rebooted once with
+every platform service, the automation orchestrator's stack and this
+project's three containers under systemd user units. All of them came
+back on their own (the orchestrator's thirty-nine containers settled
+within eleven minutes), and no FlashArray activation that had reached its
+restart ceiling did: the activation worker marked those failed with the
+ceiling message and left them, the four below the ceiling ran once the
+websocket proxy was ready, and the other six were restarted by hand, by
+id, one at a time, each running within a minute. `tools/activation_restart.py`
+and its user unit were written from that reboot and installed afterwards;
+the unit has run only as a dry start against running activations (exit 0
+in seventeen seconds), and the host has not been rebooted since.
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on an array:
@@ -638,6 +651,10 @@ event takes the same path as a live one.
   workflow.
 - `tools/ao_sync.py` deleting or unpublishing anything: by design it never
   does, so the live run exercised create, update and unchanged only.
+- The post-boot unit at a real boot: `tools/activation_restart.py`'s
+  restart path is unit-tested, and live it has run only as the unit's dry
+  start, which found every activation running; the host has not been
+  rebooted since the unit was installed (above).
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the
