@@ -384,7 +384,19 @@ the deployment.
   `podman exec --user <name>` fails with "no matching entries in passwd
   file", a healthcheck that runs as a named user fails) while the
   containers themselves run; a numeric user or no user works, and
-  `podman mount <container>` restores the view.
+  `podman mount <container>` restores the view, until the next time. The
+  cause: containers/storage counts the mounted layers in
+  `overlay-layers/mountpoints.json` under the run root, and that file can
+  lose the entries of running containers (one `podman rm -f` emptied it
+  while nine others ran); every podman command that exits then runs the
+  overlay driver's cleanup, which lazily unmounts the storage home and with
+  it every container root mount beneath it in the rootless pause namespace.
+  The containers run on; podman has lost their root. Container churn (the
+  activation containers, health checks, the boot itself) brings it back
+  after a repair. `skip_mount_home = "true"` under `[storage.options.overlay]`
+  in the host's `storage.conf` (then a `podman.service` restart and one
+  `podman mount` per running container) leaves the cleanup nothing to
+  unmount; it is a setting for every rootless container on the host.
 - As the EDA API comes back after a boot the activation worker is still
   marking the instances that did not survive the boot failed, so an
   activation read in that window shows its pre-boot `running` seconds
