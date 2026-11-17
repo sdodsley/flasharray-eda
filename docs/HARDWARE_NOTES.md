@@ -394,9 +394,10 @@ the deployment.
   The containers run on; podman has lost their root. Container churn (the
   activation containers, health checks, the boot itself) brings it back
   after a repair. `skip_mount_home = "true"` under `[storage.options.overlay]`
-  in the host's `storage.conf` (then a `podman.service` restart and one
-  `podman mount` per running container) leaves the cleanup nothing to
-  unmount; it is a setting for every rootless container on the host.
+  in the user's `~/.config/containers/storage.conf` (rootless podman takes
+  only the driver name from the system file; then a `podman.service`
+  restart and one `podman mount` per running container) leaves the cleanup
+  nothing to unmount; it applies to every container of that user.
 - As the EDA API comes back after a boot the activation worker is still
   marking the instances that did not survive the boot failed, so an
   activation read in that window shows its pre-boot `running` seconds
