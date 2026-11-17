@@ -5,8 +5,8 @@
 - The replication signal reads every local protection group and flags a
   replication schedule switched off on a group with a target
   (`schedule_disabled_with_targets`) and a snapshot schedule switched off on
-  a group with members (`snapshot_schedule_disabled`), which `overdue` cannot
-  see because it needs an enabled schedule. The replication rulebook
+  a local group with members (`snapshot_schedule_disabled`), which `overdue`
+  cannot see because it needs an enabled schedule. The replication rulebook
   notifies on each (critical hourly, warning daily, silent in a maintenance
   window) and never touches the schedule; `purepgroup` joins the example
   governed commands so a human's schedule change is reported.

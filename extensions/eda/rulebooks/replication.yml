@@ -8,7 +8,7 @@
 #   overdue or stuck protection group  -> replicate now (purefa_pgsnap remote: true,
 #                                         an immediate replicated snapshot)
 #   replication schedule off, target set -> notify (critical, hourly)
-#   snapshot schedule off, members present -> notify (warning, daily)
+#   snapshot schedule off on a local group with members -> notify (warning, daily)
 #   stretched pod member offline       -> move host preferred arrays to the
 #                                         online side; move them back on recovery
 #   RPO breached for N polls           -> escalate to critical

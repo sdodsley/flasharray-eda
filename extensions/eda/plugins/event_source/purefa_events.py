@@ -176,7 +176,7 @@ purefa_pg_replication   pgroup, targets[], target_count, member_count,
                         schedule_disabled_with_targets (a target set but the
                         replication schedule off), snapshot_schedule_enabled,
                         snapshot_frequency_ms, snapshot_schedule_disabled
-                        (members but the snapshot schedule off),
+                        (no target, members, but the snapshot schedule off),
                         in_progress{name,progress,data_transferred},
                         stuck_polls, stuck
 purefa_config           purity_version, ntp_servers(_csv), dns_domain,
@@ -1553,8 +1553,10 @@ def poll_replication(arr, state, args):
                     ),
                     "snapshot_schedule_enabled": snap.get("enabled"),
                     "snapshot_frequency_ms": snap.get("frequency"),
+                    # for local groups: a group with a target has the flag
+                    # above, and its copies are the remote ones
                     "snapshot_schedule_disabled": bool(
-                        members and snap.get("enabled") is False
+                        not has_targets and members and snap.get("enabled") is False
                     ),
                     "in_progress": (
                         {

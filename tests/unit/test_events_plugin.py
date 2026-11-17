@@ -807,10 +807,12 @@ def test_pg_overdue_and_stuck(events):
 
 def test_pg_disabled_schedules_are_flagged_and_local_groups_are_read(events):
     """A replication schedule switched off on a group with a target, and a
-    snapshot schedule switched off on a group with members, each get a flag;
-    overdue stays what it was (it needs an enabled schedule); an empty group
-    is flagged for neither; targets and transfers are read for the groups
-    with a target only, though every local group is listed."""
+    snapshot schedule switched off on a local group with members, each get a
+    flag; a replicating group without a snapshot schedule gets neither (its
+    copies are the remote ones); overdue stays what it was (it needs an
+    enabled schedule); an empty group is flagged for neither; targets and
+    transfers are read for the groups with a target only, though every local
+    group is listed."""
     client = FakeClient(
         pgroups=[
             {
@@ -835,6 +837,13 @@ def test_pg_disabled_schedules_are_flagged_and_local_groups_are_read(events):
                 "replication_schedule": {"enabled": False, "frequency": HOUR_MS},
                 "snapshot_schedule": {"enabled": False, "frequency": HOUR_MS},
             },
+            {
+                "name": "pg-remote-only",
+                "target_count": 1,
+                "volume_count": 2,
+                "replication_schedule": {"enabled": True, "frequency": HOUR_MS},
+                "snapshot_schedule": {"enabled": False, "frequency": HOUR_MS},
+            },
         ],
         transfers=[transfer("pg-off", 1, completed=NOW_MS - 5 * HOUR_MS)],
     )
@@ -844,7 +853,11 @@ def test_pg_disabled_schedules_are_flagged_and_local_groups_are_read(events):
         for e in out
         if "purefa_pg_replication" in e
     }
-    assert set(by) == {"pg-off", "pg-local", "pg-empty"}
+    assert set(by) == {"pg-off", "pg-local", "pg-empty", "pg-remote-only"}
+    remote = by["pg-remote-only"]
+    assert remote["snapshot_schedule_disabled"] is False  # replicating: not a local gap
+    assert remote["schedule_disabled_with_targets"] is False
+    assert remote["snapshot_schedule_enabled"] is False
     off = by["pg-off"]
     assert off["schedule_disabled_with_targets"] is True
     assert (
@@ -867,11 +880,12 @@ def test_pg_disabled_schedules_are_flagged_and_local_groups_are_read(events):
     assert "target_count" not in listing["filter"]
     assert "is_local='true'" in listing["filter"]
     targets = next(kw for n, kw in client.calls if n == "get_protection_groups_targets")
-    assert targets["group_names"] == ["pg-off"]
+    assert targets["group_names"] == ["pg-off", "pg-remote-only"]
     transfer_calls = [
         kw for n, kw in client.calls if n == "get_protection_group_snapshots_transfer"
     ]
-    assert len(transfer_calls) == 1 and "pg-off" in transfer_calls[0]["filter"]
+    assert len(transfer_calls) == 2
+    assert all("pg-local" not in kw["filter"] for kw in transfer_calls)
 
 
 def test_pg_without_schedule_objects_is_not_taken_for_disabled(events):

@@ -625,6 +625,16 @@ and finished first; every platform service, the orchestrator's stack and
 this project's containers came back under their units again, and the
 containers started at boot again had no root mount in podman's view.
 
+A disabled schedule flagged (2026-11-17). With the replication activation
+recreated on the new image, its first poll raised the three notifications
+the lab's groups warranted, within a minute: critical for a group on array
+B replicating to array A with its replication schedule switched off (the
+condition the overdue test had never seen), and warnings for the two groups
+on array A without a local snapshot schedule. One of those two replicates
+hourly, which is why the snapshot flag is now confined to groups without a
+target; nothing on the arrays was changed, and the critical notification
+repeats hourly until the group's schedule is enabled or its target removed.
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on an array:
