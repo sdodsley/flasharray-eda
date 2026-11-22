@@ -46,6 +46,9 @@ class Client:
     def get_arrays(self, **kw):
         return Resp([{"version": "6.10.6"}])
 
+    def get_hosts(self, **kw):
+        return Resp([])
+
 
 class Arr:
     def __init__(self, client):

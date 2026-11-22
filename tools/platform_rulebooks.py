@@ -40,6 +40,7 @@ GENERATOR = "tools/platform_rulebooks.py"
 # the names the orchestrator definitions and these rulebooks may use)
 PLAYBOOK_TEMPLATES = {
     "playbooks/notify.yml": "FlashArray - notify",
+    "playbooks/digest.yml": "FlashArray - digest",
     "playbooks/capacity_request.yml": "FlashArray - capacity request",
     "playbooks/capacity_reclaim.yml": "FlashArray - capacity reclaim",
     "playbooks/expand_volume.yml": "FlashArray - expand volume",

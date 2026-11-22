@@ -30,7 +30,7 @@ flowchart LR
     om["OpenMetrics exporter<br/>(Purity 6.7+)"]
   end
   subgraph rb["ansible-rulebook"]
-    events["purefa_events<br/>(pull, six signals)"]
+    events["purefa_events<br/>(pull, seven signals)"]
     pes["purefa_syslog<br/>(push, UDP/TCP)"]
     am["ansible.eda.alertmanager"]
     rules["rulebooks<br/>gated by maintenance windows,<br/>automation_users and per-site switches"]
@@ -115,11 +115,11 @@ Three things to get right on the first run:
 
 | Rulebook | Source | Fires on | Action |
 | --- | --- | --- | --- |
-| `alerts.yml` | alerts | alert opened, reopened or raised in severity; alert resolved (`closing`) | routes through the alert-code runbook map: notify, ticket, or per-code tasks, with the array's own action text and KB link |
+| `alerts.yml` | alerts, tick | alert opened, reopened or raised in severity; alert resolved (`closing`); a tick (standalone; on the platform the seed's quarter-hour schedule) | routes through the alert-code runbook map: notify, ticket, or per-code tasks, with the array's own action text and KB link; the digest of held notifications |
 | `change_control.yml` | audits, webhook | a governed setting changed by anyone but the automation account; a destructive command by a human; a signed git push | reconcile from the git baseline (NTP, DNS) and report who; notify; apply the baseline forward |
-| `config_drift.yml` | config | NTP, DNS, LDAP, SafeMode/eradication, admin auth settings vs baseline (poll-based fallback) | NTP and DNS reapplied; the rest notify |
-| `health.yml` | health | hardware component not ok; drive not healthy; controller failover; maintenance window; remote assist | hardware component not ok: identify LED + notify, cleared again when it recovers, logged only inside a maintenance window; drive not healthy, controller failover: notify; maintenance window, remote assist: logged |
-| `replication.yml` | replication, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a group's replication schedule off with a target set, or a local group's snapshot schedule off with members; a tick (standalone; on the platform the seed's nightly schedule) | notify; move host preferred arrays to the online side and back; replicate now (with `orchestrator_enabled`, an approval in the orchestrator first); DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
+| `config_drift.yml` | config | NTP, DNS, LDAP, SafeMode/eradication, admin auth settings vs baseline (poll-based fallback); no enabled alert watcher, or the watchers off the baseline; a certificate inside its warning days or expired; a KMIP server failing its test | NTP and DNS reapplied; the rest notify |
+| `health.yml` | health | hardware component not ok; drive not healthy; controller failover; a host's paths degraded or critical, and recovered; maintenance window; remote assist | hardware component not ok: identify LED + notify, cleared again when it recovers, logged only inside a maintenance window; drive not healthy, controller failover, host paths: notify; maintenance window, remote assist: logged |
+| `replication.yml` | replication + protection, tick | connection down or paths failed; replica link paused, unhealthy, lag over RPO (escalates after N polls); stretched pod member offline / recovered; protection group overdue or stuck; a group's replication schedule off with a target set, or a local group's snapshot schedule off with members; volumes with no protection group and no replicated pod; local snapshots only, groups without SafeMode or below the retention minimum (per-site switches); members removed from a group; a tick (standalone; on the platform the seed's nightly schedule) | notify; move host preferred arrays to the online side and back; replicate now (with `orchestrator_enabled`, an approval in the orchestrator first); DR drill (copy a volume from the latest replicated snapshot on the target, verify, destroy) |
 | `capacity.yml` | telemetry, webhook | used % over threshold; days-to-full from the array's 7-day history; an approval (bearer token) | approval request with request id; reclaim pending-eradication objects only when approved |
 | `performance.yml` | telemetry | noisy neighbour on a hot array; capped volume back to normal; array write latency vs the same half hour last week | temporary IOPS cap with an `eda/qos_cap` tag on the array (a member of a volume group with its own QoS: notify, or cap the group, by `qos_cap_scope`); cap lifted; notify |
 | `anomaly.yml` | telemetry + audits | data reduction drop + snapshot or write surge + a human destroying snapshots, all on one array inside 15 minutes | snapshot every local protection group now, lengthen the eradication delay, page |
@@ -129,9 +129,10 @@ Three things to get right on the first run:
 Gates decide what each event allows:
 
 - `maintenance_active` (one cached `/maintenance-windows` read per array)
-  travels on alert, audit, hardware and replication events. It holds back
-  the alert runbooks, the reconcile, the identify LED, the preferred-array
-  move and replicate-now. Config and telemetry events carry no such flag,
+  travels on alert, audit, hardware, host-connectivity, replication and
+  protection events. It holds back the alert runbooks, the reconcile, the
+  identify LED, the preferred-array move, replicate-now and the host-path
+  and protection notifications. Config and telemetry events carry no such flag,
   so the NTP and DNS reapply and the QoS cap run inside a window too.
 - `automation_users` keeps the audit-driven rules (reconcile, protect-now)
   from reacting to the automation's own changes.
@@ -150,9 +151,9 @@ webhook is configured ("Notifications" below).
 
 ```
 galaxy.yml, meta/runtime.yml           the repository root is the collection sdodsley.flasharray_eda (docs/PACKAGING.md)
-extensions/eda/plugins/event_source/   purefa_events.py (REST pull, six signals), purefa_syslog.py (push)
+extensions/eda/plugins/event_source/   purefa_events.py (REST pull, seven signals), purefa_syslog.py (push)
 extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN
-playbooks/                             notify, remediate_*, reconcile, apply_baseline, identify_led, replicate_now, dr_promote, dr_demote,
+playbooks/                             notify, digest, remediate_*, reconcile, apply_baseline, identify_led, replicate_now, dr_promote, dr_demote,
                                        preferred_array, dr_drill, dr_switchover, alertmanager_silence, capacity_request/reclaim, qos_cap, protect_now,
                                        expand_volume, orchestrator_post, self_check, definitions_check,
                                        alert_runbook (+ runbooks/<code>.yml, included relative to the playbook)
@@ -199,13 +200,14 @@ interval, and every REST call is bounded by `request_timeout` (default
 | --- | --- | --- |
 | alerts | `/alerts` (state != closed), diffed locally | `purefa_alert` with transition initial / opened / updated / reopened / closing / closed |
 | audits | `/audits` newest N, cut at a local time cursor | `purefa_audit` with user, command, subcommand, arguments, by_automation |
-| health | `/hardware`, `/drives`, `/controllers`, `/maintenance-windows`, `/support` | `purefa_health`, `purefa_hardware` per issue, `purefa_controller_failover` |
+| health | `/hardware`, `/drives`, `/controllers`, `/hosts`, `/maintenance-windows`, `/support` | `purefa_health` (hosts_degraded), `purefa_hardware` per issue, `purefa_controller_failover`, `purefa_host_connectivity` per degraded host (status, details, recovered) |
 | telemetry | `/arrays/space` (+ 7-day history), `/volumes/space` (growth tracked across the `growth_volumes`, default 500, largest live volumes), `/arrays/performance` (+ same half hour last week), `/volumes/performance` top N (plus any volume tagged `eda/qos_cap`, whatever its rank), volume QoS and tags | `purefa_capacity` (days_to_full, top growers, pending eradication, drr_drop, snapshot_surge), `purefa_array_performance` (baseline ratios, write_surge), `purefa_volume_performance` (streak counters, iops share, QoS limit, eda_capped) |
 | replication | `/array-connections` (+ paths), `/pod-replica-links`, `/pods` (stretched), `/protection-groups` (+ targets, transfers) | `purefa_array_connection` (failed paths), `purefa_replica_link` (rpo_breached, breach streak, paused_for_s), `purefa_stretched_pod` (online/offline arrays, recovered), `purefa_pg_replication` (overdue, stuck, schedule_disabled_with_targets, snapshot_schedule_disabled) |
-| config | `/arrays`, `/dns`, `/directory-services`, `/admins/settings`, `/syslog-servers`, `/smtp-servers`, `/alert-watchers`, `/support` | `purefa_config` |
+| protection | `/volumes`, `/protection-groups` (+ volumes, hosts, host-groups), `/connections`, `/pods` | `purefa_protection_posture` (unprotected, local_only, groups_unlocked, groups_short_retention, members_removed) |
+| config | `/arrays`, `/dns`, `/directory-services`, `/admins/settings`, `/syslog-servers`, `/smtp-servers`, `/alert-watchers`, `/support`, `/certificates`, `/kmip` (+ test) | `purefa_config` (alert watchers with their state), `purefa_certificate` per certificate (days_left), `purefa_kmip` per server (ok, failures) |
 
-Every event carries `array`; alert, audit, hardware and replication events
-also carry `maintenance_active`. A poll failure arrives as
+Every event carries `array`; alert, audit, hardware, host-connectivity,
+replication and protection events also carry `maintenance_active`. A poll failure arrives as
 `purefa_poll_error` and polling continues. The plugin docstrings hold the
 full argument and field lists.
 
@@ -284,6 +286,21 @@ alert's resolved notice at info, or a request whose approval card the bot
 posts anyway, is record material: it stays in the alert log and the job
 output.
 
+A burst becomes a digest. `notify.yml` counts the array's earlier
+notifications in the last `digest_window_minutes` (the controller's
+`FlashArray - notify` jobs on the platform, where the notify template
+carries the platform token credential; the alert log standalone) and, from
+`digest_burst_threshold` of them on, records the notification with
+`held: true` instead of posting it. A critical record is still posted
+unless `digest_hold_critical` is true, a record under the Slack floor is
+never held, and a count that cannot be made holds nothing.
+`playbooks/digest.yml`, run by the alerts rulebook's tick every
+`digest_interval_s` seconds standalone and by the seed's quarter-hour
+schedule on the platform, posts one message per array for the records held
+since the last digest: the count, the counts per severity and the first
+subjects. Standalone, `notify.yml` takes the playbook defaults (six in
+fifteen minutes) since the rules pass no digest variables.
+
 On the platform `aap/seed.yml` also creates a Slack notification template
 (bot token, `chat:write`) that posts job failures and the controller-tier
 workflow's approval, success and failure events, each with its link into
@@ -307,8 +324,10 @@ definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
 the same tree: the collection `sdodsley.flasharray_eda`, built from the
 checkout at image build time and installed with `everpure.flasharray` and
 `ansible.eda`, py-pure-client, and the rulebooks and playbooks as plain
-files under `/opt/flasharray-eda` for runs that name them by path. CI does
-not build the image. The image is self-contained for standalone
+files under `/opt/flasharray-eda` for runs that name them by path. CI
+publishes the image to the GitHub container registry on a push to `main`
+that changes what it is built from and on every version tag
+([docs/PACKAGING.md](docs/PACKAGING.md), "Published image"). The image is self-contained for standalone
 `ansible-rulebook` runs, with no `--source-dir`; the Containerfile header
 has the `podman run` line, which mounts `vars/`, `inventory/` and the
 baseline checkout and passes the credentials as environment variables.

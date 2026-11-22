@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the purefa_events source plugin that need no array: the helpers,
 the alert transition diff, the audit cursor and its pagination, the capped
-volume inclusion, the protection group transfer ordering and the SDK client
-construction, all driven by a fake SDK client."""
+volume inclusion, the protection group transfer ordering, the protection
+posture, host connectivity, certificates, KMIP, alert watchers and the SDK
+client construction, all driven by a fake SDK client."""
 
 import asyncio
 import contextlib
@@ -54,6 +55,15 @@ class FakeClient:
         volume_groups=None,
         groups=None,
         vg_tags=None,
+        volumes=None,
+        pg_members=None,
+        connections=None,
+        pods=None,
+        hosts=None,
+        certificates=None,
+        kmip=None,
+        kmip_tests=None,
+        watchers=None,
     ):
         self.alerts = alerts or []
         self.audits = audits or []
@@ -66,6 +76,15 @@ class FakeClient:
         self.volume_groups = volume_groups or {}  # volume -> its group
         self.groups = groups or {}  # group -> its qos dict
         self.vg_tags = vg_tags or []  # (group, key, value)
+        self.volumes = volumes or []  # /volumes rows for a filtered listing
+        self.pg_members = pg_members or []  # (group, volume|host|hgroup, member)
+        self.connections = connections or []  # (volume, host, host group or None)
+        self.pods = pods or []  # /pods rows
+        self.hosts = hosts or []  # /hosts rows
+        self.certificates = certificates or []  # /certificates rows
+        self.kmip = kmip or []  # /kmip rows
+        self.kmip_tests = kmip_tests or {}  # server -> test rows, or a FakeError
+        self.watchers = watchers or []  # /alert-watchers rows
         self.calls = []
 
     # --- alerts / audits -------------------------------------------------
@@ -97,7 +116,11 @@ class FakeClient:
         return FakeResponse([])
 
     def get_pods(self, **kw):
-        return FakeResponse([])
+        self.calls.append(("get_pods", kw))
+        rows = list(self.pods)
+        if "array_count>1" in (kw.get("filter") or ""):
+            rows = [p for p in rows if (p.get("array_count") or 0) > 1]
+        return FakeResponse(rows)
 
     def get_hardware(self, **kw):
         return FakeResponse(self.hardware)
@@ -136,6 +159,40 @@ class FakeClient:
                 {"group": {"name": p["name"]}, "member": {"name": "array-b"}}
                 for p in self.pgroups
                 if p["name"] in names
+            ]
+        )
+
+    def _pg_members(self, kind, call, kw):
+        self.calls.append((call, kw))
+        return FakeResponse(
+            [
+                {"group": {"name": g}, "member": {"name": m}}
+                for g, k, m in self.pg_members
+                if k == kind
+            ]
+        )
+
+    def get_protection_groups_volumes(self, **kw):
+        return self._pg_members("volume", "get_protection_groups_volumes", kw)
+
+    def get_protection_groups_hosts(self, **kw):
+        return self._pg_members("host", "get_protection_groups_hosts", kw)
+
+    def get_protection_groups_host_groups(self, **kw):
+        return self._pg_members("hgroup", "get_protection_groups_host_groups", kw)
+
+    def get_connections(self, **kw):
+        self.calls.append(("get_connections", kw))
+        hosts, groups = kw.get("host_names"), kw.get("host_group_names")
+        return FakeResponse(
+            [
+                {
+                    "volume": {"name": v},
+                    "host": {"name": h},
+                    "host_group": {"name": hg} if hg else None,
+                }
+                for v, h, hg in self.connections
+                if (hosts is None or h in hosts) and (groups is None or hg in groups)
             ]
         )
 
@@ -208,6 +265,8 @@ class FakeClient:
 
     def get_volumes(self, **kw):
         self.calls.append(("get_volumes", kw))
+        if "names" not in kw:
+            return FakeResponse(self.volumes)
         return FakeResponse(
             [
                 {
@@ -246,6 +305,45 @@ class FakeClient:
                 for n, k, v in self.tags
             ]
         )
+
+    # --- health: hosts ---------------------------------------------------
+    def get_hosts(self, **kw):
+        self.calls.append(("get_hosts", kw))
+        return FakeResponse(self.hosts)
+
+    # --- config ----------------------------------------------------------
+    def get_dns(self, **kw):
+        return FakeResponse([])
+
+    def get_directory_services(self, **kw):
+        return FakeResponse([])
+
+    def get_admins_settings(self, **kw):
+        return FakeResponse([])
+
+    def get_syslog_servers(self, **kw):
+        return FakeResponse([])
+
+    def get_smtp_servers(self, **kw):
+        return FakeResponse([])
+
+    def get_alert_watchers(self, **kw):
+        self.calls.append(("get_alert_watchers", kw))
+        return FakeResponse(self.watchers)
+
+    def get_certificates(self, **kw):
+        self.calls.append(("get_certificates", kw))
+        return FakeResponse(self.certificates)
+
+    def get_kmip(self, **kw):
+        self.calls.append(("get_kmip", kw))
+        return FakeResponse(self.kmip)
+
+    def get_kmip_test(self, **kw):
+        self.calls.append(("get_kmip_test", kw))
+        (name,) = kw["names"]
+        result = self.kmip_tests.get(name, [])
+        return result if isinstance(result, FakeError) else FakeResponse(result)
 
 
 class FakeArray:
@@ -1198,3 +1296,456 @@ def test_normal_polls_count_from_the_cap(events):
     assert capped["normal_polls"] == 0
     assert volume_event()["normal_polls"] == 1
     assert state["telemetry"]["array-a"]["capped_last_poll"] == ["v"]
+
+
+# --- protection posture ------------------------------------------------------
+def volume(name, pod=None, **extra):
+    return {
+        "name": name,
+        "pod": {"name": pod} if pod else None,
+        "subtype": "regular",
+        **extra,
+    }
+
+
+def pgroup(name, targets=0, members=1, lock="ratcheted", days=None):
+    return {
+        "name": name,
+        "target_count": targets,
+        "volume_count": members,
+        "retention_lock": lock,
+        "source_retention": {"all_for_sec": 86_400, "per_day": 4, "days": days},
+    }
+
+
+def posture(events, arr, state=None, args=None):
+    out = events.poll_protection(arr, state if state is not None else {}, args or {})
+    (event,) = [e["purefa_protection_posture"] for e in out]
+    assert len(out) == 1
+    return event
+
+
+def test_protection_signal_is_registered(events):
+    assert "protection" in events.SIGNALS
+    assert events.POLLERS["protection"] is events.poll_protection
+    doc = yaml.safe_load(events.DOCUMENTATION)
+    assert "protection" in doc["options"]["signals"]["choices"]
+    assert "protection" in doc["options"]["signals"]["default"]
+    assert doc["options"]["protection_interval"]["type"] == "int"
+    assert doc["options"]["protection_min_retention_days"]["default"] == 0
+
+
+def test_protection_posture_classifies_volumes_by_group_connection_and_pod(events):
+    """A volume is protected as a direct member, through a connected host
+    that is a member, or through a host group that is a member; a volume in
+    a replicated pod is protected by the link; a stretched-only pod is not
+    protection; protocol endpoints and remote groups' members do not count."""
+    client = FakeClient(
+        volumes=[
+            volume("v-direct"),
+            volume("v-host"),
+            volume("v-hgroup"),
+            volume("v-none"),
+            volume("repl::v", pod="repl"),
+            volume("repl::w", pod="repl"),
+            volume("stretch::v", pod="stretch"),
+            volume("pe-1", subtype="protocol_endpoint"),
+        ],
+        pgroups=[pgroup("pg-remote", targets=1, members=2), pgroup("pg-local")],
+        pg_members=[
+            ("pg-remote", "volume", "v-direct"),
+            ("pg-remote", "host", "h-member"),
+            ("pg-local", "hgroup", "hg-member"),
+            ("pg-local", "volume", "repl::w"),  # replicated as well: not local only
+            (
+                "array-b:pg-far",
+                "volume",
+                "v-none",
+            ),  # a remote group: not protection here
+        ],
+        connections=[
+            ("v-host", "h-member", None),
+            ("v-hgroup", "h-in-group", "hg-member"),
+            ("v-none", "h-plain", None),
+        ],
+        pods=[
+            {
+                "name": "repl",
+                "array_count": 1,
+                "link_source_count": 1,
+                "link_target_count": 0,
+            },
+            {
+                "name": "stretch",
+                "array_count": 2,
+                "link_source_count": 0,
+                "link_target_count": 0,
+            },
+            {
+                "name": "both",
+                "array_count": 2,
+                "link_source_count": 0,
+                "link_target_count": 1,
+            },
+            {
+                "name": "gone",
+                "array_count": 1,
+                "link_source_count": 1,
+                "destroyed": True,
+            },
+        ],
+    )
+    p = posture(events, FakeArray(client))
+    assert p["array"] == "array-a" and p["maintenance_active"] is False
+    assert p["volumes_total"] == 7  # the protocol endpoint is not a volume to protect
+    assert p["unprotected"] == ["stretch::v", "v-none"]
+    assert p["unprotected_count"] == 2
+    assert p["unprotected_csv"] == "stretch::v,v-none"
+    assert p["local_only"] == ["v-hgroup"] and p["local_only_count"] == 1
+    assert p["pods_replicated"] == ["both", "repl"]
+    assert p["pods_stretched"] == ["both", "stretch"]
+    assert p["groups_total"] == 2
+    assert p["members_removed_count"] == 0 and p["members_added_count"] == 0
+    assert next(kw for n, kw in client.calls if n == "get_volumes") == {
+        "filter": "destroyed='false'"
+    }
+    listing = next(kw for n, kw in client.calls if n == "get_protection_groups")
+    assert "is_local='true'" in listing["filter"]
+    assert all(
+        any(n == call for n, _ in client.calls)
+        for call in (
+            "get_protection_groups_volumes",
+            "get_protection_groups_hosts",
+            "get_protection_groups_host_groups",
+            "get_connections",
+            "get_pods",
+        )
+    )
+
+
+def test_protection_posture_caps_the_name_lists_but_not_the_counts(events):
+    client = FakeClient(volumes=[volume(f"v-{i:02d}") for i in range(25)])
+    p = posture(events, FakeArray(client))
+    assert p["unprotected_count"] == 25 and p["volumes_total"] == 25
+    assert len(p["unprotected"]) == events.POSTURE_NAMES
+    assert p["unprotected"][0] == "v-00"
+    assert p["unprotected_csv"].count(",") == events.POSTURE_NAMES - 1
+    # no host or host group is a member: the connections table is not read
+    assert not any(n == "get_connections" for n, _ in client.calls)
+
+
+def test_protection_posture_flags_unlocked_and_short_retention_groups(events):
+    """SafeMode is a ratcheted retention lock; a group with members and any
+    other lock is unlocked, an empty one is not worth a page. Retention is
+    checked only when a minimum is set, against the days kept."""
+    client = FakeClient(
+        pgroups=[
+            pgroup("pg-safe", members=2, lock="ratcheted", days=7),
+            pgroup("pg-open", members=1, lock="unlocked", days=3),
+            pgroup("pg-empty", members=0, lock="unlocked", days=1),
+            {"name": "pg-bare", "volume_count": 1},  # no lock or retention reported
+        ]
+    )
+    p = posture(events, FakeArray(client))
+    assert p["groups_unlocked"] == ["pg-bare", "pg-open"]
+    assert p["groups_unlocked_count"] == 2
+    assert p["groups_short_retention"] == [] and p["groups_short_retention_count"] == 0
+    p = posture(events, FakeArray(client), args={"protection_min_retention_days": 7})
+    assert p["groups_short_retention"] == ["pg-empty", "pg-open"]
+    assert p["groups_short_retention_count"] == 2
+    assert p["groups_total"] == 4
+
+
+def test_protection_posture_reports_members_that_left_or_joined(events):
+    """Membership drift is read against the previous poll, so the first poll
+    reports nothing; hosts and host groups are told apart from volumes."""
+    client = FakeClient(
+        pgroups=[pgroup("pg-a", members=3)],
+        pg_members=[
+            ("pg-a", "volume", "v1"),
+            ("pg-a", "host", "h1"),
+            ("pg-a", "hgroup", "hg1"),
+        ],
+    )
+    arr = FakeArray(client)
+    state = {}
+    first = posture(events, arr, state)
+    assert first["members_removed_count"] == 0 and first["members_removed"] == []
+    assert first["members_added_count"] == 0 and first["members_added"] == []
+    assert state["protection"]["array-a"]["members"] == {
+        "pg-a:v1",
+        "pg-a:host/h1",
+        "pg-a:hgroup/hg1",
+    }
+    # the connections are read for the member host and host group only
+    assert ("get_connections", {"host_names": ["h1"]}) in client.calls
+    assert ("get_connections", {"host_group_names": ["hg1"]}) in client.calls
+    client.pg_members = [("pg-a", "volume", "v2"), ("pg-a", "hgroup", "hg1")]
+    second = posture(events, arr, state)
+    assert second["members_removed"] == ["pg-a:host/h1", "pg-a:v1"]
+    assert second["members_removed_count"] == 2
+    assert second["members_added"] == ["pg-a:v2"] and second["members_added_count"] == 1
+    third = posture(events, arr, state)
+    assert third["members_removed_count"] == 0 and third["members_added_count"] == 0
+    # the state is per array
+    other = posture(events, FakeArray(client, "array-b"), state)
+    assert other["members_removed_count"] == 0
+    assert set(state["protection"]) == {"array-a", "array-b"}
+
+
+# --- host connectivity --------------------------------------------------------
+def host(name, connections, status, details=None, group=None):
+    return {
+        "name": name,
+        "connection_count": connections,
+        "port_connectivity": {"status": status, "details": details},
+        "host_group": {"name": group} if group else None,
+        "personality": "linux",
+    }
+
+
+def test_health_reports_degraded_hosts_with_volumes_and_their_recovery(events):
+    """A host with volumes whose ports are not all healthy is an event each
+    poll; a host without volumes is not; when the paths are back (or the
+    host is gone or has no volumes left) one recovered event follows and
+    then nothing."""
+    client = FakeClient(
+        hosts=[
+            host("h-lost", 2, "unhealthy", "Uneven", group="hg-db"),
+            host("h-idle", 0, "critical"),  # a volume-less host reads critical
+            host("h-ok", 4, "healthy"),
+        ]
+    )
+    arr = FakeArray(client)
+    state = {}
+
+    def poll():
+        out = events.poll_health(arr, state, {})
+        health = next(e["purefa_health"] for e in out if "purefa_health" in e)
+        hosts = [
+            e["purefa_host_connectivity"]
+            for e in out
+            if "purefa_host_connectivity" in e
+        ]
+        return health, hosts
+
+    health, hosts = poll()
+    assert (
+        health["hosts_degraded_count"] == 1 and health["hosts_degraded_csv"] == "h-lost"
+    )
+    assert hosts == [
+        {
+            "array": "array-a",
+            "maintenance_active": False,
+            "host": "h-lost",
+            "status": "unhealthy",
+            "details": "Uneven",
+            "connection_count": 2,
+            "host_group": "hg-db",
+            "personality": "linux",
+            "recovered": False,
+        }
+    ]
+    assert state["health"]["array-a"]["host_paths"] == {"h-lost": "unhealthy"}
+    # still degraded: reported again (the rulebook throttles), no recovery yet
+    health, hosts = poll()
+    assert [h["recovered"] for h in hosts] == [False]
+    # the paths are back: one recovered event, then silence
+    client.hosts[0] = host("h-lost", 2, "healthy", group="hg-db")
+    health, hosts = poll()
+    assert health["hosts_degraded_count"] == 0 and health["hosts_degraded_csv"] == ""
+    (recovered,) = hosts
+    assert recovered["host"] == "h-lost" and recovered["recovered"] is True
+    assert recovered["status"] == "healthy" and recovered["details"] is None
+    assert recovered["connection_count"] == 2 and recovered["host_group"] == "hg-db"
+    assert state["health"]["array-a"]["host_paths"] == {}
+    health, hosts = poll()
+    assert hosts == []
+    # a degraded host that is deleted counts as recovered as well
+    client.hosts.append(host("h-gone", 1, "critical", "Single Controller"))
+    health, hosts = poll()
+    assert health["hosts_degraded_csv"] == "h-gone" and len(hosts) == 1
+    assert (
+        hosts[0]["status"] == "critical" and hosts[0]["details"] == "Single Controller"
+    )
+    client.hosts.pop()
+    health, hosts = poll()
+    (recovered,) = hosts
+    assert recovered["host"] == "h-gone" and recovered["recovered"] is True
+    assert recovered["status"] == "healthy" and recovered["connection_count"] == 0
+    assert recovered["host_group"] is None and recovered["personality"] is None
+    # a degraded host that loses its last volume leaves the set too; the
+    # recovered record carries the status the array still reports for it
+    client.hosts[0] = host("h-lost", 2, "unhealthy", "Uneven", group="hg-db")
+    health, hosts = poll()
+    assert health["hosts_degraded_csv"] == "h-lost" and len(hosts) == 1
+    client.hosts[0] = host("h-lost", 0, "critical", group="hg-db")
+    health, hosts = poll()
+    (recovered,) = hosts
+    assert recovered["host"] == "h-lost" and recovered["recovered"] is True
+    assert recovered["status"] == "critical" and recovered["connection_count"] == 0
+    assert state["health"]["array-a"]["host_paths"] == {}
+
+
+def test_health_without_port_connectivity_pages_nobody(events):
+    client = FakeClient(hosts=[{"name": "h-old", "connection_count": 3}])
+    out = events.poll_health(FakeArray(client), {}, {})
+    assert not any("purefa_host_connectivity" in e for e in out)
+    health = next(e["purefa_health"] for e in out if "purefa_health" in e)
+    assert health["hosts_degraded_count"] == 0
+
+
+# --- certificates, KMIP and alert watchers (the config signal) ----------------
+def test_config_emits_a_certificate_event_with_whole_days_left(events):
+    client = FakeClient(
+        certificates=[
+            {
+                "name": "management",
+                "status": "self-signed",
+                "certificate_type": "array",
+                "issued_to": "array-a",
+                "common_name": "array-a",
+                "valid_to": NOW_MS + 10 * events.DAY_MS + HOUR_MS,
+            },
+            {
+                "name": "expired",
+                "status": "imported",
+                "certificate_type": "external",
+                "issued_to": "directory",
+                "common_name": "directory.example.net",
+                "valid_to": NOW_MS - 2 * events.DAY_MS - HOUR_MS,
+            },
+            {"name": "no-dates", "status": "imported", "certificate_type": "external"},
+        ]
+    )
+    out = events.poll_config(FakeArray(client), {}, {})
+    assert next(iter(out[0])) == "purefa_config"
+    certs = {
+        e["purefa_certificate"]["name"]: e["purefa_certificate"]
+        for e in out
+        if "purefa_certificate" in e
+    }
+    assert set(certs) == {"management", "expired", "no-dates"}
+    assert certs["management"]["days_left"] == 10
+    # two days and an hour ago, floored: three days over
+    assert certs["expired"] == {
+        "array": "array-a",
+        "name": "expired",
+        "status": "imported",
+        "certificate_type": "external",
+        "issued_to": "directory",
+        "common_name": "directory.example.net",
+        "valid_to": NOW_MS - 2 * events.DAY_MS - HOUR_MS,
+        "days_left": -3,
+    }
+    assert "days_left" not in certs["no-dates"]
+    assert certs["no-dates"]["valid_to"] is None
+    assert certs["no-dates"]["issued_to"] is None
+
+
+def test_config_tests_each_kmip_server_and_survives_a_failed_test_call(events):
+    client = FakeClient(
+        kmip=[
+            {"name": "kmip-good", "uris": ["kmip-good.example.net:5696"]},
+            {"name": "kmip-bad", "uris": ["kmip-bad.example.net:5696"]},
+            {"name": "kmip-untested", "uris": []},
+        ],
+        kmip_tests={
+            "kmip-good": [
+                {"success": True, "destination": "kmip-good.example.net:5696"}
+            ],
+            "kmip-bad": [
+                {
+                    "success": True,
+                    "destination": "kmip-bad.example.net:5696",
+                    "description": "resolved",
+                },
+                {
+                    "success": False,
+                    "destination": "kmip-bad.example.net:5696",
+                    "description": "connection refused",
+                },
+            ],
+            "kmip-untested": FakeError("test not available"),
+        },
+    )
+    out = events.poll_config(FakeArray(client), {}, {})
+    kmip = {
+        e["purefa_kmip"]["name"]: e["purefa_kmip"] for e in out if "purefa_kmip" in e
+    }
+    assert kmip["kmip-good"] == {
+        "array": "array-a",
+        "name": "kmip-good",
+        "uris": ["kmip-good.example.net:5696"],
+        "tested": True,
+        "ok": True,
+        "failures": [],
+    }
+    assert kmip["kmip-bad"]["tested"] is True and kmip["kmip-bad"]["ok"] is False
+    assert kmip["kmip-bad"]["failures"] == [
+        "kmip-bad.example.net:5696: connection refused"
+    ]
+    assert kmip["kmip-untested"] == {
+        "array": "array-a",
+        "name": "kmip-untested",
+        "uris": [],
+        "tested": False,
+        "ok": None,
+        "failures": [],
+    }
+    assert [kw for n, kw in client.calls if n == "get_kmip_test"] == [
+        {"names": ["kmip-good"]},
+        {"names": ["kmip-bad"]},
+        {"names": ["kmip-untested"]},
+    ]
+    # no server configured: no event
+    out = events.poll_config(FakeArray(FakeClient()), {}, {})
+    assert [next(iter(e)) for e in out] == ["purefa_config"]
+
+
+def test_config_carries_alert_watcher_detail_and_counts(events):
+    client = FakeClient(
+        watchers=[
+            {
+                "name": "ops@example.com",
+                "enabled": True,
+                "minimum_notification_severity": "warning",
+            },
+            {
+                "name": "audit@example.com",
+                "enabled": False,
+                "minimum_notification_severity": "critical",
+            },
+            {"name": "noc@example.com", "enabled": True},  # before the severity floor
+        ]
+    )
+    out = events.poll_config(FakeArray(client), {}, {})
+    cfg = out[0]["purefa_config"]
+    assert cfg["alert_watchers"] == [
+        {
+            "name": "audit@example.com",
+            "enabled": False,
+            "minimum_notification_severity": "critical",
+        },
+        {
+            "name": "noc@example.com",
+            "enabled": True,
+            "minimum_notification_severity": None,
+        },
+        {
+            "name": "ops@example.com",
+            "enabled": True,
+            "minimum_notification_severity": "warning",
+        },
+    ]
+    assert (
+        cfg["alert_watchers_csv"] == "audit@example.com,noc@example.com,ops@example.com"
+    )
+    assert cfg["alert_watcher_count"] == 3
+    assert cfg["alert_watchers_enabled_count"] == 2
+    assert cfg["alert_watchers_enabled"] == ["ops@example.com", "noc@example.com"]
+    assert cfg["alert_watchers_enabled_csv"] == "noc@example.com,ops@example.com"
+    # no watcher at all
+    cfg = events.poll_config(FakeArray(FakeClient()), {}, {})[0]["purefa_config"]
+    assert cfg["alert_watcher_count"] == 0 and cfg["alert_watchers_enabled_count"] == 0
+    assert cfg["alert_watchers"] == [] and cfg["alert_watchers_csv"] == ""

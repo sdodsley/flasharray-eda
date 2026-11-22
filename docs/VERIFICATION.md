@@ -672,8 +672,9 @@ event takes the same path as a live one.
   capacity rule (lab override), the replica-link rule (a real pause) and
   the scrape rule (a closed port) are driven through Alertmanager to the
   platform activation; the rest wait for a real fault.
-- The ansible-builder images under CI: CI runs the static checks only; the
-  three definitions build on the lab host's `vfs` image store (rootless
+- The ansible-builder images under CI: CI builds, smoke-runs and publishes
+  the Containerfile image only; the ansible-builder definitions build on the
+  lab host's `vfs` image store (rootless
   podman with native overlay there fails every multi-stage `COPY --from`,
   [PACKAGING.md](PACKAGING.md)) and the two supported-base images have run
   on the platform (above). The upstream-based definitions pin

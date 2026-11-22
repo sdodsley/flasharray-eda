@@ -137,6 +137,52 @@
               subject: 'Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}'
               detail: previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}
               target_array: '{{ event.purefa_controller_failover.array }}'
+    - name: Host paths critical - notify
+      condition: event.purefa_host_connectivity.host is defined and event.purefa_host_connectivity.status == "critical" and event.purefa_host_connectivity.recovered == false and event.purefa_host_connectivity.maintenance_active == false
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefa_host_connectivity.array
+          - event.purefa_host_connectivity.host
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: critical
+              subject: Host {{ event.purefa_host_connectivity.host }} on {{ event.purefa_host_connectivity.array }} has critical port connectivity
+              detail: '{{ event.purefa_host_connectivity.details }}; {{ event.purefa_host_connectivity.connection_count }} volumes connected, host group {{ event.purefa_host_connectivity.host_group }}, personality {{ event.purefa_host_connectivity.personality }}'
+              target_array: '{{ event.purefa_host_connectivity.array }}'
+    - name: Host paths degraded - notify
+      condition: event.purefa_host_connectivity.host is defined and event.purefa_host_connectivity.recovered == false and event.purefa_host_connectivity.maintenance_active == false and event.purefa_host_connectivity.status != "healthy"
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefa_host_connectivity.array
+          - event.purefa_host_connectivity.host
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: Host {{ event.purefa_host_connectivity.host }} on {{ event.purefa_host_connectivity.array }} has {{ event.purefa_host_connectivity.status }} port connectivity
+              detail: '{{ event.purefa_host_connectivity.details }}; {{ event.purefa_host_connectivity.connection_count }} volumes connected, host group {{ event.purefa_host_connectivity.host_group }}, personality {{ event.purefa_host_connectivity.personality }}'
+              target_array: '{{ event.purefa_host_connectivity.array }}'
+    - name: Host paths recovered - notify
+      condition: event.purefa_host_connectivity.host is defined and event.purefa_host_connectivity.recovered == true
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: info
+              subject: Host {{ event.purefa_host_connectivity.host }} on {{ event.purefa_host_connectivity.array }} port connectivity recovered
+              detail: status {{ event.purefa_host_connectivity.status }}; {{ event.purefa_host_connectivity.connection_count }} volumes connected, host group {{ event.purefa_host_connectivity.host_group }}
+              target_array: '{{ event.purefa_host_connectivity.array }}'
     - name: Maintenance window active - log
       condition: event.purefa_health.maintenance_active == true
       throttle:

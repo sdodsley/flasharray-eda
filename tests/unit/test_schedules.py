@@ -3,11 +3,12 @@
 """Static checks over the controller schedules aap/seed.yml creates and the
 playbooks they launch: the nightly DR drill (dr_drill.yml fails the job when
 told and a drill failed, after publishing its artifacts), the weekly
-notification-path self-check (self_check.yml) and the nightly definitions
+notification-path self-check (self_check.yml), the nightly definitions
 drift check (definitions_check.yml, which carries the seed's rendering of
-the activation vars); the iCal rules render from the example vars; and the
-platform rulebooks carry no tick-only ruleset, because the schedule took the
-drill over."""
+the activation vars) and the quarter-hour notification digest (digest.yml,
+checked in test_digest.py); the iCal rules render from the example vars;
+and the platform rulebooks carry no tick-only ruleset, because the schedules
+took the drill and the digest over."""
 
 import pathlib
 import re
@@ -25,10 +26,13 @@ SCHEDULE_NAMES = {
     "FlashArray - DR drill (nightly)": "FlashArray - DR drill",
     "FlashArray - self check (weekly)": "FlashArray - self check",
     "FlashArray - definitions check (nightly)": "FlashArray - definitions check",
+    "FlashArray - digest (every quarter hour)": "FlashArray - digest",
 }
+# daily or weekly at a time of day, or every n minutes (the digest)
 RRULE = re.compile(
-    r"^DTSTART;TZID=UTC:20260101T\d{6} RRULE:FREQ=(DAILY|WEEKLY);INTERVAL=1"
-    r"(;BYDAY=(MO|TU|WE|TH|FR|SA|SU))?$"
+    r"^DTSTART;TZID=UTC:20260101T\d{6} RRULE:"
+    r"(FREQ=(DAILY|WEEKLY);INTERVAL=1(;BYDAY=(MO|TU|WE|TH|FR|SA|SU))?"
+    r"|FREQ=MINUTELY;INTERVAL=[1-9][0-9]*)$"
 )
 
 
@@ -74,7 +78,7 @@ def _context():
     return context
 
 
-def test_seed_creates_the_three_schedules_on_seeded_templates():
+def test_seed_creates_the_schedules_on_seeded_templates():
     play = _seed()
     schedules = play["vars"]["schedules"]
     assert {s["name"]: s["template"] for s in schedules} == SCHEDULE_NAMES
@@ -109,6 +113,9 @@ def test_schedule_rules_render_to_icalendar_from_the_example_vars():
     assert (
         "FREQ=WEEKLY;INTERVAL=1;BYDAY=" in rendered["FlashArray - self check (weekly)"]
     )
+    assert rendered["FlashArray - digest (every quarter hour)"].endswith(
+        "T000000 RRULE:FREQ=MINUTELY;INTERVAL=15"
+    )
     # the example times are HH:MM and the weekday an iCal code
     example = _load(EXAMPLE)
     for key in (
@@ -127,6 +134,15 @@ def test_schedule_rules_render_to_icalendar_from_the_example_vars():
         "SA",
         "SU",
     }
+    # the digest runs on an interval: a positive whole number of minutes, no
+    # longer than the burst window the first digest looks back over
+    digest = example["aap_digest_schedule"]
+    assert digest["enabled"] is True
+    assert isinstance(digest["every_minutes"], int) and digest["every_minutes"] > 0
+    assert (
+        digest["every_minutes"]
+        <= example["aap_job_extra_vars"]["digest_window_minutes"]
+    )
 
 
 def test_the_drill_schedule_fails_the_job_and_the_playbook_publishes_first():
@@ -243,7 +259,9 @@ def test_definitions_check_carries_the_seeds_rendering_and_writes_nothing():
     credential = next(
         t
         for t in play["tasks"]
-        if t.get("name") == "Platform token credential for the definitions check"
+        if t.get("name", "").startswith(
+            "Platform token credential for the definitions check"
+        )
     )
     args = credential["ansible.controller.credential"]
     assert args["credential_type"] == "Red Hat Ansible Automation Platform"
@@ -287,14 +305,17 @@ def test_definitions_check_carries_the_seeds_rendering_and_writes_nothing():
     assert SET_STATS in last["always"][-1]
 
 
-def test_platform_rulebooks_leave_the_tick_ruleset_to_the_schedule():
-    standalone = _load(ROOT / "extensions" / "eda" / "rulebooks" / "replication.yml")
-    tick_rulesets = [
-        rs
-        for rs in standalone
-        if all("ansible.eda.tick" in entry for entry in rs["sources"])
-    ]
-    assert len(tick_rulesets) == 1, "the standalone drill ruleset is the tick one"
+def test_platform_rulebooks_leave_the_tick_rulesets_to_the_schedules():
+    """replication.yml ticks the DR drill and alerts.yml the digest; the
+    platform copies carry neither, their schedules do."""
+    for name in ("replication.yml", "alerts.yml"):
+        standalone = _load(ROOT / "extensions" / "eda" / "rulebooks" / name)
+        tick_rulesets = [
+            rs
+            for rs in standalone
+            if all("ansible.eda.tick" in entry for entry in rs["sources"])
+        ]
+        assert len(tick_rulesets) == 1, f"{name}: one tick-only ruleset expected"
     for path in sorted(PLATFORM.glob("*.yml")):
         for ruleset in _load(path):
             for entry in ruleset["sources"]:
@@ -305,6 +326,7 @@ def test_seed_variables_for_the_schedules_are_documented():
     example = _load(EXAMPLE)
     for key in (
         "aap_schedule_timezone",
+        "aap_digest_schedule",
         "aap_self_check_tests",
         "aap_self_check_alert_watchers",
         "aap_platform_token_env",
@@ -353,6 +375,33 @@ def test_seed_refuses_an_empty_token_a_bad_time_and_unset_orchestrator_names():
         "aap_definitions_check_schedule",
     ):
         assert key in times["loop"], key
+    # the digest's interval is a positive whole number of minutes within the
+    # burst window (the first digest looks back one window)
+    interval = _assert_task(play, "Refuse a digest interval that is not")
+    conditions = interval["ansible.builtin.assert"]["that"]
+    that = "\n".join(conditions)
+    assert "aap_digest_schedule.every_minutes" in that
+    regex = re.search(r"is match\('([^']+)'\)", that).group(1)
+    for good in ("1", "15", "60", "1440"):
+        assert re.match(regex, good), good
+    for bad in ("0", "-5", "15.5", "", "quarter", "015"):
+        assert not re.match(regex, bad), bad
+    bound = next(c for c in conditions if "digest_window_minutes" in c)
+    assert "aap_job_extra_vars.digest_window_minutes | default(15)" in bound
+    assert "digest_window_minutes" in interval["ansible.builtin.assert"]["fail_msg"]
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    for every, window, ok in ((15, 15, True), (5, 15, True), (30, 15, False)):
+        rendered = env.from_string("{{ " + bound + " }}").render(
+            aap_digest_schedule={"every_minutes": every},
+            aap_job_extra_vars={"digest_window_minutes": window},
+        )
+        assert rendered == str(ok), (every, window)
+    assert (
+        env.from_string("{{ " + bound + " }}").render(
+            aap_digest_schedule={"every_minutes": 15}, aap_job_extra_vars={}
+        )
+        == "True"
+    )
     orchestrator = _assert_task(play, "Refuse unset orchestrator names")
     assert "orchestrator_seeded | bool" in orchestrator["when"]
     assert "aap_definitions_check_schedule.enabled | bool" in orchestrator["when"]
@@ -363,7 +412,7 @@ def test_seed_refuses_an_empty_token_a_bad_time_and_unset_orchestrator_names():
     ):
         assert f"{key} | length > 0" in orchestrator["ansible.builtin.assert"]["that"]
     # every refusal comes before the first object is created
-    for task in (token, times, orchestrator):
+    for task in (token, times, interval, orchestrator):
         assert names.index(task["name"]) < first_object, task["name"]
 
 

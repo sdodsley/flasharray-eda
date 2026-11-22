@@ -6,7 +6,8 @@
 # activations: the rulebooks name their sources by FQCN
 # (sdodsley.flasharray_eda.purefa_events / purefa_syslog) and the image
 # resolves them from the installed collection, so no --source-dir is needed
-# and an activation resolves them the same way. CI does not build it.
+# and an activation resolves them the same way. CI builds, smoke-runs and
+# publishes it (docs/PACKAGING.md, "Published image").
 #
 # Build, from the repository root (the ansible-builder definition next to
 # this file produces the same tree):

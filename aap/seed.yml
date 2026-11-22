@@ -12,14 +12,18 @@
 # fleet" and "Orchestrator service account" credential types; one credential
 # per array, one fleet credential carrying every array, one for the
 # orchestrator service account when its variables are set, and one holding a
-# platform token for the definitions check; the "FlashArrays" inventory with
+# platform token for the definitions check, the notify template's burst
+# count and the digest; the "FlashArrays" inventory with
 # one host per array plus localhost; the project; the execution environment
 # reference; one job template per playbook, each with the fleet credential
-# attached (the definitions check reaches no array and carries the platform
-# token credential, plus the orchestrator credential when seeded, instead);
+# attached (the definitions check and the digest reach no array and carry
+# the platform token credential instead, the check with the orchestrator
+# credential when seeded; the notify template carries the platform token
+# credential as well);
 # the controller-tier capacity workflow (request -> approval -> reclaim,
-# notify on failure); three schedules (the nightly DR drill, the
-# weekly notification-path self-check, the nightly definitions drift check);
+# notify on failure); four schedules (the nightly DR drill, the
+# weekly notification-path self-check, the nightly definitions drift check,
+# the quarter-hour notification digest);
 # and, on the
 # Event-Driven Ansible controller, a decision environment, a project, the
 # same three credential types and credentials, and one activation per
@@ -73,9 +77,9 @@
     workflow_name: "FlashArray - capacity reclaim (controller tier)"
     # Fixed names: orchestrator workflow definitions and the platform
     # rulebooks' run_job_template actions refer to them, so a rename here is
-    # a rename everywhere. Every template but the definitions check (which
-    # reaches no array) carries the fleet credential, which injects every
-    # array's address and token as purefa_fleet_json;
+    # a rename everywhere. Every template but the definitions check and the
+    # digest (which reach no array) carries the fleet credential, which
+    # injects every array's address and token as purefa_fleet_json;
     # playbooks/tasks/resolve_array.yml picks the entry of the array a launch
     # names and sets credential_array to it, so one template serves every
     # array. A launch may still pass one array's "FlashArray API" credential
@@ -89,10 +93,19 @@
       - name: "FlashArray - capacity reclaim"
         playbook: playbooks/capacity_reclaim.yml
         description: "Eradicate the pending-eradication candidates of an approved request; artifacts request_id, eradicated, refused, result"
+      # The platform token counts this array's notify jobs in the burst
+      # window (aap_job_extra_vars: digest_*); past the threshold the record
+      # is held for the digest instead of posted.
       - name: "FlashArray - notify"
         playbook: playbooks/notify.yml
-        description: "Append a notify record to the alert log and post it to Slack when the webhook credential is attached; artifact record_kind"
-        credentials: "{{ [fleet_credential_name] + ([slack_credential_name] if slack_seeded | bool else []) }}"
+        description: "Append a notify record to the alert log and post it to Slack when the webhook credential is attached, or hold it for the digest during a burst; artifacts record_kind, severity, array, held"
+        credentials: "{{ [fleet_credential_name, platform_token_credential_name] + ([slack_credential_name] if slack_seeded | bool else []) }}"
+      # Reaches no array: the platform token reads the notify jobs since the
+      # previous digest, the Slack webhook posts the digests.
+      - name: "FlashArray - digest"
+        playbook: playbooks/digest.yml
+        description: "Post one Slack message per array for the notifications held during a burst since the previous digest; artifacts record_kind, arrays, held, read_until"
+        credentials: "{{ [platform_token_credential_name] + ([slack_credential_name] if slack_seeded | bool else []) }}"
       - name: "FlashArray - expand volume"
         playbook: playbooks/expand_volume.yml
         description: "Grow one volume after checking its name and current size; artifacts volume, old_size, new_size"
@@ -176,12 +189,13 @@
           orchestrator_aap_credential: "{{ aap_orchestrator_aap_credential }}"
           orchestrator_aap_integration: "{{ aap_orchestrator_aap_integration }}"
           orchestrator_service_account: "{{ aap_orchestrator_service_account }}"
-    # Fixed-hour work the platform runs on its own. iCal rules from the
-    # vars: HH:MM in aap_schedule_timezone, daily or on one weekday; the
-    # DTSTART date only anchors the rule. The drill's job fails when a drill
-    # failed (dr_drill_fail_job), so the failure notification pages for it;
-    # the standalone replication rulebook drills off a tick instead, and the
-    # platform rulebook leaves that ruleset out.
+    # Timed work the platform runs on its own. iCal rules from the vars:
+    # HH:MM in aap_schedule_timezone, daily or on one weekday, or every n
+    # minutes for the digest; the DTSTART date only anchors the rule. The
+    # drill's job fails when a drill failed (dr_drill_fail_job), so the
+    # failure notification pages for it; the standalone replication and
+    # alerts rulebooks drill and digest off a tick instead, and the platform
+    # rulebooks leave those rulesets out.
     schedule_dtstart: "DTSTART;TZID={{ aap_schedule_timezone }}:20260101T"
     schedules:
       - name: "FlashArray - DR drill (nightly)"
@@ -201,6 +215,11 @@
         description: "Every day at {{ aap_definitions_check_schedule.at }} {{ aap_schedule_timezone }}: the orchestrator's published definitions against the repository and the activations' extra vars against the seed's rendering; the job fails on drift"
         rrule: "{{ schedule_dtstart }}{{ aap_definitions_check_schedule.at | replace(':', '') }}00 RRULE:FREQ=DAILY;INTERVAL=1"
         enabled: "{{ aap_definitions_check_schedule.enabled }}"
+      - name: "FlashArray - digest (every quarter hour)"
+        template: "FlashArray - digest"
+        description: "Every {{ aap_digest_schedule.every_minutes }} minutes: one Slack message per array for the notifications held during a burst since the previous digest"
+        rrule: "{{ schedule_dtstart }}000000 RRULE:FREQ=MINUTELY;INTERVAL={{ aap_digest_schedule.every_minutes }}"
+        enabled: "{{ aap_digest_schedule.enabled }}"
   tasks:
     - name: Refuse to run without the platform address and token
       ansible.builtin.assert:
@@ -245,6 +264,18 @@
             'aap_definitions_check_schedule': aap_definitions_check_schedule} | dict2items }}
       loop_control:
         label: "{{ item.key }}"
+
+    # The digest runs on an interval, not at a time of day: a whole number
+    # of minutes, at least one and no longer than the burst window, since
+    # the first digest (no previous digest job to start from) looks back one
+    # window and would miss the rest of a longer interval.
+    - name: Refuse a digest interval that is not a positive number of minutes within the burst window
+      ansible.builtin.assert:
+        that:
+          - aap_digest_schedule.every_minutes | string is match('^[1-9][0-9]*$')
+          - aap_digest_schedule.every_minutes | int <= aap_job_extra_vars.digest_window_minutes | default(15) | int
+        fail_msg: "aap_digest_schedule.every_minutes must be a whole number of minutes, at least 1 and at most aap_job_extra_vars.digest_window_minutes (got every_minutes={{ aap_digest_schedule.every_minutes }}, digest_window_minutes={{ aap_job_extra_vars.digest_window_minutes | default(15) }})"
+        quiet: true
 
     # The nightly definitions check runs tools/ao_sync.py --check over every
     # orchestrator/*.json, and each carries REPLACE_AT_SYNC placeholders that
@@ -420,17 +451,18 @@
         state: present
       no_log: true
 
-    # The definitions check reads the activations through the platform's own
-    # API with a credential of the built-in "Red Hat Ansible Automation
-    # Platform" type, which injects the token as AAP_TOKEN and the gateway as
-    # AAP_HOSTNAME into the job (tools/activation_audit.py reads both). A
-    # token of a user with read on the Event-Driven Ansible controller is the
-    # right owner; aap_platform_token_env names the variable it comes from,
-    # the seeding token by default.
-    - name: Platform token credential for the definitions check
+    # The definitions check reads the activations, and the notify and digest
+    # templates the controller's notify jobs, through the platform's own API
+    # with a credential of the built-in "Red Hat Ansible Automation
+    # Platform" type, which injects the token as AAP_TOKEN, the gateway as
+    # AAP_HOSTNAME and the TLS setting as AAP_VALIDATE_CERTS into the job. A
+    # token of a user with read on the Event-Driven Ansible controller and on
+    # the controller's jobs is the right owner; aap_platform_token_env names
+    # the variable it comes from, the seeding token by default.
+    - name: Platform token credential for the definitions check, the notify count and the digest
       ansible.controller.credential:
         name: "{{ platform_token_credential_name }}"
-        description: "Platform token tools/activation_audit.py reads the FlashArray activations with; injected as AAP_TOKEN and AAP_HOSTNAME"
+        description: "Platform token tools/activation_audit.py reads the FlashArray activations with and the notify and digest templates read the notify jobs with; injected as AAP_TOKEN, AAP_HOSTNAME and AAP_VALIDATE_CERTS"
         organization: "{{ aap_organization }}"
         credential_type: Red Hat Ansible Automation Platform
         inputs:
@@ -457,7 +489,7 @@
       ansible.controller.host:
         name: localhost
         inventory: "{{ aap_inventory_name }}"
-        description: "notify, capacity request / reclaim, alert runbook, the orchestrator post and the DR drill run here"
+        description: "notify, the digest, capacity request / reclaim, alert runbook, the orchestrator post and the DR drill run here"
         state: present
 
     - name: One host per array

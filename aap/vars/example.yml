@@ -95,6 +95,14 @@ aap_job_extra_vars:
   alert_log: /tmp/flasharray-eda-alerts.log
   request_dir: /tmp/flasharray-eda-requests
   baseline_dir: /tmp/flasharray-eda-baseline
+  # A burst becomes a digest: past this many notifications from one array
+  # inside the window, "FlashArray - notify" records and holds instead of
+  # posting (critical ones too only when digest_hold_critical is true) and
+  # "FlashArray - digest" posts the held ones, one message per array, on
+  # its schedule. The playbooks' own defaults are these values.
+  digest_window_minutes: 15
+  digest_burst_threshold: 6
+  digest_hold_critical: false
 # The Alertmanager the "FlashArray - Alertmanager silence" template talks to
 # (prometheus/alertmanager.example.yml), as the execution environment reaches
 # it. Empty makes the template a recorded no-op, so the DR workflows run the
@@ -120,7 +128,8 @@ aap_rebuild_workflow_nodes: false
 # Controller schedules the seed creates, as iCal rules built from these:
 # times are a quoted "HH:MM" in aap_schedule_timezone (an IANA zone name;
 # unquoted, YAML reads 23:30 as a number and the seed refuses it), the
-# weekday an iCal code (MO TU WE TH FR SA SU). A disabled schedule is created but
+# weekday an iCal code (MO TU WE TH FR SA SU), the digest's interval a whole
+# number of minutes. A disabled schedule is created but
 # never fires. The platform's DR drill is this schedule (the platform
 # replication rulebook has no tick ruleset); a site whose orchestrator has
 # dr_drill_schedule.json published drills from there and disables this one.
@@ -135,6 +144,13 @@ aap_self_check_schedule:
 aap_definitions_check_schedule:
   enabled: true
   at: "03:00"
+# The digest runs on an interval, not at a time of day; the platform's
+# digest is this schedule (the platform alerts rulebook has no tick ruleset).
+# every_minutes is at most aap_job_extra_vars.digest_window_minutes: the
+# first digest looks back one window, so a longer interval would leave a gap.
+aap_digest_schedule:
+  enabled: true
+  every_minutes: 15
 # What "FlashArray - self check" asks every array to test: alert_watchers (a
 # test e-mail to the watchers named in aap_self_check_alert_watchers, or to
 # every enabled one when the list is empty), syslog_servers (a purity.test
@@ -163,6 +179,8 @@ aap_eda_de_name: FlashArray EDA DE
 # workers use; no registry is baked in here. The platform rulebooks name
 # their sources by FQCN, so the image must carry the sdodsley.flasharray_eda
 # collection.
+# the published image is flasharray-eda-de under ghcr.io/sdodsley (docs/PACKAGING.md, "Published image"); name that
+# registry here to pull it with the `missing` policy instead of loading an image by hand
 aap_eda_de_registry: ""
 aap_eda_de_image: "{{ (aap_eda_de_registry ~ '/') if aap_eda_de_registry else '' }}flasharray-eda-de:latest"
 # `missing` pulls the image when the workers' store lacks it; `never` for an

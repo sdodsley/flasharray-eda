@@ -27,6 +27,7 @@ audit_batch       audits: records fetched per page (default 200). Up to 10
                   (signal audits, "audit_batch overflow") says so.
 signals           list or comma-separated string, default: all of
                   alerts | audits | health | telemetry | replication | config
+                  | protection
 interval          default seconds between polls (default 60)
 <signal>_interval per-signal override, e.g. audits_interval: 15
 verify_ssl        verify the array certificate (default false)
@@ -89,10 +90,15 @@ stuck_transfer_polls
                   replication: an in-progress transfer whose progress and
                   bytes transferred have not moved for this many polls sets
                   `stuck` (default 3)
+protection_min_retention_days
+                  protection: a group whose source_retention.days is below
+                  this is listed in groups_short_retention (default 0 = no
+                  retention check)
 
 Events (one dict per event, exactly one top-level key, always with `array`;
-alert, audit, hardware and replication events also carry
-`maintenance_active`, true while the array has an open maintenance window)
+alert, audit, hardware, host connectivity, replication and protection
+events also carry `maintenance_active`, true while the array has an open
+maintenance window)
 -------------------------------------------------------------------------
 purefa_alert            transition: initial|opened|updated|reopened|closing|closed;
                         alert_id, code, severity, state, component_type,
@@ -113,7 +119,9 @@ purefa_health           hardware_issues[{component,type,status}],
                         primary_controller, maintenance_active,
                         maintenance_windows[{name,created,expires}],
                         remote_assist_active, phonehome_enabled,
-                        open_alert_count, purity_version
+                        open_alert_count, purity_version,
+                        hosts_degraded_count, hosts_degraded_csv (hosts with
+                        volumes whose port connectivity is not healthy)
 purefa_hardware         one per hardware component whose status is an issue:
                         component, type, status, details, slot, serial,
                         identify_enabled, maintenance_active, episode (the
@@ -122,6 +130,12 @@ purefa_hardware         one per hardware component whose status is an issue:
 purefa_controller_failover
                         previous_primary, primary,
                         controllers[{name,mode,status}]
+purefa_host_connectivity
+                        one per host with volumes whose port connectivity is
+                        not healthy, and one more when such a host is healthy
+                        again, has no volumes left, or is gone: host, status,
+                        details, connection_count, host_group, personality,
+                        maintenance_active, recovered
 purefa_capacity         time, capacity_bytes, used_bytes, used_pct,
                         data_reduction, total_reduction, snapshot_bytes,
                         growth_bytes_per_day, days_to_full,
@@ -179,6 +193,26 @@ purefa_pg_replication   pgroup, targets[], target_count, member_count,
                         (no target, members, but the snapshot schedule off),
                         in_progress{name,progress,data_transferred},
                         stuck_polls, stuck
+purefa_protection_posture
+                        one per array per poll: volumes_total,
+                        unprotected_count, unprotected[],
+                        unprotected_csv (no protection group and no
+                        replicated pod), local_only_count, local_only[]
+                        (groups without a target only), groups_total,
+                        groups_unlocked_count, groups_unlocked[] (members
+                        but retention_lock not ratcheted),
+                        groups_short_retention_count,
+                        groups_short_retention[] (source_retention.days
+                        below protection_min_retention_days),
+                        members_removed_count, members_removed[],
+                        members_added_count, members_added[] ("group:member"
+                        against the previous poll, hosts as host/<name> and
+                        host groups as hgroup/<name>; 0 on the first poll;
+                        unprotected[], local_only[], members_removed[] and
+                        members_added[] hold up to 20 names, the counts stay
+                        complete),
+                        pods_replicated[], pods_stretched[] (stretched is
+                        availability, not protection), maintenance_active
 purefa_config           purity_version, ntp_servers(_csv), dns_domain,
                         dns_nameservers(_csv), ldap_enabled, ldap_uris(_csv),
                         ldap_base_dn, ldap_bind_user, manual_eradication,
@@ -186,7 +220,19 @@ purefa_config           purity_version, ntp_servers(_csv), dns_domain,
                         lockout_duration_ms, max_login_attempts,
                         min_password_length, sso_enabled,
                         syslog_servers(_csv), smtp_relay_host,
-                        alert_watchers_enabled(_csv), phonehome_enabled
+                        alert_watchers_enabled(_csv),
+                        alert_watchers[{name,enabled,
+                        minimum_notification_severity}], alert_watchers_csv,
+                        alert_watcher_count, alert_watchers_enabled_count,
+                        phonehome_enabled
+purefa_certificate      one per certificate: name, status, certificate_type,
+                        issued_to, common_name, valid_to, days_left (whole
+                        days, negative once expired; absent when the array
+                        gives no valid_to, so rules gate on `is defined`)
+purefa_kmip             one per configured KMIP server: name, uris[], tested
+                        (the test call answered), ok (every test passed),
+                        failures[] (destination and description of each
+                        failed test)
 purefa_poll_error       signal, error, consecutive (failed polls in a row on that
                         array and signal; 0 for a poll that succeeded but
                         dropped records), escalate (one per failed poll; the audits
@@ -201,7 +247,8 @@ description:
   - Polls one or more FlashArrays with py-pure-client and emits plain fact
     events (C(purefa_alert), C(purefa_audit), C(purefa_health),
     C(purefa_capacity), C(purefa_volume_performance), C(purefa_replica_link),
-    C(purefa_pg_replication), C(purefa_config) and others). Thresholds and
+    C(purefa_pg_replication), C(purefa_protection_posture), C(purefa_config)
+    and others). Thresholds and
     policy live in the rulebook. One instance runs several signals, each on
     its own interval. The module docstring lists every event and its fields.
 options:
@@ -220,8 +267,8 @@ options:
     description: Signals to run (list or comma-separated string).
     type: list
     elements: str
-    choices: [alerts, audits, health, telemetry, replication, config]
-    default: [alerts, audits, health, telemetry, replication, config]
+    choices: [alerts, audits, health, telemetry, replication, config, protection]
+    default: [alerts, audits, health, telemetry, replication, config, protection]
   interval:
     description: Default seconds between polls.
     type: int
@@ -243,6 +290,9 @@ options:
     type: int
   config_interval:
     description: Poll interval for the config signal; overrides I(interval).
+    type: int
+  protection_interval:
+    description: Poll interval for the protection signal; overrides I(interval).
     type: int
   verify_ssl:
     description: Verify the array certificate.
@@ -335,6 +385,10 @@ options:
     description: An in-progress transfer unchanged for this many polls sets stuck.
     type: int
     default: 3
+  protection_min_retention_days:
+    description: A protection group whose source retention keeps snapshots for fewer days than this is listed in groups_short_retention; 0 disables the check.
+    type: int
+    default: 0
 """
 
 EXAMPLES = r"""
@@ -375,7 +429,15 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
 
 logger = logging.getLogger(__name__)
 
-SIGNALS = ("alerts", "audits", "health", "telemetry", "replication", "config")
+SIGNALS = (
+    "alerts",
+    "audits",
+    "health",
+    "telemetry",
+    "replication",
+    "config",
+    "protection",
+)
 DAY_MS = 86_400_000
 HALF_HOUR_MS = 1_800_000
 CONNECT_TIMEOUT = 10  # seconds to open the connection; the read timeout is an argument
@@ -383,6 +445,7 @@ AUDIT_MAX_PAGES = (
     10  # pages of audit_batch rows read per poll before reporting overflow
 )
 PG_TRANSFER_ROWS = 500  # transfer rows fetched per protection group (bounds a backlog)
+POSTURE_NAMES = 20  # names listed per posture field; the counts stay complete
 USER_AGENT = "flasharray-eda/purefa_events"
 
 
@@ -839,6 +902,15 @@ def poll_health(arr, state, args):
     arrays = _first(_items(c.get_arrays(), "arrays"))
     open_alerts = c.get_alerts(filter="state='open'", limit=1, total_item_count=True)
     open_count = _total(open_alerts) if hasattr(open_alerts, "items") else None
+    hosts = _items(c.get_hosts(), "hosts")
+    # hosts with volumes whose ports are not all healthy; a host without a
+    # volume has no path to lose, and an array that reports no port
+    # connectivity at all has nothing to say
+    degraded = {}
+    for h in hosts:
+        status = (h.get("port_connectivity") or {}).get("status")
+        if (h.get("connection_count") or 0) and status not in (None, "healthy"):
+            degraded[h.get("name")] = h
 
     events = [
         {
@@ -885,6 +957,8 @@ def poll_health(arr, state, args):
                 "remote_assist_active": support.get("remote_assist_active"),
                 "phonehome_enabled": support.get("phonehome_enabled"),
                 "open_alert_count": open_count,
+                "hosts_degraded_count": len(degraded),
+                "hosts_degraded_csv": _csv(degraded),
             }
         }
     ]
@@ -938,6 +1012,39 @@ def poll_health(arr, state, args):
     st["issues"] = {
         n: {"type": h.get("type"), "status": h.get("status")}
         for n, h in current_issues.items()
+    }
+
+    def host_event(h, status, recovered):
+        return {
+            "purefa_host_connectivity": {
+                "array": arr.name,
+                "maintenance_active": bool(windows),
+                "host": h.get("name"),
+                "status": status,
+                "details": (h.get("port_connectivity") or {}).get("details"),
+                "connection_count": h.get("connection_count") or 0,
+                "host_group": _name(h.get("host_group")),
+                "personality": h.get("personality"),
+                "recovered": recovered,
+            }
+        }
+
+    # every degraded host each poll (the rulebook throttles), then one
+    # recovered event for a host that was degraded and is healthy, has no
+    # volumes left, or is gone, with the status the array still reports: a
+    # host without volumes reads critical, one gone or silent reads healthy
+    for name, h in sorted(degraded.items()):
+        events.append(
+            host_event(h, (h.get("port_connectivity") or {})["status"], False)
+        )
+    by_host = {h.get("name"): h for h in hosts}
+    for name in sorted(st.get("host_paths") or {}):
+        if name not in degraded:
+            h = by_host.get(name, {"name": name})
+            status = (h.get("port_connectivity") or {}).get("status") or "healthy"
+            events.append(host_event(h, status, True))
+    st["host_paths"] = {
+        n: (h.get("port_connectivity") or {}).get("status") for n, h in degraded.items()
     }
     if st["primary"] and primary and st["primary"] != primary:
         events.append(
@@ -1575,6 +1682,165 @@ def poll_replication(arr, state, args):
     return events
 
 
+def _is_protocol_endpoint(volume):
+    # the array lists protocol endpoints among the volumes; `subtype` names
+    # them, and the protocol_endpoint object is detail, not a flag
+    return (
+        volume.get("subtype") == "protocol_endpoint"
+        or volume.get("protocol_endpoint") is True
+    )
+
+
+def _pod_of(volume):
+    """The pod a volume lives in: its pod reference, else the prefix of a
+    pod-qualified name (a nested name keeps everything before the last
+    separator)."""
+    pod = _name(volume.get("pod"))
+    if pod:
+        return pod
+    name = str(volume.get("name") or "")
+    return name.rsplit("::", 1)[0] if "::" in name else None
+
+
+def poll_protection(arr, state, args):
+    """What the array does not protect: volumes in no protection group and
+    no replicated pod, groups without SafeMode or with a short retention,
+    and the members that left or joined a group since the last poll. The
+    counts are complete; the name lists are capped so a notification stays
+    readable."""
+    c = arr.client
+    st = state.setdefault("protection", {}).setdefault(arr.name, {"members": None})
+    min_days = int(args.get("protection_min_retention_days", 0) or 0)
+    maintenance_active = bool(_maintenance(arr, state))
+
+    volumes = [
+        v
+        for v in _items(c.get_volumes(filter="destroyed='false'"), "volumes")
+        if not _is_protocol_endpoint(v)
+    ]
+    pgs = _items(
+        c.get_protection_groups(filter="destroyed='false' and is_local='true'"),
+        "protection-groups",
+    )
+    local = {pg.get("name") for pg in pgs}
+    # membership of the local live groups only: a remote group's members are
+    # another array's objects and a destroyed group protects nothing
+    members = set()  # "group:member", hosts and host groups prefixed by kind
+    groups_of = {}  # volume -> the groups that snapshot it
+    groups_by_host, groups_by_hgroup = {}, {}
+    for row in _items(c.get_protection_groups_volumes(), "pg volumes"):
+        group, member = _name(row.get("group")), _name(row.get("member"))
+        if group in local:
+            members.add(f"{group}:{member}")
+            groups_of.setdefault(member, set()).add(group)
+    for row in _items(c.get_protection_groups_hosts(), "pg hosts"):
+        group, member = _name(row.get("group")), _name(row.get("member"))
+        if group in local:
+            members.add(f"{group}:host/{member}")
+            groups_by_host.setdefault(member, set()).add(group)
+    for row in _items(c.get_protection_groups_host_groups(), "pg host groups"):
+        group, member = _name(row.get("group")), _name(row.get("member"))
+        if group in local:
+            members.add(f"{group}:hgroup/{member}")
+            groups_by_hgroup.setdefault(member, set()).add(group)
+    # a volume connected to a member host, or to a host group that is a
+    # member, is in that group's snapshots too; the connections table grows
+    # with hosts x volumes, so only the members' rows are read, one call per
+    # object kind because the SDK takes several names on one kind at a time
+    conns = []
+    if groups_by_host:
+        conns += _items(
+            c.get_connections(host_names=sorted(groups_by_host)), "connections"
+        )
+    if groups_by_hgroup:
+        conns += _items(
+            c.get_connections(host_group_names=sorted(groups_by_hgroup)),
+            "connections",
+        )
+    for conn in conns:
+        volume = _name(conn.get("volume"))
+        via = groups_by_host.get(_name(conn.get("host")), set()) | groups_by_hgroup.get(
+            _name(conn.get("host_group")), set()
+        )
+        if volume and via:
+            groups_of.setdefault(volume, set()).update(via)
+
+    replicated, stretched = set(), set()
+    for pod in _items(c.get_pods(), "pods"):
+        if pod.get("destroyed"):
+            continue
+        if (pod.get("link_source_count") or 0) or (pod.get("link_target_count") or 0):
+            replicated.add(pod.get("name"))
+        # a stretched pod is availability, not protection: it keeps no history
+        if (pod.get("array_count") or 0) >= 2:
+            stretched.add(pod.get("name"))
+
+    has_target = {pg.get("name"): bool(pg.get("target_count")) for pg in pgs}
+    unprotected, local_only = [], []
+    for v in volumes:
+        if _pod_of(v) in replicated:
+            continue
+        groups = groups_of.get(v.get("name"), set())
+        if not groups:
+            unprotected.append(v.get("name"))
+        elif not any(has_target.get(g) for g in groups):
+            local_only.append(v.get("name"))
+    unprotected.sort()
+    local_only.sort()
+
+    def has_members(pg):
+        return any(
+            int(pg.get(k) or 0)
+            for k in ("volume_count", "host_count", "host_group_count")
+        )
+
+    def retention_days(pg):
+        return (pg.get("source_retention") or {}).get("days")
+
+    unlocked = sorted(
+        pg.get("name")
+        for pg in pgs
+        if has_members(pg) and pg.get("retention_lock") != "ratcheted"
+    )
+    short = sorted(
+        pg.get("name")
+        for pg in pgs
+        if min_days > 0
+        and isinstance(retention_days(pg), (int, float))
+        and retention_days(pg) < min_days
+    )
+    # the first poll has nothing to compare with
+    before = st["members"]
+    removed = sorted(before - members) if before is not None else []
+    added = sorted(members - before) if before is not None else []
+    st["members"] = members
+    return [
+        {
+            "purefa_protection_posture": {
+                "array": arr.name,
+                "maintenance_active": maintenance_active,
+                "volumes_total": len(volumes),
+                "unprotected_count": len(unprotected),
+                "unprotected": unprotected[:POSTURE_NAMES],
+                "unprotected_csv": _csv(unprotected[:POSTURE_NAMES]),
+                "local_only_count": len(local_only),
+                "local_only": local_only[:POSTURE_NAMES],
+                "groups_total": len(pgs),
+                "groups_unlocked_count": len(unlocked),
+                "groups_unlocked": unlocked,
+                "groups_short_retention_count": len(short),
+                "groups_short_retention": short,
+                "members_removed_count": len(removed),
+                "members_removed": removed[:POSTURE_NAMES],
+                "members_added_count": len(added),
+                "members_added": added[:POSTURE_NAMES],
+                "pods_replicated": sorted(replicated),
+                "pods_stretched": sorted(stretched),
+            }
+        }
+    ]
+
+
 def poll_config(arr, state, args):
     c = arr.client
     a = _first(_items(c.get_arrays(), "arrays"))
@@ -1587,13 +1853,10 @@ def poll_config(arr, state, args):
     admin = _first(_items(c.get_admins_settings(), "admins/settings"))
     syslog = [s.get("uri") for s in _items(c.get_syslog_servers(), "syslog-servers")]
     smtp = _first(_items(c.get_smtp_servers(), "smtp-servers"))
-    watchers = [
-        w.get("name")
-        for w in _items(c.get_alert_watchers(), "alert-watchers")
-        if w.get("enabled")
-    ]
+    watcher_rows = _items(c.get_alert_watchers(), "alert-watchers")
+    watchers = [w.get("name") for w in watcher_rows if w.get("enabled")]
     support = _first(_items(c.get_support(), "support"))
-    return [
+    events = [
         {
             "purefa_config": {
                 "array": arr.name,
@@ -1621,10 +1884,77 @@ def poll_config(arr, state, args):
                 "smtp_relay_host": smtp.get("relay_host"),
                 "alert_watchers_enabled": watchers,
                 "alert_watchers_enabled_csv": _csv(watchers),
+                "alert_watchers_enabled_count": len(watchers),
+                # the severity floor is reported by arrays newer than REST
+                # 2.46; older ones leave it null
+                "alert_watchers": [
+                    {
+                        "name": w.get("name"),
+                        "enabled": bool(w.get("enabled")),
+                        "minimum_notification_severity": w.get(
+                            "minimum_notification_severity"
+                        ),
+                    }
+                    for w in sorted(watcher_rows, key=lambda w: str(w.get("name")))
+                ],
+                "alert_watchers_csv": _csv([w.get("name") for w in watcher_rows]),
+                "alert_watcher_count": len(watcher_rows),
                 "phonehome_enabled": support.get("phonehome_enabled"),
             }
         }
     ]
+    now = _now_ms()
+    for cert in _items(c.get_certificates(), "certificates"):
+        valid_to = cert.get("valid_to")
+        if isinstance(valid_to, str):
+            valid_to = _iso_ms(valid_to)
+        cert_event = {
+            "array": arr.name,
+            "name": cert.get("name"),
+            "status": cert.get("status"),
+            "certificate_type": cert.get("certificate_type"),
+            "issued_to": cert.get("issued_to"),
+            "common_name": cert.get("common_name"),
+            "valid_to": valid_to,
+        }
+        # whole days, floored, so an expired certificate reads negative; left
+        # out when the array gives no date, so a rule's `is defined` holds
+        if isinstance(valid_to, (int, float)):
+            cert_event["days_left"] = int((valid_to - now) // DAY_MS)
+        events.append({"purefa_certificate": cert_event})
+    for server in _items(c.get_kmip(), "kmip"):
+        name = server.get("name")
+        results = None
+        try:
+            results = _items(c.get_kmip_test(names=[name]), "kmip test")
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - an untestable server is reported, not a failed poll
+            logger.debug(
+                "purefa_events[config]: %s kmip %s untested: %s", arr.name, name, exc
+            )
+        failed = [r for r in (results or []) if not r.get("success")]
+        events.append(
+            {
+                "purefa_kmip": {
+                    "array": arr.name,
+                    "name": name,
+                    "uris": server.get("uris") or [],
+                    "tested": bool(results),
+                    "ok": (not failed) if results else None,
+                    "failures": [
+                        ": ".join(
+                            str(p)
+                            for p in (r.get("destination"), r.get("description"))
+                            if p
+                        )
+                        or "failed"
+                        for r in failed
+                    ],
+                }
+            }
+        )
+    return events
 
 
 # telemetry is the only signal that needs every array's result before it can
@@ -1650,6 +1980,7 @@ POLLERS = {
     "health": poll_health,
     "replication": poll_replication,
     "config": poll_config,
+    "protection": poll_protection,
 }
 
 

@@ -85,14 +85,14 @@ platform API from where it runs.
 | Credential | `Orchestrator service account - flasharray-eda` | only when `AO_CLIENT_ID` is set |
 | Credential type | `Slack webhook` | one secret input, `webhook_url`; injected as the environment variable `SLACK_WEBHOOK_URL`, which `playbooks/notify.yml` posts to |
 | Credential | `Slack webhook - flasharray-eda` | only when `SLACK_WEBHOOK_URL` is set; attached to `FlashArray - notify` |
-| Credential | `Platform token - flasharray-eda` | the built-in `Red Hat Ansible Automation Platform` type, holding the gateway and the token the variable `aap_platform_token_env` names (the seeding token by default; a user with read on the Event-Driven Ansible controller is the right owner); injected as `AAP_HOSTNAME` and `AAP_TOKEN` into `FlashArray - definitions check` |
+| Credential | `Platform token - flasharray-eda` | the built-in `Red Hat Ansible Automation Platform` type, holding the gateway and the token the variable `aap_platform_token_env` names (the seeding token by default; a user with read on the Event-Driven Ansible controller is the right owner); injected as `AAP_HOSTNAME`, `AAP_TOKEN` and `AAP_VALIDATE_CERTS` into `FlashArray - definitions check`, `FlashArray - notify` (the burst count) and `FlashArray - digest`; for the last two the token also needs read on the controller's jobs |
 | Inventory | `FlashArrays` | `localhost` plus one host per array, named as in `purefa_arrays`; `ansible_connection: local` |
 | Project | `FlashArray EDA` | git, `aap_project_url` on `aap_project_branch`; synced once by the seed |
 | Execution environment | `FlashArray EDA EE` | image from `aap_ee_image` |
-| Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote`, `FlashArray - DR switchover`, `FlashArray - Alertmanager silence`, `FlashArray - self check`, `FlashArray - definitions check` | one per playbook; the fleet credential attached (except the definitions check, which reaches no array); prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` from `aap_job_extra_vars`; the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential; the Alertmanager silence carries `aap_alertmanager_url` as `alertmanager_url`; the self check carries `aap_self_check_tests` and `aap_self_check_alert_watchers`; the definitions check carries the platform token credential, the orchestrator credential when it exists, the site vars the seed read (`expected_activation_vars`) and the `aap_orchestrator_*` names ("Schedules") |
+| Job templates | `FlashArray - capacity request`, `FlashArray - capacity reclaim`, `FlashArray - notify`, `FlashArray - digest`, `FlashArray - expand volume`, `FlashArray - DR drill`, `FlashArray - identify LED`, `FlashArray - reconcile`, `FlashArray - apply baseline`, `FlashArray - protect now`, `FlashArray - QoS cap`, `FlashArray - remediate DNS`, `FlashArray - remediate NTP`, `FlashArray - replicate now`, `FlashArray - preferred array`, `FlashArray - alert runbook`, `FlashArray - orchestrator post`, `FlashArray - DR promote`, `FlashArray - DR demote`, `FlashArray - DR switchover`, `FlashArray - Alertmanager silence`, `FlashArray - self check`, `FlashArray - definitions check` | one per playbook; the fleet credential attached (except the definitions check and the digest, which reach no array); prompt for extra vars, credentials and a limit; `alert_log`, `request_dir`, `baseline_dir` and the three `digest_*` settings from `aap_job_extra_vars`; the notify template also carries the platform token credential, which counts the array's notify jobs in the burst window, and the digest carries it with the Slack webhook credential ("Schedules"); the DR drill carries `aap_dr_drills`; apply baseline is limited to `localhost` plus `aap_default_array` (one launch applies one array's baseline); the orchestrator post also carries the service account credential; the Alertmanager silence carries `aap_alertmanager_url` as `alertmanager_url`; the self check carries `aap_self_check_tests` and `aap_self_check_alert_watchers`; the definitions check carries the platform token credential, the orchestrator credential when it exists, the site vars the seed read (`expected_activation_vars`) and the `aap_orchestrator_*` names ("Schedules") |
 | Workflow job template | `FlashArray - capacity reclaim (controller tier)` | request -> approval -> reclaim; notify on failure or denial |
 | Notification template | `Slack - flasharray-eda` | only when `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` are set: type Slack, posts every job template's failures and the workflow's success, failure and approval events (pending, approved, denied, timed out) to the channel, each with its link into the platform |
-| Schedules | `FlashArray - DR drill (nightly)`, `FlashArray - self check (weekly)`, `FlashArray - definitions check (nightly)` | iCal rules from `aap_dr_drill_schedule`, `aap_self_check_schedule` and `aap_definitions_check_schedule` in `aap_schedule_timezone`; the drill schedule passes `dr_drill_fail_job: true` so a failed drill fails the job ("Schedules") |
+| Schedules | `FlashArray - DR drill (nightly)`, `FlashArray - self check (weekly)`, `FlashArray - definitions check (nightly)`, `FlashArray - digest (every quarter hour)` | iCal rules from `aap_dr_drill_schedule`, `aap_self_check_schedule`, `aap_definitions_check_schedule` and `aap_digest_schedule` in `aap_schedule_timezone`; the drill schedule passes `dr_drill_fail_job: true` so a failed drill fails the job ("Schedules") |
 | EDA decision environment | `FlashArray EDA DE` | image from `aap_eda_de_image`, pulled with `aap_eda_de_pull_policy`: the image `aap/decision-environment.yml` or `make de` builds, pushed to a registry or loaded into the store the activation workers use ("Images on a containerized platform") |
 | EDA project | `FlashArray EDA` | same repository and branch |
 | EDA credential types and credentials | `FlashArray fleet`, `FlashArray API`, `Orchestrator service account`; `FlashArray fleet - <organization>`, `FlashArray - <array>`, `Orchestrator service account - flasharray-eda` | same inputs as the controller types; injected as variables (the fleet list as `purefa_arrays`); `Platform user - flasharray-eda` (the built-in `Red Hat Ansible Automation Platform` type, the user the activations launch job templates as, host `<gateway>/api/controller/`; `aap_eda_platform_*`) |
@@ -102,8 +102,9 @@ The names in the job template column are fixed: the orchestrator workflow
 definitions and the platform rulebooks' `run_job_template` actions refer
 to them. `orchestrator/job_templates.txt` lists the nineteen a definition
 or a platform rulebook launches (`FlashArray - apply baseline` is launched
-by people and the git-push ruleset only, `FlashArray - self check` and
-`FlashArray - definitions check` by their schedules and people), and
+by people and the git-push ruleset only, `FlashArray - self check`,
+`FlashArray - definitions check` and `FlashArray - digest` by their
+schedules and people), and
 `tests/unit/test_playbook_artifacts.py` checks that `seed.yml` carries
 them. `FlashArray - orchestrator post` runs
 `playbooks/orchestrator_post.yml`; it is created only when the orchestrator
@@ -156,6 +157,11 @@ and audit. The fleet credential keeps the one-job-many-arrays property
 inside the credential store.
 
 ## Images on a containerized platform
+
+The published image is `flasharray-eda-de` under `ghcr.io/sdodsley`
+([docs/PACKAGING.md](../docs/PACKAGING.md), "Published image");
+`aap_eda_de_registry: ghcr.io/sdodsley` makes the seed name it, and the
+platform pulls it with the `missing` policy instead of a hand-loaded one.
 
 On a containerized Ansible Automation Platform two image stores matter.
 The controller's task container keeps its own container image store,
@@ -239,12 +245,16 @@ the workflow serves every array.
 
 ## Schedules
 
-Three things run at a fixed hour, as controller schedules on the templates
-above (`ansible.controller.schedule`). The iCal rules are built from
-`aap_dr_drill_schedule`, `aap_self_check_schedule` and
-`aap_definitions_check_schedule`: the time a quoted `HH:MM` in
-`aap_schedule_timezone`, the weekday an iCal code. The seed refuses an
-unquoted time, which YAML reads as a number. A schedule with
+Four things run on the platform's clock, as controller schedules on the
+templates above (`ansible.controller.schedule`). The iCal rules are built
+from `aap_dr_drill_schedule`, `aap_self_check_schedule`,
+`aap_definitions_check_schedule` and `aap_digest_schedule`: the time a
+quoted `HH:MM` in `aap_schedule_timezone`, the weekday an iCal code, the
+digest's `every_minutes` a whole number of minutes. The seed refuses an
+unquoted time, which YAML reads as a number, and an interval that is not a
+positive whole number or is longer than `digest_window_minutes` (the first
+digest, with no earlier digest job to start from, looks back one window and
+would miss the rest of a longer interval). A schedule with
 `enabled: false` is created and never fires. A schedule launches its
 template with the template's extra vars plus its own extra data, and a
 failed job is reported by the template's failure notification
@@ -296,6 +306,26 @@ link into the platform.
   template's copy of the site vars, so the check says whether the
   activations match the last seed; "Checking the activations" below is the
   same comparison by hand, against the site file itself.
+- **`FlashArray - digest (every quarter hour)`** runs `playbooks/digest.yml`
+  every `aap_digest_schedule.every_minutes` minutes; it is the platform's
+  half of the burst-to-digest path. `FlashArray - notify` counts, through
+  the controller API with the platform token credential on its template,
+  the array's notify jobs created in the last `digest_window_minutes` and,
+  from `digest_burst_threshold` of them on, records the notification with
+  `held: true` instead of posting it (a critical one is still posted
+  unless `digest_hold_critical` is true; a count the API cannot answer holds
+  nothing). The digest job reads the notify jobs that finished after the
+  previous successful digest's read (its `read_until` artifact; the last
+  window when there is none), keeps those whose artifacts say `held`, and
+  posts one message per array through the Slack webhook credential: the
+  count, the counts per severity and the first five subjects. A notify
+  job's artifacts exist only once it has finished, so the boundary is a
+  finish time: a job still running when one digest reads the API is read by
+  the next. The three `digest_*` settings sit in `aap_job_extra_vars` and
+  reach both templates; the token the platform token credential holds needs
+  read on the controller's jobs.
+  Standalone, the alerts rulebook runs the same playbook on a tick and both
+  playbooks read the alert log instead of the API.
 
 ## The Event-Driven Ansible controller side
 
@@ -550,7 +580,8 @@ deployment shows:
   remediate NTP, remediate DNS and notify templates, whose playbooks
   resolve the array from `purefa_fleet_json` and run against it; the DR
   drill runs from its schedule the same way.
-- The three schedules: the self check tests every array and fails the job
+- The DR drill, self check and definitions check schedules: the self check
+  tests every array and fails the job
   on an array whose watchers have no SMTP relay, with the syslog
   activation recording the test lines it receives; the drill copies,
   verifies and destroys a volume from the latest replicated snapshot; the

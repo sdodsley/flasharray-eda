@@ -1,0 +1,229 @@
+---
+# Digest of the notifications notify.yml held during a burst: one Slack
+# message per array with the count, the counts per severity and the first
+# subjects, so a storm from one array is one post while every record stays
+# in the alert log. Standalone the alerts rulebook runs this on a tick every
+# digest_interval_s seconds and the held records are the alert log's notify
+# records with held true after the last digest record it appended (every
+# held record in the log when there is none: a log without a digest record
+# holds nothing digested). On the platform the schedule "FlashArray - digest
+# (every quarter hour)" runs it with the platform token credential attached
+# (AAP_TOKEN, AAP_HOSTNAME and AAP_VALIDATE_CERTS in the environment) and
+# the held records are the controller's "FlashArray - notify" jobs that
+# finished after the previous successful digest's read (its read_until
+# artifact; after the window's start when there is none) whose artifacts
+# say held; the subject is in each job's extra vars. A job's artifacts exist
+# only once it has finished, so the boundary is a finish time, not a
+# creation time: a notify job still running when a digest reads the API is
+# read by the next one. Posting needs SLACK_WEBHOOK_URL as notify.yml does,
+# and a failed post is reported and never fails the digest. One digest
+# record per array is appended to the alert log; standalone that is how the
+# next run knows where this one ended, and the artifacts carry read_until
+# for the next platform run. Nothing here reaches an array.
+- name: Post a digest of the held notifications
+  hosts: localhost
+  gather_facts: false
+  vars:
+    digest_window_minutes: 15
+    # subjects listed per array; the rest is a count
+    digest_subjects_max: 5
+    digest_icon: ":incoming_envelope:"
+  tasks:
+    - name: Note whether the platform token is at hand
+      ansible.builtin.set_fact:
+        digest_from_platform: "{{ lookup('env', 'AAP_TOKEN') | length > 0 }}"
+
+    - name: Read the platform token and address from the environment
+      ansible.builtin.set_fact:
+        platform_token: "{{ lookup('env', 'AAP_TOKEN') }}"
+        platform_url: "{{ (lookup('env', 'AAP_HOSTNAME') or lookup('env', 'CONTROLLER_HOST')) | regex_replace('/api/.*$', '') | regex_replace('/+$', '') }}"
+        platform_verify: "{{ (lookup('env', 'AAP_VALIDATE_CERTS') | default('true', true) | lower) not in ['false', '0', 'no', 'off'] }}"
+      no_log: true
+
+    - name: Find the previous successful digest job
+      when: digest_from_platform | bool
+      ansible.builtin.uri:
+        url: "{{ platform_url }}/api/controller/v2/jobs/?name={{ 'FlashArray - digest' | urlencode }}&status=successful&order_by=-finished&page_size=1"
+        headers:
+          Authorization: "Bearer {{ platform_token }}"
+        validate_certs: "{{ platform_verify | bool }}"
+        return_content: true
+        status_code: [200]
+        timeout: 30
+      register: previous_digest
+      failed_when: false
+      no_log: true
+
+    # now(utc=true) is a naive datetime, so the epoch comes from the local
+    # clock, which timestamp() reads correctly whatever the host's zone. The
+    # marker is taken right before the log is read: standalone it is the
+    # next run's cursor, so a record written between the two would be
+    # digested twice or lost.
+    - name: Note when this digest runs and where the window starts
+      ansible.builtin.set_fact:
+        digest_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+        digest_window_start: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime((now().timestamp() | int) - (digest_window_minutes | int) * 60, utc=true) }}"
+
+    - name: Read the alert log
+      when: not (digest_from_platform | bool) and alert_log is file
+      ansible.builtin.set_fact:
+        log_records: "{{ lookup('file', alert_log).splitlines() | select('match', '^{.*}$') | map('from_json') | list }}"
+
+    # Where this digest starts: on the platform the previous digest job's
+    # read_until artifact (its finish before that artifact existed) and the
+    # window's start when there is none; standalone the last digest record's
+    # time in the alert log, and no bound at all (an empty string every time
+    # sorts after) when there is none, since every held record in a log
+    # without a digest record is undigested.
+    - name: Settle where this digest starts
+      ansible.builtin.set_fact:
+        digest_since: >-
+          {{ (previous_digest.json.results | default([]) | map(attribute='artifacts.read_until') | select('string') | first)
+             if digest_from_platform | bool and (previous_digest.json.results | default([]) | map(attribute='artifacts.read_until') | select('string') | list | length > 0) else
+             (previous_digest.json.results | default([]) | map(attribute='finished') | select('string') | first)
+             if digest_from_platform | bool and (previous_digest.json.results | default([]) | map(attribute='finished') | select('string') | list | length > 0) else
+             digest_window_start
+             if digest_from_platform | bool else
+             (log_records | default([]) | selectattr('kind', 'equalto', 'digest') | selectattr('time', 'defined') | map(attribute='time') | list | last)
+             if (log_records | default([]) | selectattr('kind', 'equalto', 'digest') | selectattr('time', 'defined') | list | length > 0) else
+             '' }}
+
+    # A notify job's artifacts appear when it finishes, so the jobs are those
+    # that finished after the previous read; a job still running then has a
+    # later finish than anything that read saw.
+    - name: Read the notify jobs since then from the controller
+      when: digest_from_platform | bool
+      ansible.builtin.uri:
+        url: "{{ platform_url }}/api/controller/v2/jobs/?name={{ 'FlashArray - notify' | urlencode }}&finished__gt={{ digest_since | urlencode }}&finished__isnull=false&order_by=finished&page_size=200"
+        headers:
+          Authorization: "Bearer {{ platform_token }}"
+        validate_certs: "{{ platform_verify | bool }}"
+        return_content: true
+        status_code: [200]
+        timeout: 30
+      register: notify_jobs
+      failed_when: false
+      no_log: true
+
+    # The cursor the next digest starts from: the latest finish this read
+    # saw, else where this one started (a failed or empty read keeps the
+    # cursor where it was). The controller's timestamps share one shape, so
+    # the string maximum is the latest.
+    - name: Note where this read ended
+      when: digest_from_platform | bool
+      ansible.builtin.set_fact:
+        digest_read_until: "{{ (notify_jobs.json.results | default([]) | map(attribute='finished') | select('string') | list + [digest_since]) | max }}"
+
+    - name: Report a controller read that failed
+      when: digest_from_platform | bool and (previous_digest.status | default(0) != 200 or notify_jobs.status | default(0) != 200)
+      ansible.builtin.debug:
+        msg: "controller read failed: previous digest {{ previous_digest.status | default(0) }}, notify jobs {{ notify_jobs.status | default(0) }}; the digest covers what was read"
+
+    # One record per held job in the shape the alert log's records have, so
+    # both paths share the grouping below; the subject travels in the job's
+    # extra vars, held, array and severity in its artifacts.
+    - name: Shape the held notify jobs as records
+      when: digest_from_platform | bool
+      ansible.builtin.set_fact:
+        held_records: >-
+          {{ held_records | default([]) + [{'array': item.artifacts.array | default(''),
+                                            'severity': item.artifacts.severity | default('warning'),
+                                            'subject': (item.extra_vars | default('{}') | from_json).subject | default('')}] }}
+      loop: "{{ notify_jobs.json.results | default([]) | selectattr('artifacts.held', 'defined') | selectattr('artifacts.held', 'equalto', true) | list }}"
+      loop_control:
+        label: "{{ item.id | default('') }}"
+
+    - name: Keep the held records after the previous digest
+      when: not (digest_from_platform | bool)
+      ansible.builtin.set_fact:
+        held_records: >-
+          {{ log_records | default([])
+             | selectattr('kind', 'equalto', 'notify')
+             | selectattr('held', 'defined') | selectattr('held', 'equalto', true)
+             | selectattr('time', 'defined') | selectattr('time', '>', digest_since)
+             | list }}
+
+    - name: Group the held records by array
+      ansible.builtin.set_fact:
+        digest_arrays: "{{ held_records | default([]) | map(attribute='array') | unique | sort }}"
+
+    - name: Sum up each array's held records
+      ansible.builtin.set_fact:
+        digest_groups: >-
+          {{ digest_groups | default([]) + [{'array': item,
+                                             'count': group | length,
+                                             'critical': group | selectattr('severity', 'equalto', 'critical') | list | length,
+                                             'warning': group | selectattr('severity', 'equalto', 'warning') | list | length,
+                                             'info': group | selectattr('severity', 'equalto', 'info') | list | length,
+                                             'subjects': group | map(attribute='subject') | list}] }}
+      vars:
+        group: "{{ held_records | selectattr('array', 'equalto', item) | list }}"
+      loop: "{{ digest_arrays }}"
+
+    - name: Read the Slack webhook from the environment
+      ansible.builtin.set_fact:
+        slack_webhook: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
+      no_log: true
+
+    # The line breaks are the block scalar's (a '\n' inside a Jinja
+    # expression is two characters); Slack wants &, < and > escaped.
+    - name: Post one digest per array to Slack
+      when: slack_webhook | length > 0
+      ansible.builtin.uri:
+        url: "{{ slack_webhook }}"
+        method: POST
+        body_format: json
+        body:
+          text: "{{ digest_text | trim }}"
+        status_code: [200]
+        timeout: 15
+      vars:
+        digest_text: |-
+          {{ digest_icon }} *DIGEST* {{ item.array }}: {{ item.count }} notification{{ '' if item.count == 1 else 's' }} held since {{ digest_since or 'the alert log began' }} (burst window {{ digest_window_minutes }} min)
+          critical {{ item.critical }}, warning {{ item.warning }}, info {{ item.info }}
+          {% for subject in item.subjects[:digest_subjects_max] %}
+          - {{ subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
+          {% endfor %}
+          {{ ('and ' ~ (item.count - digest_subjects_max) ~ ' more') if item.count > digest_subjects_max else '' }}
+      loop: "{{ digest_groups | default([]) }}"
+      loop_control:
+        label: "{{ item.array }}"
+      register: slack_posts
+      failed_when: false
+      no_log: true
+
+    - name: Report a failed digest post without failing the digest
+      when: slack_webhook | length > 0 and item.status | default(0) != 200
+      ansible.builtin.debug:
+        msg: "Slack post for {{ item.item.array | default('') }} failed: status {{ item.status | default(0) }} {{ item.msg | default('') | truncate(120) }}"
+      loop: "{{ slack_posts.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.array | default('') }}"
+
+    - name: Append one digest record per array to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ {'time': digest_time, 'kind': 'digest', 'severity': 'info', 'array': item.array, 'count': item.count, 'since': digest_since} | to_json }}"
+      loop: "{{ digest_groups | default([]) }}"
+      loop_control:
+        label: "{{ item.array }}"
+
+    - name: Show the digest
+      ansible.builtin.debug:
+        msg: >-
+          {{ ((held_records | length) ~ ' held notifications from ' ~ (digest_arrays | join(', ')) ~ ' since ' ~ (digest_since or 'the alert log began'))
+             if digest_groups | default([]) | length > 0 else 'no held notifications since ' ~ (digest_since or 'the alert log began') }}
+
+    # Job artifacts for a workflow node that follows this one; the next
+    # platform digest starts from read_until.
+    - name: Publish the digest as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'record_kind': 'digest', 'arrays': digest_groups | default([]) | length, 'held': held_records | default([]) | length,
+              'read_until': digest_read_until | default(digest_since)} }}
+      run_once: true
+      delegate_to: localhost

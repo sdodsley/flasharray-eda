@@ -1,0 +1,116 @@
+---
+# Recorded-shape sample events for the protection posture, host connectivity,
+# certificate and KMIP rules and for the alert watcher fields of purefa_config,
+# as purefa_events emits them. Documentation values (array-a, example hosts
+# and names), not a recording of any array. tests/unit/test_posture_rules.py
+# checks that every field the rules read is present here; replay them through
+# ansible.eda.generic the way tests/replay_*.yml do when a rule needs to be
+# seen end to end.
+fixture_events:
+  - purefa_protection_posture:
+      array: array-a
+      maintenance_active: false
+      volumes_total: 12
+      unprotected_count: 2
+      unprotected: [scratch-01, scratch-02]
+      unprotected_csv: "scratch-01,scratch-02"
+      local_only_count: 1
+      local_only: [app-logs]
+      groups_total: 3
+      groups_unlocked_count: 1
+      groups_unlocked: [pg-dev]
+      groups_short_retention_count: 1
+      groups_short_retention: [pg-dev]
+      members_removed_count: 1
+      members_removed: ["pg-prod:db-data"]
+      members_added_count: 1
+      members_added: ["pg-dev:hgroup/esx-cluster"]
+      pods_replicated: [pod-dr]
+      pods_stretched: [pod-ac]
+  - purefa_host_connectivity:
+      array: array-a
+      maintenance_active: false
+      host: esx-01
+      status: critical
+      details: "Single Controller"
+      connection_count: 4
+      host_group: esx-cluster
+      personality: esxi
+      recovered: false
+  - purefa_host_connectivity:
+      array: array-a
+      maintenance_active: false
+      host: db-01
+      status: unhealthy
+      details: "Uneven"
+      connection_count: 2
+      host_group: null
+      personality: null
+      recovered: false
+  - purefa_host_connectivity:
+      array: array-a
+      maintenance_active: false
+      host: esx-01
+      status: healthy
+      details: "Redundant"
+      connection_count: 4
+      host_group: esx-cluster
+      personality: esxi
+      recovered: true
+  - purefa_certificate:
+      array: array-a
+      name: management
+      status: imported
+      certificate_type: array
+      issued_to: array-a.example.com
+      common_name: array-a.example.com
+      valid_to: 1795737600000
+      days_left: 5
+  - purefa_certificate:
+      array: array-a
+      name: ad-ldap
+      status: imported
+      certificate_type: external
+      issued_to: ldap.example.com
+      common_name: ldap.example.com
+      valid_to: 1796947200000
+      days_left: 19
+  - purefa_kmip:
+      array: array-a
+      name: kmip-primary
+      uris: ["kmip.example.com:5696"]
+      tested: true
+      ok: false
+      failures: ["kmip.example.com:5696: connection refused"]
+  - purefa_config:
+      array: array-a
+      purity_version: "6.10.6"
+      ntp_servers: [0.pool.ntp.org, 1.pool.ntp.org]
+      ntp_servers_csv: "0.pool.ntp.org,1.pool.ntp.org"
+      dns_domain: example.com
+      dns_nameservers: ["192.0.2.53", "192.0.2.54"]
+      dns_nameservers_csv: "192.0.2.53,192.0.2.54"
+      ldap_enabled: true
+      ldap_uris: ["ldaps://ldap.example.com"]
+      ldap_uris_csv: "ldaps://ldap.example.com"
+      ldap_base_dn: "DC=example,DC=com"
+      ldap_bind_user: svc-ldap
+      manual_eradication: all-enabled
+      eradication_delay_ms: 86400000
+      eradication_disabled_delay_ms: 86400000
+      lockout_duration_ms: 1800000
+      max_login_attempts: 5
+      min_password_length: 12
+      sso_enabled: false
+      syslog_servers: ["tcp://syslog.example.com:514"]
+      syslog_servers_csv: "tcp://syslog.example.com:514"
+      smtp_relay_host: smtp.example.com
+      alert_watchers:
+        - {name: oncall@example.com, enabled: false, minimum_notification_severity: warning}
+        - {name: storage@example.com, enabled: false, minimum_notification_severity: info}
+      alert_watchers_csv: "oncall@example.com,storage@example.com"
+      alert_watcher_count: 2
+      alert_watchers_enabled: []
+      alert_watchers_enabled_csv: ""
+      alert_watchers_enabled_count: 0
+      phonehome_enabled: true

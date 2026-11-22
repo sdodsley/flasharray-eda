@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- The `protection` signal lists every volume with no protection group and
+  no replicated pod, the volumes with local snapshots only, the groups with
+  members but no SafeMode or below the retention minimum, and the members
+  removed since the last poll (`purefa_protection_posture`); the replication
+  rulebook notifies on each, daily per array for the standing conditions and
+  hourly for removed members, behind `protection_require_safemode` and
+  `protection_require_replication` where a site may not want the rule.
+- The health signal reads the hosts and emits `purefa_host_connectivity`
+  for a host with volumes whose paths the array reports degraded or
+  critical, and once more when they recover; `health.yml` notifies, critical
+  for critical, warning for degraded, six hours apart per host.
+- The config signal emits `purefa_certificate` per certificate with its days
+  to expiry and `purefa_kmip` per KMIP server with its test result, and
+  `purefa_config` carries every alert watcher with its state; `config_drift.yml`
+  notifies on a certificate inside `certificate_warn_days` (critical inside
+  `certificate_critical_days` or expired), a failing KMIP test, no enabled
+  alert watcher, and watchers off `baseline_alert_watchers_csv`.
+- A burst becomes a digest: with `digest_burst_threshold` earlier
+  notifications from one array inside `digest_window_minutes`, `notify.yml`
+  records the next ones with `held: true` instead of posting them (critical
+  ones still post unless `digest_hold_critical` is true; a record under the
+  Slack floor is never held), and `playbooks/digest.yml`, on the alerts
+  rulebook's tick standalone and the seed's `FlashArray - digest (every
+  quarter hour)` schedule on the platform, posts one message per array with
+  the count, the counts per severity and the first subjects. On the platform
+  the notify and digest templates carry the platform token credential for
+  the count.
+- GitHub Actions builds the decision-environment image
+  (`.github/workflows/de-image.yml`) on a push to `main` that changes its
+  inputs, on a `v*` tag and on pull requests, checks that `ansible-rulebook`
+  starts and the collections resolve inside it, and publishes it as
+  `ghcr.io/sdodsley/flasharray-eda-de` tagged with the commit sha, `latest`
+  from `main` and the release tag; `aap_eda_de_registry: ghcr.io/sdodsley`
+  makes a site pull it instead of loading an image by hand.
 - The replication signal reads every local protection group and flags a
   replication schedule switched off on a group with a target
   (`schedule_disabled_with_targets`) and a snapshot schedule switched off on

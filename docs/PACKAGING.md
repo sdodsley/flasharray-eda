@@ -2,8 +2,8 @@
 
 The repository is the Ansible collection `sdodsley.flasharray_eda`. This
 page describes how the collection is laid out, built and installed, what
-the decision environment contains, and what changes when the content moves
-into `everpure.flasharray`.
+the decision environment contains, where CI publishes it, and what changes
+when the content moves into `everpure.flasharray`.
 
 ## The repository is the collection
 
@@ -129,6 +129,48 @@ two uses with one tree: a standalone `podman run ... ansible-rulebook
 Containerfile header has the full line), and EDA controller activations,
 which pass no `--source-dir` and resolve custom sources from the
 collections in the decision environment only.
+
+## Published image
+
+`.github/workflows/de-image.yml` builds the Containerfile image on GitHub
+Actions and publishes it to the GitHub Container Registry as
+`ghcr.io/<owner>/flasharray-eda-de`, `<owner>` being the account the
+repository lives under, lowercased (`ghcr.io/sdodsley/flasharray-eda-de`
+for the upstream repository; a fork publishes under its own account). The
+workflow runs on a push to `main` that touches what the image is built
+from (`decision-environment/`, `extensions/`, `playbooks/`, `meta/`,
+`galaxy.yml`, `README.md`, `LICENSE` and the workflow itself), on a `v*`
+tag, on every pull request, and by hand from the Actions tab. Every run
+builds with `podman build` from the repository root, the same command as
+`make de`, then runs `ansible-rulebook --version` and `ansible-galaxy
+collection list` in the image and fails unless `sdodsley.flasharray_eda`,
+`everpure.flasharray` and `ansible.eda` are all listed, which is what an
+activation needs from `ANSIBLE_COLLECTIONS_PATH`. A pull request stops
+there. The other events log in to the registry with the run's own
+`GITHUB_TOKEN` (the workflow asks for `packages: write`), so the
+repository holds no registry secret, and push:
+
+| Tag | Pushed by |
+| --- | --- |
+| the commit sha | every run that pushes |
+| `latest` | a run on `main` |
+| the tag name (`v0.5.0`) | a push of that tag |
+
+The ansible-builder definitions are not built in CI; they produce the same
+tree by hand.
+
+A site points the seed at the published image in its copy of
+`aap/vars/example.yml`: `aap_eda_de_registry: ghcr.io/<owner>` composes
+`aap_eda_de_image` as `ghcr.io/<owner>/flasharray-eda-de:latest`, and
+`aap_eda_de_pull_policy: missing` pulls it the first time an activation
+starts on a worker. `missing` never pulls a tag the workers' store already
+holds, so a site that follows `latest` takes a new build by removing the
+stored image before the activations restart, or sets `aap_eda_de_image` to
+the release tag or a commit sha, a reference the store does not have yet.
+A package that appears on the registry for the first time is private until
+its owner makes it public in the package settings; until then an anonymous
+pull from the platform fails, and loading the image by hand
+(aap/README.md, "Images on a containerized platform") is the way in.
 
 ## Moving the content into everpure.flasharray
 

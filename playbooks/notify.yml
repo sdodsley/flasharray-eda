@@ -12,6 +12,17 @@
 # the SLACK_MIN_SEVERITY environment variable, else warning): a warning
 # alert's resolved notice at info, or a request whose approval card the bot
 # posts anyway, is record material, not pager material.
+# A burst becomes a digest. When this array already has
+# digest_burst_threshold notifications inside the last digest_window_minutes
+# the record is written with held true and not posted (a critical one is
+# still posted unless digest_hold_critical is true); playbooks/digest.yml
+# later posts the held records as one message per array. The count is the
+# controller's "FlashArray - notify" jobs when the platform token credential
+# is attached (AAP_TOKEN in the environment) and notify.yml's own records in
+# the alert log (those carrying held) otherwise; a count that cannot be made
+# holds nothing. The three digest vars have their defaults here: standalone
+# the rules pass none of them, so they are tuned here; on the platform the
+# seed's aap_job_extra_vars override them for both templates.
 - name: Notify a human
   hosts: localhost
   gather_facts: false
@@ -24,6 +35,9 @@
       info: 0
       warning: 1
       critical: 2
+    digest_window_minutes: 15
+    digest_burst_threshold: 6
+    digest_hold_critical: false
   tasks:
     - name: Build the alert record
       ansible.builtin.set_fact:
@@ -37,17 +51,6 @@
           alert_id: "{{ (alert_id | default('')) or omit }}"
           alert_code: "{{ (alert_code | default('')) or omit }}"
 
-    - name: Append to the alert log
-      ansible.builtin.lineinfile:
-        path: "{{ alert_log }}"
-        create: true
-        mode: "0600"
-        line: "{{ alert_record | to_json }}"
-
-    - name: Show the alert
-      ansible.builtin.debug:
-        msg: "[{{ alert_record.severity | upper }}] {{ alert_record.subject }} :: {{ alert_record.detail }}"
-
     - name: Read the Slack webhook from the environment
       ansible.builtin.set_fact:
         slack_webhook: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
@@ -60,16 +63,109 @@
       ansible.builtin.set_fact:
         slack_floor: "{{ slack_min_severity | default(lookup('env', 'SLACK_MIN_SEVERITY') or 'warning') }}"
 
+    # now(utc=true) is a naive datetime, so the epoch comes from the local
+    # clock, which timestamp() reads correctly whatever the host's zone.
+    - name: Note where the burst window starts
+      ansible.builtin.set_fact:
+        digest_window_start: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime((now().timestamp() | int) - (digest_window_minutes | int) * 60, utc=true) }}"
+
+    - name: Note whether the platform token is at hand
+      ansible.builtin.set_fact:
+        digest_from_platform: "{{ lookup('env', 'AAP_TOKEN') | length > 0 }}"
+
+    # Earlier notifications of this array inside the window, this one not
+    # counted: the controller's notify jobs with the platform token
+    # credential attached (a job without artifacts is still running or
+    # failed and does not count), notify.yml's own records in the alert log
+    # (those carrying held; alert_runbook.yml's log-only notify records are
+    # never posted, so they are not a burst) without. The rescue makes a
+    # count that cannot be made a count of nothing, so a broken read never
+    # holds a notification.
+    - name: Count this array's notifications in the burst window
+      block:
+        - name: Read the platform token and address from the environment
+          ansible.builtin.set_fact:
+            platform_token: "{{ lookup('env', 'AAP_TOKEN') }}"
+            platform_url: "{{ (lookup('env', 'AAP_HOSTNAME') or lookup('env', 'CONTROLLER_HOST')) | regex_replace('/api/.*$', '') | regex_replace('/+$', '') }}"
+            platform_verify: "{{ (lookup('env', 'AAP_VALIDATE_CERTS') | default('true', true) | lower) not in ['false', '0', 'no', 'off'] }}"
+          no_log: true
+
+        - name: Read the notify jobs of the window from the controller
+          when: digest_from_platform | bool
+          ansible.builtin.uri:
+            url: "{{ platform_url }}/api/controller/v2/jobs/?name={{ 'FlashArray - notify' | urlencode }}&created__gte={{ digest_window_start | urlencode }}&page_size=200"
+            headers:
+              Authorization: "Bearer {{ platform_token }}"
+            validate_certs: "{{ platform_verify | bool }}"
+            return_content: true
+            status_code: [200]
+            timeout: 30
+          register: window_jobs
+          failed_when: false
+          no_log: true
+
+        - name: Read the alert log
+          when: not (digest_from_platform | bool) and alert_log is file
+          ansible.builtin.set_fact:
+            window_records: "{{ lookup('file', alert_log).splitlines() | select('match', '^{.*}$') | map('from_json') | list }}"
+
+        - name: Count the notifications
+          ansible.builtin.set_fact:
+            digest_count: >-
+              {{ (window_jobs.json.results | default([])
+                  | selectattr('artifacts.array', 'defined') | selectattr('artifacts.array', 'equalto', alert_record.array)
+                  | list | length)
+                 if digest_from_platform | bool else
+                 (window_records | default([])
+                  | selectattr('kind', 'equalto', 'notify') | selectattr('held', 'defined')
+                  | selectattr('array', 'defined') | selectattr('array', 'equalto', alert_record.array)
+                  | selectattr('time', 'defined') | selectattr('time', '>=', digest_window_start)
+                  | list | length) }}
+      rescue:
+        - name: Count nothing when the count failed
+          ansible.builtin.set_fact:
+            digest_count: 0
+
+    # Held means it would have been posted and is not: a record under the
+    # Slack floor is not held, it is record material as before.
+    - name: Decide whether the burst holds this record
+      ansible.builtin.set_fact:
+        digest_hold: >-
+          {{ (digest_count | default(0) | int) >= (digest_burst_threshold | int) and
+             (alert_record.severity != 'critical' or digest_hold_critical | bool) and
+             (severity_rank[alert_record.severity] | default(99) | int) >= (severity_rank[slack_floor] | default(0) | int) }}
+
+    - name: Mark the record held or not
+      ansible.builtin.set_fact:
+        alert_record: "{{ alert_record | combine({'held': digest_hold | bool}) }}"
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ alert_record | to_json }}"
+
+    - name: Show the alert
+      ansible.builtin.debug:
+        msg: "[{{ alert_record.severity | upper }}] {{ alert_record.subject }} :: {{ alert_record.detail }}"
+
     - name: Decide whether this record reaches Slack
       ansible.builtin.set_fact:
         slack_wanted: >-
           {{ slack_webhook | length > 0 and
-             (severity_rank[alert_record.severity] | default(99) | int) >= (severity_rank[slack_floor] | default(0) | int) }}
+             (severity_rank[alert_record.severity] | default(99) | int) >= (severity_rank[slack_floor] | default(0) | int) and
+             not (digest_hold | default(false)) }}
 
     - name: Note a record kept out of Slack by its severity
-      when: slack_webhook | length > 0 and not (slack_wanted | bool)
+      when: slack_webhook | length > 0 and not (slack_wanted | bool) and not (digest_hold | bool)
       ansible.builtin.debug:
         msg: "not posted to Slack: severity {{ alert_record.severity }} is below the floor {{ slack_floor }}"
+
+    - name: Note a record held for the digest
+      when: digest_hold | bool
+      ansible.builtin.debug:
+        msg: "held for the digest: {{ digest_count }} notifications from {{ alert_record.array }} since {{ digest_window_start }}"
 
     # A literal block scalar carries the line break between the subject line
     # and the detail: inside a Jinja expression Ansible doubles backslashes,
@@ -101,12 +197,13 @@
       ansible.builtin.debug:
         msg: "Slack post failed: status {{ slack_post.status | default(0) }} {{ slack_post.msg | default('') | truncate(120) }}"
 
-    # Job artifacts for a workflow or orchestrator node that follows this one.
+    # Job artifacts for a workflow or orchestrator node that follows this
+    # one; the digest reads held and array from them.
     - name: Publish the record kind as job artifacts
       ansible.builtin.set_stats:
         aggregate: false
         per_host: false
         data: >-
-          {{ {'record_kind': alert_record.kind, 'severity': alert_record.severity, 'array': alert_record.array} }}
+          {{ {'record_kind': alert_record.kind, 'severity': alert_record.severity, 'array': alert_record.array, 'held': alert_record.held} }}
       run_once: true
       delegate_to: localhost

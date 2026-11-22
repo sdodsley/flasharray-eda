@@ -60,6 +60,23 @@ unless stated.
 - A protection group's `replication_schedule` and `snapshot_schedule` keep
   their `frequency` when switched off (`enabled: false`), so a reader that
   looks at the frequency alone takes a disabled schedule for a live one.
+- A protection group's members come from three endpoints
+  (`/protection-groups/volumes`, `/protection-groups/hosts`,
+  `/protection-groups/host-groups`), one call each for every group at once;
+  a volume connected through a host or a host group that is a member is
+  protected without appearing in the volume list. `/connections` carries
+  both `host` and `host_group` for a host-group connection.
+- A host's `port_connectivity.status` is `healthy`, `unhealthy` (details
+  such as "Uneven") or `critical` (details often empty); a host object with
+  no volumes connected (`connection_count` 0) reads `critical` too, which is
+  why the host signal considers hosts with connections only.
+- A certificate's `valid_to` is epoch milliseconds; `status` is
+  `self-signed` or `imported`, and the two VASA certificates sit beside the
+  management one. `/kmip/test` answers per server; an array with no KMIP
+  server configured returns an empty list, not an error.
+- An alert watcher's `minimum_notification_severity` is absent from the
+  model at REST 2.46 and present on newer arrays, so the config event carries
+  it as null there; the watcher rules use the counts and the names only.
 - Transfers that completed before the poller started have no `started`; the
   DR drill picks the latest `completed`.
 - Connections to a stretched pod's volumes list the peer array's hosts as

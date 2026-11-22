@@ -303,3 +303,128 @@
               subject: Protection group {{ event.purefa_pg_replication.pgroup }} on {{ event.purefa_pg_replication.array }} has its snapshot schedule disabled
               detail: members={{ event.purefa_pg_replication.member_count }}, snapshot schedule every {{ event.purefa_pg_replication.snapshot_frequency_ms }}ms when enabled, targets={{ event.purefa_pg_replication.targets }}
               target_array: '{{ event.purefa_pg_replication.array }}'
+- name: FlashArray protection posture
+  hosts: all
+  match_multiple_rules: true
+  sources:
+    - sdodsley.flasharray_eda.purefa_events:
+        arrays: '{{ purefa_arrays }}'
+        signals:
+          - protection
+        protection_interval: '{{ protection_interval }}'
+        protection_min_retention_days: '{{ protection_min_retention_days }}'
+  rules:
+    - name: Poll failing for many polls - escalate
+      condition: event.purefa_poll_error is defined and event.purefa_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefa_poll_error.array
+          - event.purefa_poll_error.signal
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: critical
+              subject: '{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row'
+              detail: '{{ event.purefa_poll_error.error }}'
+              target_array: '{{ event.purefa_poll_error.array }}'
+    - name: Poll failed - notify once
+      condition: event.purefa_poll_error is defined and event.purefa_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_poll_error.array
+          - event.purefa_poll_error.signal
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: info
+              subject: '{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed'
+              detail: '{{ event.purefa_poll_error.error }}'
+              target_array: '{{ event.purefa_poll_error.array }}'
+    - name: Volumes without protection - notify
+      condition: event.purefa_protection_posture.unprotected_count is defined and event.purefa_protection_posture.unprotected_count > 0 and event.purefa_protection_posture.maintenance_active == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_protection_posture.array
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: '{{ event.purefa_protection_posture.unprotected_count }} of {{ event.purefa_protection_posture.volumes_total }} volumes on {{ event.purefa_protection_posture.array }} have no protection'
+              detail: 'in no protection group and no replicated pod: {{ event.purefa_protection_posture.unprotected_csv }}'
+              target_array: '{{ event.purefa_protection_posture.array }}'
+    - name: Volumes with local snapshots only - notify
+      condition: vars.protection_require_replication == true and event.purefa_protection_posture.local_only_count is defined and event.purefa_protection_posture.local_only_count > 0 and event.purefa_protection_posture.maintenance_active == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_protection_posture.array
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: '{{ event.purefa_protection_posture.local_only_count }} volumes on {{ event.purefa_protection_posture.array }} have local snapshots only'
+              detail: 'in protection groups without a target and in no replicated pod: {{ event.purefa_protection_posture.local_only }}'
+              target_array: '{{ event.purefa_protection_posture.array }}'
+    - name: Protection groups without SafeMode - notify
+      condition: vars.protection_require_safemode == true and event.purefa_protection_posture.groups_unlocked_count is defined and event.purefa_protection_posture.groups_unlocked_count > 0 and event.purefa_protection_posture.maintenance_active == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_protection_posture.array
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: '{{ event.purefa_protection_posture.groups_unlocked_count }} of {{ event.purefa_protection_posture.groups_total }} protection groups on {{ event.purefa_protection_posture.array }} are not SafeMode locked'
+              detail: 'groups with members whose retention lock is not ratcheted: {{ event.purefa_protection_posture.groups_unlocked }}'
+              target_array: '{{ event.purefa_protection_posture.array }}'
+    - name: Protection group retention below the minimum - notify
+      condition: event.purefa_protection_posture.groups_short_retention_count is defined and event.purefa_protection_posture.groups_short_retention_count > 0 and event.purefa_protection_posture.maintenance_active == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_protection_posture.array
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: '{{ event.purefa_protection_posture.groups_short_retention_count }} protection groups on {{ event.purefa_protection_posture.array }} keep snapshots for fewer than {{ protection_min_retention_days }} days'
+              detail: 'source retention below the minimum: {{ event.purefa_protection_posture.groups_short_retention }}'
+              target_array: '{{ event.purefa_protection_posture.array }}'
+    - name: Protection group members removed - notify
+      condition: event.purefa_protection_posture.members_removed_count is defined and event.purefa_protection_posture.members_removed_count > 0 and event.purefa_protection_posture.maintenance_active == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_protection_posture.array
+      action:
+        run_job_template:
+          name: FlashArray - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: warning
+              subject: '{{ event.purefa_protection_posture.members_removed_count }} members left protection groups on {{ event.purefa_protection_posture.array }}'
+              detail: 'removed since the previous poll (group:member): {{ event.purefa_protection_posture.members_removed }}; added: {{ event.purefa_protection_posture.members_added }}'
+              target_array: '{{ event.purefa_protection_posture.array }}'

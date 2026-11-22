@@ -1,12 +1,18 @@
 ---
-# Config drift: poll NTP / DNS / LDAP / eradication / admin settings on the
-# governed arrays, compare with the baseline in the vars file and act.
+# Config drift: poll NTP / DNS / LDAP / eradication / admin settings, alert
+# watchers, certificates and KMIP servers on the governed arrays, compare
+# with the baseline in the vars file and act.
 #
 #   NTP, DNS    -> reapply the baseline with everpure.flasharray (idempotent)
 #   LDAP        -> notify only: rewriting the directory service needs the bind
 #                  password and a mistake locks admins out
 #   SafeMode    -> notify only, always: the setting exists to resist change
 #   admin/auth  -> notify only (lockout, login attempts, password length, SSO)
+#   certificate -> notify: critical within certificate_critical_days of expiry
+#                  or expired, warning within certificate_warn_days
+#   KMIP        -> notify (critical) when the array's own test of a server fails
+#   watchers    -> notify when none is enabled (alert_watchers_required) or
+#                  the set differs from baseline_alert_watchers_csv
 #
 # One ruleset = one baseline. Arrays with different baselines get their own
 # ruleset (copy this one and point `arrays` at them).
@@ -178,5 +184,128 @@
               lockout_duration_ms={{ event.purefa_config.lockout_duration_ms }} (baseline {{ baseline_lockout_duration_ms }})
               min_password_length={{ event.purefa_config.min_password_length }} (baseline at least {{ baseline_min_password_length }})
               sso_enabled={{ event.purefa_config.sso_enabled }} (baseline {{ baseline_sso_enabled }})
+            target_array: "{{ event.purefa_config.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # Certificates come one event each with days_left computed by the plugin
+    # (negative once expired), so the two windows read as plain comparisons.
+    # The critical rule sits first: a certificate inside the critical window
+    # is inside the warning one too. Once a day per certificate.
+    - name: Certificate about to expire or expired - notify
+      condition: >-
+        event.purefa_certificate.days_left is defined and
+        event.purefa_certificate.days_left <= vars.certificate_critical_days
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_certificate.array
+          - event.purefa_certificate.name
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: >-
+              Certificate {{ event.purefa_certificate.name }} on {{ event.purefa_certificate.array }}
+              {{ 'has expired' if event.purefa_certificate.days_left < 0 else 'expires in ' ~ event.purefa_certificate.days_left ~ ' days' }}
+            detail: >-
+              {{ event.purefa_certificate.certificate_type }} certificate ({{ event.purefa_certificate.status }})
+              issued to {{ event.purefa_certificate.issued_to }}, CN {{ event.purefa_certificate.common_name }},
+              valid to {{ event.purefa_certificate.valid_to }}; critical within {{ certificate_critical_days }} days
+            target_array: "{{ event.purefa_certificate.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Certificate expiring - notify
+      condition: >-
+        event.purefa_certificate.days_left is defined and
+        event.purefa_certificate.days_left <= vars.certificate_warn_days
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_certificate.array
+          - event.purefa_certificate.name
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: >-
+              Certificate {{ event.purefa_certificate.name }} on {{ event.purefa_certificate.array }}
+              expires in {{ event.purefa_certificate.days_left }} days
+            detail: >-
+              {{ event.purefa_certificate.certificate_type }} certificate ({{ event.purefa_certificate.status }})
+              issued to {{ event.purefa_certificate.issued_to }}, CN {{ event.purefa_certificate.common_name }},
+              valid to {{ event.purefa_certificate.valid_to }}; warning within {{ certificate_warn_days }} days
+            target_array: "{{ event.purefa_certificate.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # The array tests each KMIP server itself; a server that fails that test
+    # cannot hand over the keys when the array asks. A server the plugin
+    # could not test (ok null) does not match. Hourly per server.
+    - name: KMIP server unreachable - notify
+      condition: >-
+        event.purefa_kmip.name is defined and
+        event.purefa_kmip.ok == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefa_kmip.array
+          - event.purefa_kmip.name
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "KMIP server {{ event.purefa_kmip.name }} on {{ event.purefa_kmip.array }} failed the array's test"
+            detail: "uris={{ event.purefa_kmip.uris }}; failures: {{ event.purefa_kmip.failures }}"
+            target_array: "{{ event.purefa_kmip.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # Alert watchers are the array's own route to a human. None enabled means
+    # the array's alerts reach nobody but this project; a set that differs
+    # from the baseline means a recipient was added or dropped. Daily per
+    # array; the comparison is off while baseline_alert_watchers_csv is
+    # empty. Like the drift rules above, these read the one purefa_config
+    # event, so a drift an earlier rule reports takes that poll.
+    - name: No enabled alert watcher - notify
+      condition: >-
+        vars.alert_watchers_required == true and
+        event.purefa_config.alert_watchers_enabled_count is defined and
+        event.purefa_config.alert_watchers_enabled_count == 0
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "No enabled alert watcher on {{ event.purefa_config.array }}"
+            detail: >-
+              {{ event.purefa_config.alert_watcher_count }} watchers configured, none enabled:
+              {{ event.purefa_config.alert_watchers_csv }}
+            target_array: "{{ event.purefa_config.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Alert watchers differ from the baseline - notify
+      condition: >-
+        vars.baseline_alert_watchers_csv != "" and
+        event.purefa_config.alert_watchers_csv is defined and
+        event.purefa_config.alert_watchers_csv != vars.baseline_alert_watchers_csv
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefa_config.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "Alert watchers on {{ event.purefa_config.array }} differ from the baseline"
+            detail: >-
+              watchers={{ event.purefa_config.alert_watchers_csv }}
+              (enabled {{ event.purefa_config.alert_watchers_enabled_csv }});
+              baseline {{ baseline_alert_watchers_csv }}
             target_array: "{{ event.purefa_config.array }}"
             alert_log: "{{ alert_log }}"

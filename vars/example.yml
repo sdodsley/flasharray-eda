@@ -44,6 +44,7 @@ health_interval: 60          # production: 300
 telemetry_interval: 60       # production: 60-300
 replication_interval: 60     # production: 60
 config_interval: 300         # production: 300-900
+protection_interval: 600     # production: 600-3600; the protection posture signal, polled by replication.yml
 
 # --- config baseline for config_arrays ------------------------------------
 # List-valued settings are sorted, comma-joined strings: the plugin emits
@@ -68,6 +69,12 @@ baseline_max_login_attempts: 5
 baseline_lockout_duration_ms: 1800000            # 30 minutes
 baseline_min_password_length: 12
 baseline_sso_enabled: false
+# Alert watchers, the array's own route to a human. With alert_watchers_required
+# true an array with no enabled watcher is reported; the sorted, comma-joined
+# watcher names are compared with baseline_alert_watchers_csv when it is not
+# empty (empty = not compared).
+alert_watchers_required: true
+baseline_alert_watchers_csv: ""                  # e.g. "oncall@example.com,storage@example.com"
 
 # --- thresholds -------------------------------------------------------------
 capacity_risk_pct: 85
@@ -78,6 +85,8 @@ array_hot_latency_usec: 1000      # array-level read or write latency
 hotspot_min_iops: 1
 baseline_latency_ratio: 3         # now vs the same half hour last week
 rpo_seconds: 300                  # replica-link lag above this is a breach
+certificate_warn_days: 30         # a certificate this close to expiry is a warning
+certificate_critical_days: 7      # this close, or expired, is critical
 
 # Cooldowns live in the rulebooks as literal `throttle: once_within:` values;
 # ansible-rulebook validates that field against its schema before variable
@@ -136,11 +145,27 @@ alert_runbooks:
 alert_runbooks_by_type: {}
 #  hardware: {route: ticket, note: "Hardware alert without a code entry: check the identify LED."}
 
+# --- notification digest (alerts rulebook) --------------------------------
+# Standalone the alerts rulebook ticks the digest every digest_interval_s and
+# passes digest_window_minutes to playbooks/digest.yml. The hold itself
+# (digest_burst_threshold, digest_hold_critical and the window notify.yml
+# counts) is decided by the defaults in playbooks/notify.yml, which the rules
+# do not override, so keep digest_window_minutes equal to the one there. On
+# the platform aap_job_extra_vars (aap/vars/example.yml) carries all three to
+# the notify and digest templates.
+digest_interval_s: 900            # standalone tick between digests; production: 900
+digest_window_minutes: 15         # the digest's burst window; the same as notify.yml's
 
-# --- replication actions (replication signal) ----------------------------
+# --- replication actions and protection posture (replication and protection signals) ---
 rpo_escalate_polls: 4                 # RPO breached this many polls in a row -> critical
 replication_auto_replicate_now: true  # overdue/stuck protection group -> immediate replicated snapshot
 activecluster_auto_prefer: true       # stretched pod member offline -> host preferred arrays to the online side
+# Protection posture (protection signal, polled by replication.yml). A volume
+# in no protection group and no replicated pod is always reported; the two
+# switches add the stricter findings; the minimum applies when above 0.
+protection_require_safemode: false    # also report protection groups with members whose retention lock is not ratcheted
+protection_require_replication: false  # also report volumes whose only protection is local snapshots
+protection_min_retention_days: 7      # report groups keeping source snapshots for fewer days; 0 = no check
 # Scheduled DR drill: copy a volume from the latest replicated snapshot on the
 # target, verify it, destroy it. One entry per replicated protection group
 # (needs two arrays; drop the entry for a single array). The interval drives

@@ -5,6 +5,11 @@
 # Alerts already open when the rulebook starts arrive with transition
 # "initial" and are only logged. Inside a maintenance window an opened alert
 # is logged, not routed.
+# The second ruleset ticks every digest_interval_s seconds and runs
+# playbooks/digest.yml, which posts one Slack message per array for the
+# notifications notify.yml held during a burst; the platform copy leaves it
+# out (the generator drops tick-only rulesets) and the controller schedule
+# "FlashArray - digest (every quarter hour)" takes its place there.
 
 - name: FlashArray alerts
   hosts: all
@@ -211,3 +216,22 @@
           msg: >-
             closed: {{ event.purefa_alert.array }} #{{ event.purefa_alert.alert_id }} code {{ event.purefa_alert.code }}
             (a resolved alert reads closed a day after closing; the resolved notice went out then)
+
+# The held notifications of every array, posted as one message per array;
+# standalone only, the platform runs the same playbook from its schedule.
+- name: FlashArray notification digest
+  hosts: all
+
+  sources:
+    - ansible.eda.tick:
+        delay: "{{ digest_interval_s }}"
+
+  rules:
+    - name: Post the digest of the held notifications
+      condition: event.i is defined
+      action:
+        run_playbook:
+          name: playbooks/digest.yml
+          extra_vars:
+            alert_log: "{{ alert_log }}"
+            digest_window_minutes: "{{ digest_window_minutes }}"

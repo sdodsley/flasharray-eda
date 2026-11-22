@@ -1,0 +1,89 @@
+---
+# Builds the decision environment (decision-environment/Containerfile) and
+# publishes it to the GitHub Container Registry as
+# ghcr.io/<owner>/flasharray-eda-de. A pull request builds and smoke-runs
+# the image only; a push to main or a v* tag and a manual run also push it.
+# Tags: the commit sha on every push, `latest` from main, the tag name from
+# a v* tag (docs/PACKAGING.md, "Published image").
+name: Decision environment image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    # what the image is built from; a path filter is not evaluated for a
+    # tag push, so a release tag always builds
+    paths:
+      - decision-environment/**
+      - extensions/**
+      - playbooks/**
+      - galaxy.yml
+      - meta/**
+      - README.md
+      - LICENSE
+      - .github/workflows/de-image.yml
+  pull_request:
+  workflow_dispatch:
+
+# the registry login uses the run's own GITHUB_TOKEN; nothing else is written
+permissions:
+  contents: read
+  packages: write
+
+# one run per ref at a time, so two quick pushes to main cannot leave the
+# older commit as `latest`
+concurrency:
+  group: de-image-${{ github.ref }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # an image name must be lowercase; a fork's owner login need not be
+      - name: Name the image
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "REPO=ghcr.io/$owner/flasharray-eda-de" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$owner/flasharray-eda-de:$GITHUB_SHA" >> "$GITHUB_ENV"
+
+      # the Containerfile copies the collection content from the checkout, so
+      # the build context is the repository root, the same line as `make de`
+      - name: Build the image
+        run: podman build -f decision-environment/Containerfile -t "$IMAGE" .
+
+      # what an activation needs from the image: ansible-rulebook starts and
+      # the collections resolve from ANSIBLE_COLLECTIONS_PATH (the project's,
+      # its everpure.flasharray dependency, the stock ansible.eda sources)
+      - name: Smoke run
+        run: |
+          podman run --rm "$IMAGE" ansible-rulebook --version
+          podman run --rm "$IMAGE" ansible-galaxy collection list > collections.txt
+          cat collections.txt
+          for name in sdodsley.flasharray_eda everpure.flasharray ansible.eda; do
+            grep -F "$name " collections.txt
+          done
+
+      - name: Log in to the registry
+        if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      # the commit sha always; `latest` from main; the tag name from a v* tag;
+      # a manual run on another branch publishes the sha alone
+      - name: Push
+        if: github.event_name != 'pull_request'
+        run: |
+          podman push "$IMAGE"
+          extra=""
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            extra=latest
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            extra="$GITHUB_REF_NAME"
+          fi
+          if [ -n "$extra" ]; then
+            podman tag "$IMAGE" "$REPO:$extra"
+            podman push "$REPO:$extra"
+          fi

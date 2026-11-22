@@ -48,6 +48,6 @@ syntax:
 check: lint lint-ao test syntax
 
 # container image for standalone ansible-rulebook runs and EDA controller
-# activations; builds and installs the collection; not built in CI
+# activations; builds and installs the collection; built and published by CI (de-image.yml)
 de:
 	podman build -t flasharray-eda-de -f decision-environment/Containerfile .

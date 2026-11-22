@@ -52,7 +52,7 @@ Forward both into tickets.
 
 | Transport | How | Latency | Customer needs |
 | --- | --- | --- | --- |
-| Pull | `purefa_events`: one asyncio source plugin polling N arrays, six signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
+| Pull | `purefa_events`: one asyncio source plugin polling N arrays, seven signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
 | Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability); RFC 3164 headers with or without a priority (the array sends none) and RFC 5424 headers; the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array also forwards) dropped; the array's own service accounts counted as automation (`system_users`); audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes. `syslog.yml` raises the fast notification for a human's action and for alerts; the REST plugin owns the full record | sub-second | a syslog target on the array |
 | Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
@@ -102,7 +102,9 @@ design intent.
   policies, SSO/SAML, lockout, eradication config, SafeMode retention, scored
   against secure-by-default. `config_drift.yml` ships the poll-based form for
   NTP, DNS, LDAP, SafeMode/eradication and admin auth settings (NTP and DNS
-  reapplied, the rest notify). The wider posture score is design intent.
+  reapplied, the rest notify), and watches the alert watchers against the
+  baseline, every certificate's days to expiry and each KMIP server's test.
+  The wider posture score is design intent.
 - Scheduled full reconcile: `tick` -> collection playbook in check/diff mode
   against desired state, changed tasks becoming drift events. Design intent;
   not in the shipped rulebooks.
@@ -147,7 +149,9 @@ design intent.
   on the array, is design intent.
 - Time-boxed remote assist (`purefa_ra`): design intent; `health.yml` logs
   remote-assist events.
-- Controller failover or port down: `health.yml` notifies. Host-side checks
+- Controller failover or port down: `health.yml` notifies, and so does a
+  host's path state as the array sees it (`port_connectivity`: degraded,
+  critical, recovered) for hosts with volumes connected. Host-side checks
   on Linux multipath, vSphere paths and Cinder backends, and switch-side
   checks via network collections, are design intent.
 
@@ -173,6 +177,15 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   either, since it needs an enabled schedule, and the schedule is still
   never touched. `purepgroup` is among the example governed commands, so a
   human's schedule change is reported by change control.
+- Protection posture: the `protection` signal lists every volume with no
+  protection group (directly, through a host or through a host group) and
+  no replicated pod, the volumes with local snapshots only, the groups with
+  members but no SafeMode and those below the retention minimum, and the
+  members removed since the last poll; `replication.yml` notifies, daily
+  per array for the standing conditions and hourly for removed members,
+  behind `protection_require_safemode` and `protection_require_replication`
+  where a site may not want the rule. A stretched pod is availability, not
+  protection, and does not count.
 - Array connection `partially_connected`: the replication signal reads
   `/array-connections/path` and the failed paths are notified; paused or
   unhealthy links likewise.
@@ -295,6 +308,12 @@ shortened. The rule carries no throttle: ansible-rulebook rejects
   notification. On the platform the seed also creates a Slack notification
   template that reports job failures and the controller-tier workflow's
   approval events with their links into the platform.
+- A burst is a digest. Past `digest_burst_threshold` notifications from one
+  array inside `digest_window_minutes`, `notify.yml` records and holds
+  instead of posting (critical ones still post unless `digest_hold_critical`),
+  and `digest.yml`, on a tick standalone or the seed's quarter-hour schedule
+  on the platform, posts one message per array for what was held. The log
+  keeps every record; the pager gets one page.
 - A pager is not an approver. The two approval queues (the orchestrator's
   approvals and the controller's workflow approvals) are decided in their
   UIs or from the channel through `slack/approval_bot.py`, a Socket Mode bot
