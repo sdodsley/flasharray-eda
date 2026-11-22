@@ -625,6 +625,22 @@ and finished first; every platform service, the orchestrator's stack and
 this project's containers came back under their units again, and the
 containers started at boot again had no root mount in podman's view.
 
+The plain reboot (2026-11-22), after the host's two podman stores were
+given separate run roots. Everything left running, both boot units
+enabled, nobody touching anything: the platform came back by itself and
+the containers kept their root mounts in podman's view. The post-boot unit
+ran, waited for the API, read all ten activations as running and exited
+clean at five minutes, because the activation worker only began
+reconciling the instances that had not survived the boot two minutes
+later: it restarted eight of them itself and left two failed, one by a
+liveness timeout on its dead pre-boot container (which the worker had
+polled as running for three minutes, failed to stop, and never deleted),
+one at its restart ceiling. Both were restarted through the API by hand
+once the host's state had been recorded, the second after the leftover
+container, which shared a podman lock number with another project's
+container, had been removed in order. The tool's watch window dates from
+this reboot.
+
 A disabled schedule flagged (2026-11-17). With the replication activation
 recreated on the new image, its first poll raised the three notifications
 the lab's groups warranted, within a minute: critical for a group on array
