@@ -501,11 +501,13 @@ units runs it at boot:
     WantedBy=default.target
 
 The token is read from its file when the unit runs and never stored in
-the unit. The tool pauses once the API answers and makes a second pass
-over the activations (`--passes`, default 2), because the activation
-worker is still marking the instances that did not survive the boot failed
-as the API comes up, and a read in that window shows the old state. Its
-lines are in the system journal under the unit
+the unit. Once the API answers the tool pauses, then keeps reading the
+activations for a watch window (`--watch-minutes`, default 10) and
+restarts whatever is not running, because the activation worker reconciles
+the instances that did not survive the boot on its own schedule, seconds
+or minutes after the API answers, and until then they read as running;
+`--passes` (default 2) bounds the restarts tried per activation. Its lines
+are in the system journal under the unit
 (`journalctl _SYSTEMD_USER_UNIT=<unit>.service`) and its exit status in
 `systemctl --user show <unit> -p ExecMainStatus`; the user's own journal
 may hold nothing.

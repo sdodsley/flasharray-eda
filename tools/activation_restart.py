@@ -7,14 +7,15 @@ After a host reboot the platform's own restart logic is not enough: the
 activation worker marks an instance that had already reached its restart
 ceiling as failed and does not restart it, and the restarts it does attempt
 can meet the websocket proxy before it is ready and fail as well. This tool
-waits for the EDA API, pauses while the activation worker finishes marking
-the instances that did not survive the boot, then reads each activation
-named for a platform rulebook file (tools/activation_audit.py's names and
-client) and restarts every one that is not running, waiting for each to run
-before the next so the host sees no start storm. It makes up to --passes
-passes (default 2), since a read taken as the API comes up can still show
-an instance's pre-boot state, and reads an activation again right before
-acting on it. It is what a post-boot user unit runs.
+waits for the EDA API, pauses, then reads each activation named for a
+platform rulebook file (tools/activation_audit.py's names and client) and
+restarts every one that is not running, waiting for each to run before the
+next so the host sees no start storm. It keeps watching for --watch-minutes
+(default 10) after the API answers, since the activation worker reconciles
+the instances that did not survive the boot on its own schedule, seconds or
+minutes later, and until then they read as running; --passes (default 2)
+bounds the restarts tried per activation, and an activation is read again
+right before acting on it. It is what a post-boot user unit runs.
 
 The platform is read as the audit reads it: AAP_HOSTNAME and AAP_TOKEN
 (AAP_VALIDATE_CERTS false for a lab certificate), or --url and --insecure.
@@ -42,6 +43,7 @@ from activation_audit import (  # noqa: E402
 STATUS_PATH = "/api/eda/v1/status/"
 POLL_SECONDS = 10
 SETTLE_SECONDS = 30
+WATCH_POLL_SECONDS = 30
 
 
 def wait_for_api(client, minutes, say):
@@ -164,12 +166,23 @@ def main(argv=None):
         type=int,
         default=2,
         metavar="N",
-        help="passes over the activations (default 2): the second catches one the "
-        "worker marked failed only after the first pass read it running",
+        help="restarts tried per activation across the passes (default 2); one "
+        "still not running after them is given up",
+    )
+    parser.add_argument(
+        "--watch-minutes",
+        type=float,
+        default=10,
+        metavar="N",
+        help="keep reading the activations for this long after the EDA API answers "
+        "(default 10): the worker reconciles the instances that did not survive "
+        "the boot on its own schedule, sometimes minutes later",
     )
     args = parser.parse_args(argv)
     if args.passes < 1:
         parser.error("--passes must be at least 1")
+    if args.watch_minutes < 0:
+        parser.error("--watch-minutes must not be negative")
     if args.attempts < 1:
         parser.error("--attempts must be at least 1")
 
@@ -193,19 +206,30 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 1
-    # As the API comes up the activation worker is still marking the
-    # instances that did not survive the boot failed, so a read taken in that
-    # window can show the old state: the pass starts after a pause, and a
-    # later pass catches what an earlier one read as running.
+    # The activation worker reconciles the instances that did not survive
+    # the boot on its own schedule, seconds or minutes after the API answers;
+    # until it has, every one of them still reads as running. So the tool
+    # pauses, then keeps making passes until the watch window has passed and
+    # a pass finds nothing to do; --passes bounds the restarts per activation.
+    api_ready = time.monotonic()
     time.sleep(SETTLE_SECONDS)
     running, restarted, failed, absent = [], [], [], []
+    tries = {}  # restarts tried per name; --passes is the budget
+    pass_no = 0
     try:
-        for pass_no in range(1, args.passes + 1):
+        while True:
+            pass_no += 1
+            left = args.watch_minutes * 60 - (time.monotonic() - api_ready)
             pending = []
+            read_error = None
             for name in names:
                 if name in absent or name in failed:
                     continue
-                activation = client.get_by_name(name)
+                try:
+                    activation = client.get_by_name(name)
+                except AuditError as exc:
+                    read_error = exc
+                    break
                 if activation is None:
                     absent.append(name)
                     continue
@@ -214,19 +238,36 @@ def main(argv=None):
                         running.append(name)
                     continue
                 pending.append(activation)
+            if read_error is not None:
+                # the gateway answers 5xx or 403 for minutes while the platform
+                # settles; inside the window that is a pass to try again
+                if left <= 0:
+                    raise read_error
+                say(
+                    f"could not read the activations ({str(read_error)[-80:]}); trying again"
+                )
+                time.sleep(min(WATCH_POLL_SECONDS, left))
+                continue
             if not pending:
-                break
+                if left <= 0:
+                    break
+                time.sleep(min(WATCH_POLL_SECONDS, left))
+                continue
             if pass_no > 1:
                 say(
                     f"pass {pass_no}: {len(pending)} activation(s) not running "
                     "after the last pass"
                 )
+            acted = False
             for activation in pending:
                 name = activation["name"]
                 # the pass's reads are minutes old by the time a later
                 # activation's turn comes: read it again, and leave alone one
                 # the platform brought up meanwhile
-                fresh = client.get_by_name(name)
+                try:
+                    fresh = client.get_by_name(name)
+                except AuditError:
+                    fresh = None
                 if fresh is not None:
                     activation = fresh
                 if activation.get("status") == "running":
@@ -235,6 +276,25 @@ def main(argv=None):
                     continue
                 if name in running:
                     running.remove(name)
+                acted = True
+                tries[name] = tries.get(name, 0) + 1
+                if tries[name] > args.passes:
+                    # restarted as often as allowed: one that is starting gets
+                    # its wait, nothing else is tried again
+                    outcome = "ended"
+                    if activation.get("status") in STARTING:
+                        outcome = wait_running(
+                            client, activation["id"], name, args.restart_minutes, say
+                        )
+                    if outcome == "running":
+                        if name not in running and name not in restarted:
+                            running.append(name)
+                    else:
+                        if name in restarted:
+                            restarted.remove(name)
+                        failed.append(name)
+                        say(f"giving up on {name} after {args.passes} restart(s)")
+                    continue
                 if restart_one(
                     client, activation, args.restart_minutes, args.attempts, say
                 ):
@@ -244,6 +304,12 @@ def main(argv=None):
                     if name in restarted:
                         restarted.remove(name)
                     failed.append(name)
+            if not acted:
+                # every pending activation ran by its re-read: a clean pass
+                left = args.watch_minutes * 60 - (time.monotonic() - api_ready)
+                if left <= 0:
+                    break
+                time.sleep(min(WATCH_POLL_SECONDS, left))
     except AuditError as exc:
         print(f"activation_restart: {exc}", file=sys.stderr)
         return 1

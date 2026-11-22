@@ -188,8 +188,6 @@ class Handler(BaseHTTPRequestHandler):
             wanted = query.get("name", [None])[0]
             for a in store.activations:
                 _tick_death(a)
-            for a in store.activations:
-                _tick_death(a)
             rows = [
                 {
                     "id": a["id"],
@@ -209,6 +207,14 @@ class Handler(BaseHTTPRequestHandler):
                     and any(r["id"] == a["id"] for r in rows)
                 ):
                     a["status"] = store.flip_after_list.pop(a["id"])
+                # the worker's late reconciliation: the status changes once
+                # the activation has been listed n times
+                if any(r["id"] == a["id"] for r in rows):
+                    store.list_reads[a["id"]] = store.list_reads.get(a["id"], 0) + 1
+                    flip = store.flip_after_reads.get(a["id"])
+                    if flip and store.list_reads[a["id"]] >= flip[0]:
+                        store.flip_after_reads.pop(a["id"])
+                        a["status"] = flip[1]
             return self._send(200, {"results": rows, "next": None})
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
@@ -223,9 +229,7 @@ class Handler(BaseHTTPRequestHandler):
                         a["status"] = outcome
                         a["restart_count"] = a.get("restart_count", 0) + 1
                         if outcome == "running" and a["id"] in store.restart_then_die:
-                            a["_dies_after_reads"] = 2
-                        if outcome == "running" and a["id"] in store.restart_then_die:
-                            a["_dies_after_reads"] = 2
+                            a["_dies_after_reads"] = 1
                         if outcome == "failed":
                             a["status_message"] = (
                                 "server rejected WebSocket connection: HTTP 502"
@@ -393,9 +397,11 @@ class Store:
         self.restart_never = set()  # ids whose restart never comes up
         self.restart_lag = 0  # reads after a restart that still show the old state
         self.flip_after_list = {}  # id -> status set right after a list read of it
+        self.flip_after_reads = {}  # id -> (n, status): the status once listed n times
+        self.list_reads = {}  # id -> how many list answers carried it
         self.restart_then_die = (
             set()
-        )  # ids whose restart runs, then dies two reads later
+        )  # ids whose restart runs, then dies at the next read
         self.restart_never_after_first = (
             set()
         )  # ids whose second and later restarts fail
@@ -970,7 +976,16 @@ def _restart_env(restart_tool, store, monkeypatch):
     monkeypatch.setenv("AAP_TOKEN", "tok")
     monkeypatch.setattr(restart_tool.time, "sleep", lambda s: None)
     monkeypatch.setattr(sys.modules["activation_audit"].time, "sleep", lambda s: None)
-    return ["--url", store.url, "--wait-minutes", "1", "--restart-minutes", "1"]
+    return [
+        "--url",
+        store.url,
+        "--wait-minutes",
+        "1",
+        "--restart-minutes",
+        "1",
+        "--watch-minutes",
+        "0",
+    ]
 
 
 def test_restart_waits_for_the_api_then_restarts_only_what_is_down(
@@ -1137,6 +1152,100 @@ def test_restart_pauses_once_the_api_answers(restart_tool, store, monkeypatch):
     assert restart_tool.main(argv) == 0
     assert sleeps.count(restart_tool.SETTLE_SECONDS) == 1
     assert sleeps.index(restart_tool.SETTLE_SECONDS) >= 2  # after the two 503 waits
+
+
+def _ticking_clock(restart_tool, monkeypatch):
+    """time.monotonic that only sleeps move (one time module serves the tool
+    and the audit module); a run still going after four fake hours or ten
+    thousand clock reads has not stopped."""
+    clock = {"now": 1000.0, "reads": 0}
+
+    def monotonic():
+        clock["reads"] += 1
+        if clock["now"] > 1000.0 + 4 * 3600 or clock["reads"] > 10_000:
+            pytest.fail("the tool never stopped")
+        return clock["now"]
+
+    def sleep(seconds):
+        clock["now"] += seconds
+
+    for mod in (restart_tool, sys.modules["activation_audit"]):
+        monkeypatch.setattr(mod.time, "monotonic", monotonic)
+        monkeypatch.setattr(mod.time, "sleep", sleep)
+    return clock
+
+
+def test_restart_keeps_watching_until_the_worker_has_reconciled(
+    restart_tool, store, capsys, monkeypatch
+):
+    """The worker reconciled the stale instances two minutes after the API
+    answered on one boot: an activation that read as running for the first
+    passes turns failed later, inside the watch window, and is restarted."""
+    store.activations = [_activation(8, "FlashArray rulebook - capacity", {})]
+    store.flip_after_reads = {
+        8: (4, "failed")
+    }  # listed running four times, then failed
+    argv = _restart_env(restart_tool, store, monkeypatch)
+    argv[argv.index("--watch-minutes") + 1] = "3"
+    _ticking_clock(restart_tool, monkeypatch)
+    code = restart_tool.main(argv)
+    out = capsys.readouterr()
+    assert code == 0
+    assert store.restarts == [8]
+    assert "activation(s) not running after the last pass" in out.out
+    assert "0 running, 1 restarted, 0 failed" in out.err
+
+
+def test_restart_without_a_watch_window_trusts_a_clean_first_pass(
+    restart_tool, store, capsys, monkeypatch
+):
+    store.activations = [_activation(8, "FlashArray rulebook - capacity", {})]
+    store.flip_after_reads = {8: (4, "failed")}
+    _ticking_clock(restart_tool, monkeypatch)
+    code = restart_tool.main(_restart_env(restart_tool, store, monkeypatch))
+    assert code == 0 and store.restarts == []
+    assert "1 running, 0 restarted, 0 failed" in capsys.readouterr().err
+
+
+def test_restart_gives_up_a_flapping_activation_after_the_passes(
+    restart_tool, store, capsys, monkeypatch
+):
+    """Restarted twice and dead again each time: given up as failed rather
+    than restarted for ever, while the watch goes on."""
+    store.activations = [
+        _activation(8, "FlashArray rulebook - capacity", {}, status="failed"),
+    ]
+    store.restart_then_die = {8}
+    argv = _restart_env(restart_tool, store, monkeypatch)
+    argv[argv.index("--watch-minutes") + 1] = "60"
+    _ticking_clock(restart_tool, monkeypatch)
+    code = restart_tool.main(argv)
+    out = capsys.readouterr()
+    assert code == 1
+    assert store.restarts == [8, 8]  # the two restarts allowed
+    assert "giving up on FlashArray rulebook - capacity after 2 restart(s)" in out.out
+    assert (
+        "0 running, 0 restarted, 1 failed, 9 not created: FlashArray rulebook - capacity"
+        in out.err
+    )
+
+
+def test_restart_rides_out_a_gateway_streak_inside_the_window(
+    restart_tool, store, capsys, monkeypatch
+):
+    """The gateway answers 503 for longer than one read's retry budget while
+    the platform settles; inside the watch window that is a pass to try
+    again, not the end of the run."""
+    store.activations = [_activation(8, "FlashArray rulebook - capacity", {})]
+    store.list_503 = 30  # one read's budget is 24 attempts
+    argv = _restart_env(restart_tool, store, monkeypatch)
+    argv[argv.index("--watch-minutes") + 1] = "10"
+    _ticking_clock(restart_tool, monkeypatch)
+    code = restart_tool.main(argv)
+    out = capsys.readouterr()
+    assert code == 0
+    assert "could not read the activations" in out.out
+    assert "1 running, 0 restarted, 0 failed" in out.err
 
 
 def test_restart_reports_what_it_could_not_start(

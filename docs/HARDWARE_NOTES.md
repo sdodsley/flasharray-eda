@@ -396,13 +396,13 @@ the deployment.
   nothing to unmount for that store's processes; in the user's
   `~/.config/containers/storage.conf` it covers the default store, which
   the user's units and shell use.
-- As the EDA API comes back after a boot the activation worker is still
-  marking the instances that did not survive the boot failed, so an
-  activation read in that window shows its pre-boot `running` seconds
-  before it turns `failed`; a reader that makes one pass misses it. The API
-  refuses connections for the first minutes while the platform's containers
-  start, and the first activation started then can fail the 60 s readiness
-  check and need a second attempt.
+- After a boot the EDA activation worker reconciles the instances that did
+  not survive it on its own schedule, seconds or minutes after the API first
+  answers; until then every such activation still shows its pre-boot
+  `running`, so a reader must keep watching rather than act on one pass. The
+  API refuses connections for the first minutes while the platform's
+  containers start, and the first activation started then can fail the 60 s
+  readiness check and need a second attempt.
 - The host keeps no per-user journal (`journalctl --user` finds no files);
   a user unit's output is in the system journal under
   `_SYSTEMD_USER_UNIT=<unit>`, and its result in

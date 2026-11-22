@@ -669,10 +669,10 @@ event takes the same path as a live one.
   workflow.
 - `tools/ao_sync.py` deleting or unpublishing anything: by design it never
   does, so the live run exercised create, update and unchanged only.
-- The post-boot tool's pause, second pass and re-read before acting at a
-  real boot: added after the reboot above left one activation behind; the
-  passes and the re-read are unit-tested, and the next reboot shows all
-  three.
+- The post-boot tool's watch window at a real boot: added after a reboot on
+  which the worker reconciled the stale instances two minutes after the API
+  answered, when the tool had already found nothing to do and exited;
+  unit-tested, and the next reboot shows it.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the

@@ -11,11 +11,12 @@
   window) and never touches the schedule; `purepgroup` joins the example
   governed commands so a human's schedule change is reported.
 
-- `tools/activation_restart.py` pauses once the EDA API answers and makes a
-  second pass over the activations (`--passes`, default 2): as the API comes
-  up the activation worker is still marking the instances that did not
-  survive the boot failed, and an activation read as running in that window
-  is failed a moment later.
+- `tools/activation_restart.py` keeps watching the activations for ten
+  minutes after the EDA API answers (`--watch-minutes`) and restarts
+  whatever is not running, with `--passes` bounding the restarts tried per
+  activation: the activation worker reconciles the instances that did not
+  survive the boot on its own schedule, seconds or minutes later, and until
+  then they read as running.
 
 ## 0.4.2 (2026-11-17)
 
