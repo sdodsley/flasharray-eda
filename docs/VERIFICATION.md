@@ -641,6 +641,28 @@ container, which shared a podman lock number with another project's
 container, had been removed in order. The tool's watch window dates from
 this reboot.
 
+Protection posture, host paths, certificates, watchers and the digest
+(2026-11-22/23). With the replication, health and config-drift activations
+recreated on the new image, the first polls notified within minutes: the
+volumes with no protection group and no replicated pod on both arrays
+(fifty-eight of sixty-four on one, five of eight on the other), critical
+port connectivity for three hosts with volumes on one array and three on
+the other with an unhealthy one as a warning, no enabled alert watcher on
+either array, and five certificates another project's test suite had just
+created with twenty-nine days left; the engine's own audit records list
+every rule. The groups below the retention minimum were real on the second
+array, yet the retention finding for the second array never notified while all findings rode on one event, because the engine fires the first matching rule only; split into one event per finding, it notified on the next poll. No certificate was within its critical days
+and no KMIP server exists in the lab, so those rules are unit-tested only.
+The digest was proved with a burst of seven hand-launched notifications
+for one array: six posted, the seventh was held; the quarter-hour digest
+that ran a minute later saw nothing, because that seventh job was still
+queued behind the others, and the next digest, starting from the previous
+one's finish-time cursor, reported it, which is the case the cursor was
+designed for. A real burst held a notification the same way while a
+critical one still posted. The seed's first run met a gateway 503 on the
+credential-type lookup and passed unchanged on the retry. CI built,
+smoke-ran and published the decision environment on the same commit.
+
 A disabled schedule flagged (2026-11-17). With the replication activation
 recreated on the new image, its first poll raised the three notifications
 the lab's groups warranted, within a minute: critical for a group on array
@@ -690,6 +712,12 @@ event takes the same path as a live one.
   which the worker reconciled the stale instances two minutes after the API
   answered, when the tool had already found nothing to do and exited;
   unit-tested, and the next reboot shows it.
+- A certificate inside its critical days, a KMIP server (none exists in
+  the lab) and a host's paths recovering while watched: the rules are
+  unit-tested and the warning, watcher and critical-host paths ran live.
+- The standalone digest path (the alerts rulebook's tick and the alert log
+  as the record of held notifications): the platform path ran live, the
+  standalone one is unit-tested.
 - Scale beyond two arrays.
 - Drive, controller or PSU failure and real performance degradation:
   fixtures only (`tests/fixtures/`), though the replayed events drive the
