@@ -21,7 +21,7 @@ VAR_REF = re.compile(r"\bvars\.([a-z_][a-z0-9_]*)")
 JINJA_REF = re.compile(r"{{\s*([a-z_][a-z0-9_]*)\b")
 NOTIFY_VARS = {"severity", "subject", "detail", "target_array", "alert_log"}
 EVENT_KINDS = {
-    "purefa_protection_posture",
+    "purefa_protection_finding",
     "purefa_host_connectivity",
     "purefa_certificate",
     "purefa_kmip",
@@ -33,35 +33,35 @@ EVENT_KINDS = {
 RULES = {
     "Volumes without protection - notify": (
         "replication.yml",
-        "purefa_protection_posture",
+        "purefa_protection_finding",
         "warning",
         "24 hours",
         ["array"],
     ),
     "Volumes with local snapshots only - notify": (
         "replication.yml",
-        "purefa_protection_posture",
+        "purefa_protection_finding",
         "warning",
         "24 hours",
         ["array"],
     ),
     "Protection groups without SafeMode - notify": (
         "replication.yml",
-        "purefa_protection_posture",
+        "purefa_protection_finding",
         "warning",
         "24 hours",
         ["array"],
     ),
     "Protection group retention below the minimum - notify": (
         "replication.yml",
-        "purefa_protection_posture",
+        "purefa_protection_finding",
         "warning",
         "24 hours",
         ["array"],
     ),
     "Protection group members removed - notify": (
         "replication.yml",
-        "purefa_protection_posture",
+        "purefa_protection_finding",
         "warning",
         "1 hour",
         ["array"],
@@ -126,19 +126,19 @@ RULES = {
 
 # the comparisons each condition makes (the contract fields of the design)
 CONDITIONS = {
-    "Volumes without protection - notify": ["unprotected_count > 0"],
+    "Volumes without protection - notify": ['finding == "unprotected"'],
     "Volumes with local snapshots only - notify": [
         "vars.protection_require_replication == true",
-        "local_only_count > 0",
+        'finding == "local_only"',
     ],
     "Protection groups without SafeMode - notify": [
         "vars.protection_require_safemode == true",
-        "groups_unlocked_count > 0",
+        'finding == "unlocked"',
     ],
     "Protection group retention below the minimum - notify": [
-        "groups_short_retention_count > 0"
+        'finding == "short_retention"'
     ],
-    "Protection group members removed - notify": ["members_removed_count > 0"],
+    "Protection group members removed - notify": ['finding == "members_removed"'],
     "Host paths critical - notify": [
         "host is defined",
         'status == "critical"',
@@ -359,7 +359,7 @@ def test_the_posture_rules_have_their_own_ruleset_that_matches_every_rule():
         posture = next(
             rs for rs in doc if rs["name"] == "FlashArray protection posture"
         )
-        assert posture.get("match_multiple_rules") is True, path
+        assert "match_multiple_rules" not in posture, path
         (source,) = posture["sources"]
         args = source["sdodsley.flasharray_eda.purefa_events"]
         assert args["signals"] == ["protection"], path
@@ -407,7 +407,8 @@ def test_example_vars_carry_the_new_keys_with_their_defaults(example_vars):
 
 
 def test_fixture_holds_a_recorded_shape_sample_of_each_new_event(samples):
-    assert set(samples) == EVENT_KINDS
+    # the per-array summary stays in the fixture as a documented shape
+    assert set(samples) == EVENT_KINDS | {"purefa_protection_posture"}
     for kind, bodies in samples.items():
         for body in bodies:
             assert body["array"] == "array-a", kind

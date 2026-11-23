@@ -185,7 +185,8 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   per array for the standing conditions and hourly for removed members,
   behind `protection_require_safemode` and `protection_require_replication`
   where a site may not want the rule. A stretched pod is availability, not
-  protection, and does not count.
+  protection, and does not count. The signal emits one event per finding
+  beside the per-array summary, so each rule fires on its own event.
 - Array connection `partially_connected`: the replication signal reads
   `/array-connections/path` and the failed paths are notified; paused or
   unhealthy links likewise.

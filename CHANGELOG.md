@@ -5,7 +5,8 @@
 - The `protection` signal lists every volume with no protection group and
   no replicated pod, the volumes with local snapshots only, the groups with
   members but no SafeMode or below the retention minimum, and the members
-  removed since the last poll (`purefa_protection_posture`); the replication
+  removed since the last poll (`purefa_protection_posture`, and one
+  `purefa_protection_finding` event per finding present); the replication
   rulebook notifies on each, daily per array for the standing conditions and
   hourly for removed members, behind `protection_require_safemode` and
   `protection_require_replication` where a site may not want the rule.

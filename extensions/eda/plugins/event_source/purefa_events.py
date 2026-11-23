@@ -225,6 +225,18 @@ purefa_config           purity_version, ntp_servers(_csv), dns_domain,
                         minimum_notification_severity}], alert_watchers_csv,
                         alert_watcher_count, alert_watchers_enabled_count,
                         phonehome_enabled
+purefa_protection_finding
+                        one per finding the posture shows (finding:
+                        unprotected, local_only, unlocked,
+                        short_retention, members_removed), carrying the
+                        posture fields plus `finding`, so a rulebook that
+                        fires one rule per event notifies every finding
+purefa_protection_finding
+                        one per finding the posture shows (finding:
+                        unprotected, local_only, unlocked,
+                        short_retention, members_removed), carrying the
+                        posture fields plus `finding`, so a rulebook that
+                        fires one rule per event notifies every finding
 purefa_certificate      one per certificate: name, status, certificate_type,
                         issued_to, common_name, valid_to, days_left (whole
                         days, negative once expired; absent when the array
@@ -1814,31 +1826,40 @@ def poll_protection(arr, state, args):
     removed = sorted(before - members) if before is not None else []
     added = sorted(members - before) if before is not None else []
     st["members"] = members
-    return [
-        {
-            "purefa_protection_posture": {
-                "array": arr.name,
-                "maintenance_active": maintenance_active,
-                "volumes_total": len(volumes),
-                "unprotected_count": len(unprotected),
-                "unprotected": unprotected[:POSTURE_NAMES],
-                "unprotected_csv": _csv(unprotected[:POSTURE_NAMES]),
-                "local_only_count": len(local_only),
-                "local_only": local_only[:POSTURE_NAMES],
-                "groups_total": len(pgs),
-                "groups_unlocked_count": len(unlocked),
-                "groups_unlocked": unlocked,
-                "groups_short_retention_count": len(short),
-                "groups_short_retention": short,
-                "members_removed_count": len(removed),
-                "members_removed": removed[:POSTURE_NAMES],
-                "members_added_count": len(added),
-                "members_added": added[:POSTURE_NAMES],
-                "pods_replicated": sorted(replicated),
-                "pods_stretched": sorted(stretched),
-            }
-        }
-    ]
+    posture = {
+        "array": arr.name,
+        "maintenance_active": maintenance_active,
+        "volumes_total": len(volumes),
+        "unprotected_count": len(unprotected),
+        "unprotected": unprotected[:POSTURE_NAMES],
+        "unprotected_csv": _csv(unprotected[:POSTURE_NAMES]),
+        "local_only_count": len(local_only),
+        "local_only": local_only[:POSTURE_NAMES],
+        "groups_total": len(pgs),
+        "groups_unlocked_count": len(unlocked),
+        "groups_unlocked": unlocked,
+        "groups_short_retention_count": len(short),
+        "groups_short_retention": short,
+        "members_removed_count": len(removed),
+        "members_removed": removed[:POSTURE_NAMES],
+        "members_added_count": len(added),
+        "members_added": added[:POSTURE_NAMES],
+        "pods_replicated": sorted(replicated),
+        "pods_stretched": sorted(stretched),
+    }
+    events = [{"purefa_protection_posture": posture}]
+    # one event per finding present: a rulebook that fires the first matching
+    # rule per event (the platform's engine does) still notifies each finding
+    for finding, count in (
+        ("unprotected", len(unprotected)),
+        ("local_only", len(local_only)),
+        ("unlocked", len(unlocked)),
+        ("short_retention", len(short)),
+        ("members_removed", len(removed)),
+    ):
+        if count:
+            events.append({"purefa_protection_finding": dict(posture, finding=finding)})
+    return events
 
 
 def poll_config(arr, state, args):

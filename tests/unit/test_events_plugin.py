@@ -1320,9 +1320,20 @@ def pgroup(name, targets=0, members=1, lock="ratcheted", days=None):
 
 def posture(events, arr, state=None, args=None):
     out = events.poll_protection(arr, state if state is not None else {}, args or {})
-    (event,) = [e["purefa_protection_posture"] for e in out]
-    assert len(out) == 1
+    (event,) = [
+        e["purefa_protection_posture"] for e in out if "purefa_protection_posture" in e
+    ]
     return event
+
+
+def findings(events, arr, state=None, args=None):
+    """The finding events of one protection poll, by finding."""
+    out = events.poll_protection(arr, state if state is not None else {}, args or {})
+    return {
+        e["purefa_protection_finding"]["finding"]: e["purefa_protection_finding"]
+        for e in out
+        if "purefa_protection_finding" in e
+    }
 
 
 def test_protection_signal_is_registered(events):
@@ -1432,6 +1443,35 @@ def test_protection_posture_caps_the_name_lists_but_not_the_counts(events):
     assert p["unprotected_csv"].count(",") == events.POSTURE_NAMES - 1
     # no host or host group is a member: the connections table is not read
     assert not any(n == "get_connections" for n, _ in client.calls)
+
+
+def test_protection_findings_are_one_event_each(events):
+    """Beside the per-array summary the poll emits one purefa_protection_finding
+    per finding present, carrying the posture fields plus `finding`, so a
+    rulebook that fires one rule per event still notifies every finding."""
+    client = FakeClient(
+        volumes=[volume("v-01"), volume("v-02"), volume("v-03")],
+        pgroups=[pgroup("pg-open", members=1, lock="unlocked", days=3)],
+        pg_members=[("pg-open", "volume", "v-03")],
+    )
+    state = {}
+    found = findings(
+        events, FakeArray(client), state, {"protection_min_retention_days": 7}
+    )
+    assert set(found) == {"unprotected", "local_only", "unlocked", "short_retention"}
+    assert found["unprotected"]["unprotected_count"] == 2
+    assert found["unprotected"]["finding"] == "unprotected"
+    assert found["short_retention"]["groups_short_retention"] == ["pg-open"]
+    assert found["unlocked"]["groups_total"] == 1  # the posture fields ride along
+    # the member leaves: one more finding on the next poll, the others unchanged
+    client.pg_members.clear()
+    found = findings(
+        events, FakeArray(client), state, {"protection_min_retention_days": 7}
+    )
+    assert "members_removed" in found
+    assert found["members_removed"]["members_removed"] == ["pg-open:v-03"]
+    assert found["unprotected"]["unprotected_count"] == 3
+    assert "local_only" not in found  # nothing is protected by a group any more
 
 
 def test_protection_posture_flags_unlocked_and_short_retention_groups(events):

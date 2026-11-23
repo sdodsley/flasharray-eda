@@ -77,6 +77,9 @@ unless stated.
 - An alert watcher's `minimum_notification_severity` is absent from the
   model at REST 2.46 and present on newer arrays, so the config event carries
   it as null there; the watcher rules use the counts and the names only.
+- `match_multiple_rules: true` on a ruleset has no effect on the platform:
+  its engine fires the first matching rule per event only, so a signal
+  whose poll can show several findings emits one event per finding.
 - Transfers that completed before the poller started have no `started`; the
   DR drill picks the latest `completed`.
 - Connections to a stretched pod's volumes list the peer array's hosts as

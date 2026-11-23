@@ -435,12 +435,8 @@
             target_array: "{{ event.purefa_pg_replication.array }}"
             alert_log: "{{ alert_log }}"
 
-# One posture event per array carries every finding, so this ruleset lets
-# each rule match the same event; the replication rules above keep
-# first-match-wins.
 - name: FlashArray protection posture
   hosts: all
-  match_multiple_rules: true
 
   sources:
     - sdodsley.flasharray_eda.purefa_events:
@@ -493,8 +489,8 @@
             alert_log: "{{ alert_log }}"
 
     # Protection posture: one purefa_protection_posture event per array per
-    # poll (the protection signal), so every rule whose finding the array
-    # shows fires on the same event (match_multiple_rules); each is a daily
+    # poll (the protection signal), and one event per finding it shows,
+    # so each rule below fires on its own event; each is a daily
     # reminder per array and silent inside a maintenance window. Membership
     # changes are a change rather than a state, so hourly. A stretched pod is
     # availability, not protection: its volumes count as unprotected unless a
@@ -502,123 +498,123 @@
     # stricter findings are off until a site switches them on.
     - name: Volumes without protection - notify
       condition: >-
-        event.purefa_protection_posture.unprotected_count is defined and
-        event.purefa_protection_posture.unprotected_count > 0 and
-        event.purefa_protection_posture.maintenance_active == false
+        event.purefa_protection_finding.finding is defined and
+        event.purefa_protection_finding.finding == "unprotected" and
+        event.purefa_protection_finding.maintenance_active == false
       throttle:
         once_within: 24 hours
         group_by_attributes:
-          - event.purefa_protection_posture.array
+          - event.purefa_protection_finding.array
       action:
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_posture.unprotected_count }} of
-              {{ event.purefa_protection_posture.volumes_total }} volumes on
-              {{ event.purefa_protection_posture.array }} have no protection
+              {{ event.purefa_protection_finding.unprotected_count }} of
+              {{ event.purefa_protection_finding.volumes_total }} volumes on
+              {{ event.purefa_protection_finding.array }} have no protection
             detail: >-
               in no protection group and no replicated pod:
-              {{ event.purefa_protection_posture.unprotected_csv }}
-            target_array: "{{ event.purefa_protection_posture.array }}"
+              {{ event.purefa_protection_finding.unprotected_csv }}
+            target_array: "{{ event.purefa_protection_finding.array }}"
             alert_log: "{{ alert_log }}"
 
     - name: Volumes with local snapshots only - notify
       condition: >-
         vars.protection_require_replication == true and
-        event.purefa_protection_posture.local_only_count is defined and
-        event.purefa_protection_posture.local_only_count > 0 and
-        event.purefa_protection_posture.maintenance_active == false
+        event.purefa_protection_finding.finding is defined and
+        event.purefa_protection_finding.finding == "local_only" and
+        event.purefa_protection_finding.maintenance_active == false
       throttle:
         once_within: 24 hours
         group_by_attributes:
-          - event.purefa_protection_posture.array
+          - event.purefa_protection_finding.array
       action:
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_posture.local_only_count }} volumes on
-              {{ event.purefa_protection_posture.array }} have local snapshots only
+              {{ event.purefa_protection_finding.local_only_count }} volumes on
+              {{ event.purefa_protection_finding.array }} have local snapshots only
             detail: >-
               in protection groups without a target and in no replicated pod:
-              {{ event.purefa_protection_posture.local_only }}
-            target_array: "{{ event.purefa_protection_posture.array }}"
+              {{ event.purefa_protection_finding.local_only }}
+            target_array: "{{ event.purefa_protection_finding.array }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection groups without SafeMode - notify
       condition: >-
         vars.protection_require_safemode == true and
-        event.purefa_protection_posture.groups_unlocked_count is defined and
-        event.purefa_protection_posture.groups_unlocked_count > 0 and
-        event.purefa_protection_posture.maintenance_active == false
+        event.purefa_protection_finding.finding is defined and
+        event.purefa_protection_finding.finding == "unlocked" and
+        event.purefa_protection_finding.maintenance_active == false
       throttle:
         once_within: 24 hours
         group_by_attributes:
-          - event.purefa_protection_posture.array
+          - event.purefa_protection_finding.array
       action:
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_posture.groups_unlocked_count }} of
-              {{ event.purefa_protection_posture.groups_total }} protection groups on
-              {{ event.purefa_protection_posture.array }} are not SafeMode locked
+              {{ event.purefa_protection_finding.groups_unlocked_count }} of
+              {{ event.purefa_protection_finding.groups_total }} protection groups on
+              {{ event.purefa_protection_finding.array }} are not SafeMode locked
             detail: >-
               groups with members whose retention lock is not ratcheted:
-              {{ event.purefa_protection_posture.groups_unlocked }}
-            target_array: "{{ event.purefa_protection_posture.array }}"
+              {{ event.purefa_protection_finding.groups_unlocked }}
+            target_array: "{{ event.purefa_protection_finding.array }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection group retention below the minimum - notify
       condition: >-
-        event.purefa_protection_posture.groups_short_retention_count is defined and
-        event.purefa_protection_posture.groups_short_retention_count > 0 and
-        event.purefa_protection_posture.maintenance_active == false
+        event.purefa_protection_finding.finding is defined and
+        event.purefa_protection_finding.finding == "short_retention" and
+        event.purefa_protection_finding.maintenance_active == false
       throttle:
         once_within: 24 hours
         group_by_attributes:
-          - event.purefa_protection_posture.array
+          - event.purefa_protection_finding.array
       action:
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_posture.groups_short_retention_count }} protection groups on
-              {{ event.purefa_protection_posture.array }} keep snapshots for fewer than
+              {{ event.purefa_protection_finding.groups_short_retention_count }} protection groups on
+              {{ event.purefa_protection_finding.array }} keep snapshots for fewer than
               {{ protection_min_retention_days }} days
             detail: >-
               source retention below the minimum:
-              {{ event.purefa_protection_posture.groups_short_retention }}
-            target_array: "{{ event.purefa_protection_posture.array }}"
+              {{ event.purefa_protection_finding.groups_short_retention }}
+            target_array: "{{ event.purefa_protection_finding.array }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection group members removed - notify
       condition: >-
-        event.purefa_protection_posture.members_removed_count is defined and
-        event.purefa_protection_posture.members_removed_count > 0 and
-        event.purefa_protection_posture.maintenance_active == false
+        event.purefa_protection_finding.finding is defined and
+        event.purefa_protection_finding.finding == "members_removed" and
+        event.purefa_protection_finding.maintenance_active == false
       throttle:
         once_within: 1 hour
         group_by_attributes:
-          - event.purefa_protection_posture.array
+          - event.purefa_protection_finding.array
       action:
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_posture.members_removed_count }} members left
-              protection groups on {{ event.purefa_protection_posture.array }}
+              {{ event.purefa_protection_finding.members_removed_count }} members left
+              protection groups on {{ event.purefa_protection_finding.array }}
             detail: >-
               removed since the previous poll (group:member):
-              {{ event.purefa_protection_posture.members_removed }};
-              added: {{ event.purefa_protection_posture.members_added }}
-            target_array: "{{ event.purefa_protection_posture.array }}"
+              {{ event.purefa_protection_finding.members_removed }};
+              added: {{ event.purefa_protection_finding.members_added }}
+            target_array: "{{ event.purefa_protection_finding.array }}"
             alert_log: "{{ alert_log }}"
 
 - name: FlashArray DR drill

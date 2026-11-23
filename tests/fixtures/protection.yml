@@ -27,6 +27,27 @@ fixture_events:
       members_added: ["pg-dev:hgroup/esx-cluster"]
       pods_replicated: [pod-dr]
       pods_stretched: [pod-ac]
+  - purefa_protection_finding:
+      array: array-a
+      maintenance_active: false
+      finding: unprotected
+      volumes_total: 12
+      unprotected_count: 2
+      unprotected: [scratch-01, scratch-02]
+      unprotected_csv: "scratch-01,scratch-02"
+      local_only_count: 1
+      local_only: [app-logs]
+      groups_total: 3
+      groups_unlocked_count: 1
+      groups_unlocked: [pg-dev]
+      groups_short_retention_count: 1
+      groups_short_retention: [pg-dev]
+      members_removed_count: 1
+      members_removed: ["pg-prod:db-data"]
+      members_added_count: 1
+      members_added: ["pg-dev:hgroup/esx-cluster"]
+      pods_replicated: [pod-dr]
+      pods_stretched: [pod-ac]
   - purefa_host_connectivity:
       array: array-a
       maintenance_active: false
