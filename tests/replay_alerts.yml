@@ -31,12 +31,12 @@
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
-            severity: "{{ event.purefa_alert.severity_down }}"
-            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} opened and resolved: {{ event.purefa_alert.summary }}"
+            severity: "{{ event.purefa_alert.severity_down | pprint }}"
+            subject: "{{ (event.purefa_alert.array ~ ' alert ' ~ event.purefa_alert.code ~ ' opened and resolved: ' ~ event.purefa_alert.summary) | pprint }}"
             detail: "open for {{ event.purefa_alert.resolved_after_s }} s and resolved before the loop saw it open; {{ event.purefa_alert.action }}"
-            target_array: "{{ event.purefa_alert.array }}"
-            alert_id: "{{ event.purefa_alert.alert_id }}"
-            alert_code: "{{ event.purefa_alert.code }}"
+            target_array: "{{ event.purefa_alert.array | pprint }}"
+            alert_id: "{{ event.purefa_alert.alert_id | pprint }}"
+            alert_code: "{{ event.purefa_alert.code | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Alert opened - route through the runbook map
@@ -47,18 +47,18 @@
         run_playbook:
           name: playbooks/alert_runbook.yml
           extra_vars:
-            severity: "{{ event.purefa_alert.severity }}"
+            severity: "{{ event.purefa_alert.severity | pprint }}"
             transition: opened
-            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }}: {{ event.purefa_alert.summary }}"
-            component: "{{ event.purefa_alert.component_type }}:{{ event.purefa_alert.component_name }}"
-            array_action: "{{ event.purefa_alert.action }}"
-            knowledge_base_url: "{{ event.purefa_alert.knowledge_base_url }}"
-            target_array: "{{ event.purefa_alert.array }}"
-            alert_id: "{{ event.purefa_alert.alert_id }}"
-            alert_code: "{{ event.purefa_alert.code }}"
+            subject: "{{ (event.purefa_alert.array ~ ' alert ' ~ event.purefa_alert.code ~ ': ' ~ event.purefa_alert.summary) | pprint }}"
+            component: "{{ (event.purefa_alert.component_type ~ ':' ~ event.purefa_alert.component_name) | pprint }}"
+            array_action: "{{ event.purefa_alert.action | pprint }}"
+            knowledge_base_url: "{{ event.purefa_alert.knowledge_base_url | pprint }}"
+            target_array: "{{ event.purefa_alert.array | pprint }}"
+            alert_id: "{{ event.purefa_alert.alert_id | pprint }}"
+            alert_code: "{{ event.purefa_alert.code | pprint }}"
             alert_runbooks: "{{ alert_runbooks }}"
             alert_runbooks_by_type: "{{ alert_runbooks_by_type | default({}) }}"
-            component_type: "{{ event.purefa_alert.component_type }}"
+            component_type: "{{ event.purefa_alert.component_type | pprint }}"
             baseline_ntp_servers_csv: "{{ baseline_ntp_servers_csv | default('') }}"
             alert_log: "{{ alert_log }}"
 
@@ -68,10 +68,10 @@
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
-            severity: "{{ event.purefa_alert.severity_down }}"
-            subject: "{{ event.purefa_alert.array }} alert {{ event.purefa_alert.code }} resolved: {{ event.purefa_alert.summary }}"
+            severity: "{{ event.purefa_alert.severity_down | pprint }}"
+            subject: "{{ (event.purefa_alert.array ~ ' alert ' ~ event.purefa_alert.code ~ ' resolved: ' ~ event.purefa_alert.summary) | pprint }}"
             detail: "open for {{ event.purefa_alert.resolved_after_s }} s; {{ event.purefa_alert.action }}"
-            target_array: "{{ event.purefa_alert.array }}"
-            alert_id: "{{ event.purefa_alert.alert_id }}"
-            alert_code: "{{ event.purefa_alert.code }}"
+            target_array: "{{ event.purefa_alert.array | pprint }}"
+            alert_id: "{{ event.purefa_alert.alert_id | pprint }}"
+            alert_code: "{{ event.purefa_alert.code | pprint }}"
             alert_log: "{{ alert_log }}"

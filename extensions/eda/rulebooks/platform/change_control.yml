@@ -34,9 +34,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefa_poll_error.error }}'
-              target_array: '{{ event.purefa_poll_error.array }}'
+              subject: '{{ (event.purefa_poll_error.array ~ '' '' ~ event.purefa_poll_error.signal ~ '' poll has failed '' ~ event.purefa_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefa_poll_error.error | pprint }}'
+              target_array: '{{ event.purefa_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefa_poll_error is defined and event.purefa_poll_error.consecutive == 1
       throttle:
@@ -51,9 +51,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed'
-              detail: '{{ event.purefa_poll_error.error }}'
-              target_array: '{{ event.purefa_poll_error.array }}'
+              subject: '{{ (event.purefa_poll_error.array ~ '' '' ~ event.purefa_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefa_poll_error.error | pprint }}'
+              target_array: '{{ event.purefa_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefa_poll_error is defined
       action:
@@ -68,9 +68,9 @@
           job_args:
             extra_vars:
               severity: warning
-              subject: '{{ event.purefa_audit.user }} ran {{ event.purefa_audit.command }} {{ event.purefa_audit.subcommand }} on {{ event.purefa_audit.array }}'
+              subject: '{{ (event.purefa_audit.user ~ '' ran '' ~ event.purefa_audit.command ~ '' '' ~ event.purefa_audit.subcommand ~ '' on '' ~ event.purefa_audit.array) | pprint }}'
               detail: 'arguments: {{ event.purefa_audit.arguments }} (interface {{ event.purefa_audit.user_interface }}, audit {{ event.purefa_audit.audit_id }})'
-              target_array: '{{ event.purefa_audit.array }}'
+              target_array: '{{ event.purefa_audit.array | pprint }}'
     - name: Governed setting changed by a human - reconcile from the baseline
       condition: event.purefa_audit.command is defined and event.purefa_audit.command in vars.governed_commands and event.purefa_audit.by_automation == false and event.purefa_audit.system_user == false and event.purefa_audit.maintenance_active == false
       throttle:
@@ -84,13 +84,13 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefa_audit.array }}'
-              audit_user: '{{ event.purefa_audit.user }}'
-              audit_interface: '{{ event.purefa_audit.user_interface }}'
-              audit_command: '{{ event.purefa_audit.command }}'
-              audit_subcommand: '{{ event.purefa_audit.subcommand }}'
-              audit_arguments: '{{ event.purefa_audit.arguments }}'
-              audit_time: '{{ event.purefa_audit.time }}'
+              target_array: '{{ event.purefa_audit.array | pprint }}'
+              audit_user: '{{ event.purefa_audit.user | pprint }}'
+              audit_interface: '{{ event.purefa_audit.user_interface | pprint }}'
+              audit_command: '{{ event.purefa_audit.command | pprint }}'
+              audit_subcommand: '{{ event.purefa_audit.subcommand | pprint }}'
+              audit_arguments: '{{ event.purefa_audit.arguments | pprint }}'
+              audit_time: '{{ event.purefa_audit.time | pprint }}'
     - name: Governed setting changed during a maintenance window - log only
       condition: event.purefa_audit.command is defined and event.purefa_audit.command in vars.governed_commands and event.purefa_audit.by_automation == false and event.purefa_audit.maintenance_active == true
       action:

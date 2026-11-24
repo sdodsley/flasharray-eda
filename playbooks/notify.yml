@@ -44,12 +44,12 @@
         alert_record:
           time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
           kind: notify
-          severity: "{{ severity | default('warning') }}"
-          array: "{{ target_array | default('') }}"
-          subject: "{{ subject }}"
-          detail: "{{ detail | default('') | trim }}"
-          alert_id: "{{ (alert_id | default('')) or omit }}"
-          alert_code: "{{ (alert_code | default('')) or omit }}"
+          severity: "{{ severity | default('warning', true) | string }}"
+          array: "{{ ('' if (target_array | default(none)) is none else target_array) | string }}"
+          subject: "{{ ('' if subject is none else subject) | string }}"
+          detail: "{{ ('' if (detail | default(none)) is none else detail) | trim | string }}"
+          alert_id: "{{ omit if (alert_id | default('', true) | string | length == 0) else (alert_id | string) }}"
+          alert_code: "{{ omit if (alert_code | default('', true) | string | length == 0) else (alert_code | string) }}"
 
     - name: Read the Slack webhook from the environment
       ansible.builtin.set_fact:
@@ -170,13 +170,13 @@
     # A literal block scalar carries the line break between the subject line
     # and the detail: inside a Jinja expression Ansible doubles backslashes,
     # so a '\n' written there is two characters, not a newline. Slack wants
-    # &, < and > escaped in message text; carriage returns are dropped.
+    # &, < and > escaped in message text; a carriage return becomes a space.
     - name: Format the Slack message
       when: slack_wanted | bool
       ansible.builtin.set_fact:
         slack_text: |-
           {{ slack_icons[alert_record.severity] | default(':information_source:') }} *{{ alert_record.severity | upper }}* {{ alert_record.subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array and alert_record.array not in alert_record.subject else '' }}
-          {{ alert_record.detail | regex_replace('\r', '') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
+          {{ alert_record.detail | regex_replace('\r', ' ') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
 
     - name: Post the alert to Slack
       when: slack_wanted | bool

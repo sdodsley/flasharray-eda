@@ -480,7 +480,7 @@ does and does not change:
   one. An activation keeps the rulebook and the extra vars it was created
   with, so a changed rule or a new vars key reaches it the same way (a rule
   that reads a key the activation's copy of the vars file lacks fails at
-  source start with "is undefined"). A change to an event source plugin
+  source start with "is undefined"). A change to a plugin of the collection
   travels further still: the collection is built into the decision
   environment, so the image is rebuilt, loaded into the store the
   activation workers use, and the activation recreated.

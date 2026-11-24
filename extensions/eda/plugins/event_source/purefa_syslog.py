@@ -51,7 +51,9 @@ text and a UDP source address can be forged, so `allowed_sources` is hygiene
 rather than authentication. Prefer `protocols: [tcp]` plus a host firewall
 limited to the arrays' management addresses, and let syslog events drive
 notifications only; remediation belongs to the REST plugin's audit and
-alert records.
+alert records. Every string in an event is plain text: template markers and
+the vault header in the logged text are broken by a space before the event
+is queued.
 
 Events (one dict per line, top-level key purefa_syslog)
 -------------------------------------------------------
@@ -206,7 +208,7 @@ EXAMPLES = r"""
         event.purefa_syslog.fields.message_kind != "login"
       action:
         debug:
-          msg: "{{ event.purefa_syslog.user }} on {{ event.purefa_syslog.array }}: {{ event.purefa_syslog.action }}"
+          msg: "audit: {{ event.purefa_syslog.user }} on {{ event.purefa_syslog.array }}: {{ event.purefa_syslog.action }}"
 """
 
 import asyncio
@@ -512,6 +514,51 @@ def parse(line, arrays, automation, system_users=None):
     return event
 
 
+_MARKER = re.compile(r"\{(?=[{%#]|\Z)")
+_OVERRIDE = re.compile(r"#(?=jinja2|(?:j(?:i(?:n(?:ja?)?)?)?)?\Z)", re.IGNORECASE)
+_VAULT = re.compile(
+    r"\$(?=ANSIBLE_VAULT|(?:A(?:N(?:S(?:I(?:B(?:L(?:E(?:_(?:V(?:A(?:U(?:L)?)?)?)?)?)?)?)?)?)?)?)?\Z)"
+)
+
+
+def plain_text(value):
+    """Return value with the template markers and the vault header in every
+    string broken by a space ("{{" -> "{ {", "{%" -> "{ %", "{#" -> "{ #",
+    "#jinja2" -> "# jinja2", "$ANSIBLE_VAULT" -> "$ ANSIBLE_VAULT"),
+    recursively through dicts (text keys too), lists and tuples; anything
+    else is returned as is. A "{", a "#" or a "$" that ends a string, or a
+    "#" or a "$" followed there by the start of "jinja2" or of
+    "ANSIBLE_VAULT", gets the space too, so text joined on after it
+    completes neither. The text stays readable. Kept identical in the
+    plain_text event filter, purefa_events.py and purefa_syslog.py
+    (tests/unit/test_plain_text.py checks); ansible-rulebook loads each
+    plugin from its own file, so none of them can import it from another."""
+    if isinstance(value, str):
+        return _VAULT.sub("$ ", _OVERRIDE.sub("# ", _MARKER.sub("{ ", value)))
+    if isinstance(value, dict):
+        return {
+            (plain_text(k) if isinstance(k, str) else k): plain_text(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [plain_text(v) for v in value]
+    return value
+
+
+def _forwarded(event):
+    """The queued form of one parsed line: wrapped under purefa_syslog with
+    every string carried as plain text (parse() keeps the text as logged)."""
+    return plain_text({"purefa_syslog": event})
+
+
+async def _forward(local, queue):
+    """Hand each parsed line on the local queue to ansible-rulebook's, in
+    order and in its queued form."""
+    while True:
+        event = await local.get()
+        await queue.put(_forwarded(event))
+
+
 def _emitter(local, arrays, automation, networks, programs=None, system_users=None):
     """Build the synchronous emit(line, source, protocol) callback: filter the
     sender, parse, keep only the wanted programs, and hand the event to the
@@ -648,12 +695,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
     local: asyncio.Queue = asyncio.Queue()
     emit = _emitter(local, arrays, automation, networks, programs, system_users)
 
-    async def forward():
-        while True:
-            event = await local.get()
-            await queue.put({"purefa_syslog": event})
-
-    forwarder = asyncio.create_task(forward())
+    forwarder = asyncio.create_task(_forward(local, queue))
     servers = []
     if "udp" in protocols:
         transport, _ = await loop.create_datagram_endpoint(

@@ -60,9 +60,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -79,9 +81,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -103,16 +105,16 @@
         run_playbook:
           name: playbooks/capacity_request.yml
           extra_vars:
-            at_risk_array: "{{ event.purefa_capacity.array }}"
-            request_key: "{{ event.meta.received_at | default('') }}"
-            used_pct: "{{ event.purefa_capacity.used_pct }}"
-            used_bytes: "{{ event.purefa_capacity.used_bytes }}"
-            capacity_bytes: "{{ event.purefa_capacity.capacity_bytes }}"
-            days_to_full: "{{ event.purefa_capacity.days_to_full }}"
-            top_growers: "{{ event.purefa_capacity.top_growers }}"
-            pending_eradication_volumes: "{{ event.purefa_capacity.pending_eradication_volumes }}"
-            pending_eradication_snapshots: "{{ event.purefa_capacity.pending_eradication_snapshots }}"
-            candidate_targets: "{{ event.purefa_capacity.others }}"
+            at_risk_array: "{{ event.purefa_capacity.array | pprint }}"
+            request_key: "{{ event.meta.received_at | default('') | pprint }}"
+            used_pct: "{{ event.purefa_capacity.used_pct | pprint }}"
+            used_bytes: "{{ event.purefa_capacity.used_bytes | pprint }}"
+            capacity_bytes: "{{ event.purefa_capacity.capacity_bytes | pprint }}"
+            days_to_full: "{{ event.purefa_capacity.days_to_full | pprint }}"
+            top_growers: "{{ event.purefa_capacity.top_growers | pprint }}"
+            pending_eradication_volumes: "{{ event.purefa_capacity.pending_eradication_volumes | pprint }}"
+            pending_eradication_snapshots: "{{ event.purefa_capacity.pending_eradication_snapshots | pprint }}"
+            candidate_targets: "{{ event.purefa_capacity.others | pprint }}"
             request_dir: "{{ request_dir }}"
             alert_log: "{{ alert_log }}"
 
@@ -134,8 +136,8 @@
             orchestrator_url: "{{ orchestrator_url }}"
             orchestrator_webhook_path: "{{ orchestrator_paths.capacity }}"
             orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
-            event: "{{ event }}"
-            array: "{{ event.purefa_capacity.array }}"
+            event: "{{ event | pprint }}"
+            array: "{{ event.purefa_capacity.array | pprint }}"
             alert_log: "{{ alert_log }}"
             orchestrator_fallback_local: "{{ orchestrator_fallback_local }}"
             request_dir: "{{ request_dir }}"
@@ -153,12 +155,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefa_capacity.array }} full in about {{ event.purefa_capacity.days_to_full }} days at the 7-day growth rate"
+            subject: "{{ (event.purefa_capacity.array ~ ' full in about ' ~ event.purefa_capacity.days_to_full ~ ' days at the 7-day growth rate') | pprint }}"
             detail: >-
               used={{ event.purefa_capacity.used_pct }}%
               growth={{ event.purefa_capacity.growth_bytes_per_day }} bytes/day
               top growers={{ event.purefa_capacity.top_growers }}
-            target_array: "{{ event.purefa_capacity.array }}"
+            target_array: "{{ event.purefa_capacity.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
 - name: FlashArray capacity approvals
@@ -169,6 +171,9 @@
         host: 0.0.0.0
         port: "{{ approval_port }}"
         token: "{{ APPROVAL_TOKEN }}"
+      filters:
+        # the request body's fields reach the rules as plain text
+        - sdodsley.flasharray_eda.plain_text: {}
 
   rules:
     - name: Approved request - reclaim
@@ -180,9 +185,9 @@
         run_playbook:
           name: playbooks/capacity_reclaim.yml
           extra_vars:
-            request_id: "{{ event.payload.request_id }}"
-            approver: "{{ event.payload.approver | default('unknown') }}"
-            reclaim_action: "{{ event.payload.action }}"
+            request_id: "{{ event.payload.request_id | pprint }}"
+            approver: "{{ event.payload.approver | default('unknown') | pprint }}"
+            reclaim_action: "{{ event.payload.action | pprint }}"
             request_dir: "{{ request_dir }}"
             alert_log: "{{ alert_log }}"
 

@@ -297,6 +297,15 @@ The native exporter the Prometheus rules are written for, as served on
   resolve only from `ANSIBLE_COLLECTIONS_PATH`; `env.sh` puts
   `~/.ansible/collections` on it, with `./collections` in front when that
   directory exists.
+- A source or filter named by FQCN resolves from the installed collection
+  only: `--source-dir` and `--filter-dir` are consulted for a bare name
+  (`<dir>/<name>.py`), never for a dotted one. A standalone run therefore
+  uses the copy `make collection` installed under `./collections`, and a
+  plugin or filter change reaches `run.sh` only after `make collection`.
+- An event filter is `main(event, **args)` in the source's process, run on
+  every event before the ruleset's queue (before the built-in filter that
+  adds `meta.source`, `meta.received_at` and `meta.uuid`); one with no
+  arguments is written `- <fqcn>: {}`.
 
 ## Containerized Ansible Automation Platform
 

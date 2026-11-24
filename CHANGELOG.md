@@ -45,6 +45,18 @@
   notifies on each (critical hourly, warning daily, silent in a maintenance
   window) and never touches the schedule; `purepgroup` joins the example
   governed commands so a human's schedule change is reported.
+- Every string in an event is plain text: both event sources break
+  template markers and the vault header in the text they emit, and the new
+  `sdodsley.flasharray_eda.plain_text` event filter, which the listener
+  rulebooks now carry, does the same for the stock Alertmanager and webhook
+  sources. A rule string that opens with an event field is one `| pprint`
+  expression and the playbooks keep stored text with `| string`, so text
+  that looks like a number or a list stays text, a capacity request records
+  its figures as text and a null field is recorded as empty text; a
+  carriage return in a notification's detail reaches Slack as a space, and
+  the capacity playbooks' name guards match the whole name. Run
+  `make collection` or use the rebuilt decision environment image before
+  any rulebook restarts.
 
 - `tools/activation_restart.py` keeps watching the activations for ten
   minutes after the EDA API answers (`--watch-minutes`) and restarts

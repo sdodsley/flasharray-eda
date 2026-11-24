@@ -36,11 +36,11 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.purefa_hardware.array }}"
-            component: "{{ event.purefa_hardware.component }}"
-            component_type: "{{ event.purefa_hardware.type }}"
-            component_status: "{{ event.purefa_hardware.status }}"
-            component_details: "{{ event.purefa_hardware.details }}"
+            target_array: "{{ event.purefa_hardware.array | pprint }}"
+            component: "{{ event.purefa_hardware.component | pprint }}"
+            component_type: "{{ event.purefa_hardware.type | pprint }}"
+            component_status: "{{ event.purefa_hardware.status | pprint }}"
+            component_details: "{{ event.purefa_hardware.details | pprint }}"
             led_state: true
             alert_log: "{{ alert_log }}"
 
@@ -68,10 +68,10 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.purefa_hardware_recovered.array }}"
-            component: "{{ event.purefa_hardware_recovered.component }}"
-            component_type: "{{ event.purefa_hardware_recovered.type }}"
-            component_status: "{{ event.purefa_hardware_recovered.status }}"
+            target_array: "{{ event.purefa_hardware_recovered.array | pprint }}"
+            component: "{{ event.purefa_hardware_recovered.component | pprint }}"
+            component_type: "{{ event.purefa_hardware_recovered.type | pprint }}"
+            component_status: "{{ event.purefa_hardware_recovered.status | pprint }}"
             component_details: "recovered from {{ event.purefa_hardware_recovered.previous_status }}"
             led_state: false
             severity: info
@@ -86,5 +86,5 @@
             severity: critical
             subject: "Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}"
             detail: "previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}"
-            target_array: "{{ event.purefa_controller_failover.array }}"
+            target_array: "{{ event.purefa_controller_failover.array | pprint }}"
             alert_log: "{{ alert_log }}"

@@ -1,6 +1,6 @@
 # Developer entry points. `make check` is what CI runs.
 PY ?= python3
-PLUGINS = extensions/eda/plugins/event_source
+PLUGINS = extensions/eda/plugins
 # playbooks only: dr_drill_one.yml is a task file, tests/replay_*.yml are rulebooks
 PLAYBOOKS = $(filter-out playbooks/dr_drill_one.yml,$(wildcard playbooks/*.yml)) $(filter-out $(wildcard tests/replay_*.yml),$(wildcard tests/*.yml))
 # the collection the repository root builds into (galaxy.yml)
@@ -38,7 +38,7 @@ lint-ao:
 	$(PY) tools/ao_lint.py orchestrator/*.json --allowed-templates orchestrator/job_templates.txt
 
 test:
-	$(PY) -m pytest -q tests/unit
+	$(PY) -m pytest -q -rs tests/unit
 
 syntax:
 	# the remediation playbooks take their host from the rulebook (hosts: "{{ target_array }}");

@@ -54,9 +54,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -73,9 +75,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -104,8 +106,8 @@
         run_playbook:
           name: playbooks/qos_cap.yml
           extra_vars:
-            target_array: "{{ event.purefa_volume_performance.array }}"
-            volume: "{{ event.purefa_volume_performance.volume }}"
+            target_array: "{{ event.purefa_volume_performance.array | pprint }}"
+            volume: "{{ event.purefa_volume_performance.volume | pprint }}"
             mode: cap
             cap_iops: "{{ qos_cap_iops }}"
             qos_cap_scope: "{{ qos_cap_scope }}"
@@ -151,7 +153,7 @@
               ({{ event.purefa_volume_performance.iops_share_pct }}% of the array) for {{ event.purefa_volume_performance.high_latency_polls }} polls;
               array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us write={{ event.purefa_volume_performance.array_usec_per_write_op }}us.
               Set qos_cap_scope to vgroup to cap the group instead.
-            target_array: "{{ event.purefa_volume_performance.array }}"
+            target_array: "{{ event.purefa_volume_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Capped volume back to normal - lift the cap
@@ -167,8 +169,8 @@
         run_playbook:
           name: playbooks/qos_cap.yml
           extra_vars:
-            target_array: "{{ event.purefa_volume_performance.array }}"
-            volume: "{{ event.purefa_volume_performance.volume }}"
+            target_array: "{{ event.purefa_volume_performance.array | pprint }}"
+            volume: "{{ event.purefa_volume_performance.volume | pprint }}"
             mode: lift
             reason: >-
               latency normal for {{ event.purefa_volume_performance.normal_polls }} polls
@@ -201,7 +203,7 @@
               for {{ event.purefa_volume_performance.high_latency_polls }} polls;
               array read={{ event.purefa_volume_performance.array_usec_per_read_op }}us
               write={{ event.purefa_volume_performance.array_usec_per_write_op }}us
-            target_array: "{{ event.purefa_volume_performance.array }}"
+            target_array: "{{ event.purefa_volume_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Array write latency well above the same time last week - notify
@@ -218,11 +220,13 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefa_array_performance.array }} write latency is {{ event.purefa_array_performance.write_latency_ratio }}x last week's"
+            subject: >-
+              {{ (event.purefa_array_performance.array ~ ' write latency is ' ~
+              event.purefa_array_performance.write_latency_ratio ~ "x last week's") | pprint }}
             detail: >-
               now write={{ event.purefa_array_performance.usec_per_write_op }}us
               iops={{ event.purefa_array_performance.writes_per_sec }};
               same half hour last week write={{ event.purefa_array_performance.baseline_usec_per_write_op }}us
               iops={{ event.purefa_array_performance.baseline_writes_per_sec }}
-            target_array: "{{ event.purefa_array_performance.array }}"
+            target_array: "{{ event.purefa_array_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"

@@ -201,7 +201,10 @@ def test_capacity_request_is_keyed_and_reuses_an_open_request():
     definition = (ROOT / "orchestrator" / "capacity_reclaim_approval.json").read_text()
     assert '"request_key": "${trigger.event.observed_at}"' in definition
     rulebook = (ROOT / "extensions" / "eda" / "rulebooks" / "capacity.yml").read_text()
-    assert "request_key: \"{{ event.meta.received_at | default('') }}\"" in rulebook
+    assert (
+        "request_key: \"{{ event.meta.received_at | default('') | pprint }}\""
+        in rulebook
+    )
 
 
 def test_capacity_request_id_is_stable_for_one_key():
@@ -328,7 +331,9 @@ def test_dr_drill_copies_are_keyed_to_the_launch_and_a_drill_in_flight_is_left_a
 
 def test_alert_runbook_records_carry_a_ticket_key():
     build = _set_fact(_task("alert_runbook.yml", "Build the record"), "alert_record")
-    assert (
-        build["ticket_key"]
-        == "{{ target_array }}:{{ alert_id | default('') }}:{{ transition | default('opened') }}"
+    assert build["ticket_key"] == (
+        "{{ (('' if target_array is none else target_array)"
+        " ~ ':' ~ ('' if alert_id is none else alert_id)"
+        " ~ ':' ~ ('opened' if (transition | default(none)) is none"
+        " else transition)) | string }}"
     )

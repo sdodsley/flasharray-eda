@@ -14,6 +14,7 @@ EDA controller need to resolve the event sources and run the playbooks:
 | Path | Content |
 | --- | --- |
 | `extensions/eda/plugins/event_source/` | `purefa_events.py` and `purefa_syslog.py` |
+| `extensions/eda/plugins/event_filter/` | `plain_text.py` |
 | `extensions/eda/rulebooks/` | the rulebooks, which name their sources by FQCN |
 | `playbooks/` | the playbooks and `runbooks/` |
 | `meta/runtime.yml` | `requires_ansible: ">=2.15.0"` |
@@ -28,9 +29,11 @@ the local launcher and the environment files, `tools/`, `slack/`, `venv/`,
 The event sources are `sdodsley.flasharray_eda.purefa_events` and
 `sdodsley.flasharray_eda.purefa_syslog`. Nine of the ten standalone
 rulebooks declare them under those names; `alertmanager.yml` uses the stock
-`ansible.eda.alertmanager` source alone. ansible-rulebook resolves a FQCN
-source from `ANSIBLE_COLLECTIONS_PATH`, so the collection must be installed
-before a rulebook starts. `run.sh` passes `--source-dir` as well;
+`ansible.eda.alertmanager` source with the project's event filter,
+`sdodsley.flasharray_eda.plain_text`, which the two webhook rulesets carry
+too. ansible-rulebook resolves a FQCN source or filter from
+`ANSIBLE_COLLECTIONS_PATH`, so the collection must be installed before a
+rulebook starts. `run.sh` passes `--source-dir` as well;
 ansible-rulebook consults it first for bare names, and it has no effect on
 a FQCN.
 
@@ -177,15 +180,22 @@ pull from the platform fails, and loading the image by hand
 The content is in collection layout, so the move is a rename plus the
 collection's own review steps:
 
-1. **Source names.** `sdodsley.flasharray_eda.purefa_events` and
+1. **Source and filter names.** `sdodsley.flasharray_eda.purefa_events` and
    `sdodsley.flasharray_eda.purefa_syslog` become
    `everpure.flasharray.purefa_events` and
    `everpure.flasharray.purefa_syslog` in the nine standalone rulebooks
    that name them, in the `SOURCE_FQCN` table of
    `tools/platform_rulebooks.py` (then regenerate the platform rulebooks),
-   in the plugins' `EXAMPLES` blocks, in the two unit tests that assert the
-   names, and in the decision-environment description in `aap/seed.yml`
+   in the plugins' `EXAMPLES` blocks, in the unit tests that hold the names
+   (`grep -rl sdodsley.flasharray_eda tests/unit` lists them), and in the
+   decision-environment description in `aap/seed.yml`
    (the activations name rulebooks by path and carry no source name). The
+   event filter `sdodsley.flasharray_eda.plain_text` becomes
+   `everpure.flasharray.plain_text` in `alertmanager.yml`, `capacity.yml`
+   and `change_control.yml` (then regenerate the platform rulebooks, which
+   copies it into `platform/alertmanager.yml`), in the filter's `EXAMPLES`
+   block and in
+   `tests/unit/test_rulebooks.py` and `tests/unit/test_plain_text.py`. The
    `ansible.eda` dependency moves into the collection's `galaxy.yml`.
 2. **Playbook references.** `run_playbook: name: playbooks/notify.yml`
    becomes the collection playbook FQCN (`everpure.flasharray.notify`),
@@ -199,15 +209,17 @@ collection's own review steps:
    (`--env-vars`); on the platform the two webhook rulesets are event
    streams, which authenticate at the platform, and the platform rulebooks
    omit them.
-4. **Documentation.** Both event sources carry `DOCUMENTATION` and
-   `EXAMPLES` blocks (a unit test asserts every argument the code reads is
-   an option). On the move, re-check them with the collection's doc
-   tooling, add a README section for the EDA content, and a changelog
-   fragment (quote entries that contain `key: value` text or the changelog
-   sanity test fails).
-5. **Tests.** `tests/unit/test_events_plugin.py` and
-   `tests/unit/test_syslog_parse.py` with the `conftest.py` SDK stub move
-   to `tests/unit/plugins/event_source/`; `ansible-test sanity` and
+4. **Documentation.** Both event sources and the event filter carry
+   `DOCUMENTATION` and `EXAMPLES` blocks (a unit test asserts every
+   argument the code reads is an option). On the move, re-check them with
+   the collection's doc tooling, add a README section for the EDA content,
+   and a changelog fragment (quote entries that contain `key: value` text
+   or the changelog sanity test fails).
+5. **Tests.** `tests/unit/test_events_plugin.py`,
+   `tests/unit/test_syslog_parse.py` and `tests/unit/test_plain_text.py`
+   move to `tests/unit/plugins/` together with the `conftest.py` SDK stub
+   and its plugin fixtures (one directory: `test_plain_text.py` loads the
+   filter and both sources); `ansible-test sanity` and
    `ansible-lint` run as the collection's CI does. The replay rulebooks
    and `tests/unit/test_rulebooks.py` stay in this repository.
 6. **Decision environment.** The Containerfile and the builder definitions

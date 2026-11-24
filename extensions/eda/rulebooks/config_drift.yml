@@ -49,9 +49,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -68,9 +70,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -91,8 +93,8 @@
         run_playbook:
           name: playbooks/remediate_ntp.yml
           extra_vars:
-            target_array: "{{ event.purefa_config.array }}"
-            observed_ntp_servers: "{{ event.purefa_config.ntp_servers_csv }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
+            observed_ntp_servers: "{{ event.purefa_config.ntp_servers_csv | pprint }}"
             baseline_ntp_servers_csv: "{{ baseline_ntp_servers_csv }}"
             alert_log: "{{ alert_log }}"
 
@@ -109,9 +111,9 @@
         run_playbook:
           name: playbooks/remediate_dns.yml
           extra_vars:
-            target_array: "{{ event.purefa_config.array }}"
-            observed_dns_domain: "{{ event.purefa_config.dns_domain }}"
-            observed_dns_nameservers: "{{ event.purefa_config.dns_nameservers_csv }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
+            observed_dns_domain: "{{ event.purefa_config.dns_domain | pprint }}"
+            observed_dns_nameservers: "{{ event.purefa_config.dns_nameservers_csv | pprint }}"
             baseline_dns_domain: "{{ baseline_dns_domain }}"
             baseline_dns_nameservers_csv: "{{ baseline_dns_nameservers_csv }}"
             alert_log: "{{ alert_log }}"
@@ -136,7 +138,7 @@
               enabled={{ event.purefa_config.ldap_enabled }} uris={{ event.purefa_config.ldap_uris_csv }}
               base_dn={{ event.purefa_config.ldap_base_dn }};
               baseline enabled={{ baseline_ldap_enabled }} uris={{ baseline_ldap_uris_csv }} base_dn={{ baseline_ldap_base_dn }}
-            target_array: "{{ event.purefa_config.array }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: SafeMode / eradication drift - notify only, never remediate
@@ -159,7 +161,7 @@
               eradication_delay_ms={{ event.purefa_config.eradication_delay_ms }};
               baseline manual_eradication={{ baseline_manual_eradication }}
               minimum delay={{ baseline_min_eradication_delay_ms }}
-            target_array: "{{ event.purefa_config.array }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Admin authentication settings drift - notify only
@@ -184,7 +186,7 @@
               lockout_duration_ms={{ event.purefa_config.lockout_duration_ms }} (baseline {{ baseline_lockout_duration_ms }})
               min_password_length={{ event.purefa_config.min_password_length }} (baseline at least {{ baseline_min_password_length }})
               sso_enabled={{ event.purefa_config.sso_enabled }} (baseline {{ baseline_sso_enabled }})
-            target_array: "{{ event.purefa_config.array }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # Certificates come one event each with days_left computed by the plugin
@@ -209,10 +211,11 @@
               Certificate {{ event.purefa_certificate.name }} on {{ event.purefa_certificate.array }}
               {{ 'has expired' if event.purefa_certificate.days_left < 0 else 'expires in ' ~ event.purefa_certificate.days_left ~ ' days' }}
             detail: >-
-              {{ event.purefa_certificate.certificate_type }} certificate ({{ event.purefa_certificate.status }})
-              issued to {{ event.purefa_certificate.issued_to }}, CN {{ event.purefa_certificate.common_name }},
-              valid to {{ event.purefa_certificate.valid_to }}; critical within {{ certificate_critical_days }} days
-            target_array: "{{ event.purefa_certificate.array }}"
+              {{ (event.purefa_certificate.certificate_type ~ ' certificate (' ~ event.purefa_certificate.status ~
+              ') issued to ' ~ event.purefa_certificate.issued_to ~ ', CN ' ~ event.purefa_certificate.common_name ~
+              ', valid to ' ~ event.purefa_certificate.valid_to ~ '; critical within ' ~ certificate_critical_days ~
+              ' days') | pprint }}
+            target_array: "{{ event.purefa_certificate.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Certificate expiring - notify
@@ -233,10 +236,11 @@
               Certificate {{ event.purefa_certificate.name }} on {{ event.purefa_certificate.array }}
               expires in {{ event.purefa_certificate.days_left }} days
             detail: >-
-              {{ event.purefa_certificate.certificate_type }} certificate ({{ event.purefa_certificate.status }})
-              issued to {{ event.purefa_certificate.issued_to }}, CN {{ event.purefa_certificate.common_name }},
-              valid to {{ event.purefa_certificate.valid_to }}; warning within {{ certificate_warn_days }} days
-            target_array: "{{ event.purefa_certificate.array }}"
+              {{ (event.purefa_certificate.certificate_type ~ ' certificate (' ~ event.purefa_certificate.status ~
+              ') issued to ' ~ event.purefa_certificate.issued_to ~ ', CN ' ~ event.purefa_certificate.common_name ~
+              ', valid to ' ~ event.purefa_certificate.valid_to ~ '; warning within ' ~ certificate_warn_days ~
+              ' days') | pprint }}
+            target_array: "{{ event.purefa_certificate.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # The array tests each KMIP server itself; a server that fails that test
@@ -258,7 +262,7 @@
             severity: critical
             subject: "KMIP server {{ event.purefa_kmip.name }} on {{ event.purefa_kmip.array }} failed the array's test"
             detail: "uris={{ event.purefa_kmip.uris }}; failures: {{ event.purefa_kmip.failures }}"
-            target_array: "{{ event.purefa_kmip.array }}"
+            target_array: "{{ event.purefa_kmip.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # Alert watchers are the array's own route to a human. None enabled means
@@ -282,10 +286,8 @@
           extra_vars:
             severity: warning
             subject: "No enabled alert watcher on {{ event.purefa_config.array }}"
-            detail: >-
-              {{ event.purefa_config.alert_watcher_count }} watchers configured, none enabled:
-              {{ event.purefa_config.alert_watchers_csv }}
-            target_array: "{{ event.purefa_config.array }}"
+            detail: "{{ (event.purefa_config.alert_watcher_count ~ ' watchers configured, none enabled: ' ~ event.purefa_config.alert_watchers_csv) | pprint }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Alert watchers differ from the baseline - notify
@@ -307,5 +309,5 @@
               watchers={{ event.purefa_config.alert_watchers_csv }}
               (enabled {{ event.purefa_config.alert_watchers_enabled_csv }});
               baseline {{ baseline_alert_watchers_csv }}
-            target_array: "{{ event.purefa_config.array }}"
+            target_array: "{{ event.purefa_config.array | pprint }}"
             alert_log: "{{ alert_log }}"

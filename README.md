@@ -152,6 +152,7 @@ webhook is configured ("Notifications" below).
 ```
 galaxy.yml, meta/runtime.yml           the repository root is the collection sdodsley.flasharray_eda (docs/PACKAGING.md)
 extensions/eda/plugins/event_source/   purefa_events.py (REST pull, seven signals), purefa_syslog.py (push)
+extensions/eda/plugins/event_filter/   plain_text.py (event text as plain text, for the stock listener sources)
 extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN
 playbooks/                             notify, digest, remediate_*, reconcile, apply_baseline, identify_led, replicate_now, dr_promote, dr_demote,
                                        preferred_array, dr_drill, dr_switchover, alertmanager_silence, capacity_request/reclaim, qos_cap, protect_now,
@@ -225,12 +226,29 @@ any). `arrays` maps an array's own name or its syslog hostname to the
 inventory name: the message's "Array name" field is tried first, then the
 syslog hostname, which is the controller's.
 
-The zero-code path needs neither plugin: Prometheus scrapes the array's
-native OpenMetrics exporter, `prometheus/flasharray.rules.yml` raises alerts
-carrying a `domain` label, Alertmanager posts them to
-`ansible.eda.alertmanager`, and `alertmanager.yml` runs the same playbooks.
-The rules follow the names and labels the native exporter serves on
-Purity//FA 6.10.6 (listed at the top of the rules file);
+Every string in an event is plain text. Both event sources break template
+markers (`{{`, `{%`, `{#`, `#jinja2`) and the vault header
+(`$ANSIBLE_VAULT`) with a space in the text they emit, and follow a `{`, a
+`#` or a `$` that ends a string with one, wherever the text came from (an
+alert summary, an audit's arguments, a REST error, a syslog line). The
+`sdodsley.flasharray_eda.plain_text` event filter does the same for the
+stock sources whose text comes from outside the array: the listener
+rulebooks put it on `ansible.eda.alertmanager` and `ansible.eda.webhook`,
+and a rulebook of your own can add it to any source the same way. The text
+stays readable, and the rules and the playbooks handle it as data. A rule
+string that opens with an event field is one expression ending
+in `| pprint`, in parentheses when it joins several parts
+(`{{ (a ~ ': ' ~ b) | pprint }}`), so the playbook receives the value it
+was (text that looks like a number or a list stays text); a string that
+carries a field later on opens with a plain word. A playbook that stores
+such text in a fact ends the expression with `| string`.
+
+The zero-code path needs neither event source plugin, only the `plain_text`
+filter: Prometheus scrapes the array's native OpenMetrics exporter,
+`prometheus/flasharray.rules.yml` raises alerts carrying a `domain` label,
+Alertmanager posts them to `ansible.eda.alertmanager`, and `alertmanager.yml`
+runs the same playbooks. The rules follow the names and labels the native
+exporter serves on Purity//FA 6.10.6 (listed at the top of the rules file);
 `prometheus/prometheus.example.yml` and `alertmanager.example.yml` are the
 scrape and routing configurations.
 
@@ -430,6 +448,9 @@ The unit tests cover each component without an array:
   to exist;
 - `tests/unit/test_orchestrator_bridge.py` runs `orchestrator_post.yml`
   against the mock (skipped without `ansible-playbook`);
+- `test_plain_text.py` covers the helper and the filter and checks that the
+  three copies are identical, and `test_playbook_text.py` holds the
+  `| string` convention of the playbooks;
 - `test_ao_lint.py` covers every linter rule with a fixture and checks that
   every `${node.artifacts.key}` a definition reads is published by that
   template's playbook;

@@ -61,9 +61,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -80,9 +82,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -106,13 +108,13 @@
           extra_vars:
             severity: critical
             subject: >-
-              {{ event.purefa_array_connection.array }} connection to {{ event.purefa_array_connection.remote }}
-              is {{ event.purefa_array_connection.status }}
+              {{ (event.purefa_array_connection.array ~ ' connection to ' ~ event.purefa_array_connection.remote ~
+              ' is ' ~ event.purefa_array_connection.status) | pprint }}
             detail: >-
               type={{ event.purefa_array_connection.type }}
               paths {{ event.purefa_array_connection.paths_connected }}/{{ event.purefa_array_connection.paths_total }} connected;
               failed: {{ event.purefa_array_connection.failed_paths }}
-            target_array: "{{ event.purefa_array_connection.array }}"
+            target_array: "{{ event.purefa_array_connection.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Array connection has failed paths - notify with the paths
@@ -129,11 +131,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefa_array_connection.array }} has failed replication paths to {{ event.purefa_array_connection.remote }}"
+            subject: "{{ (event.purefa_array_connection.array ~ ' has failed replication paths to ' ~ event.purefa_array_connection.remote) | pprint }}"
             detail: >-
-              {{ event.purefa_array_connection.paths_connected }} of {{ event.purefa_array_connection.paths_total }} paths connected;
-              failed: {{ event.purefa_array_connection.failed_paths }}
-            target_array: "{{ event.purefa_array_connection.array }}"
+              {{ (event.purefa_array_connection.paths_connected ~ ' of ' ~
+              event.purefa_array_connection.paths_total ~ ' paths connected; failed: ' ~
+              event.purefa_array_connection.failed_paths) | pprint }}
+            target_array: "{{ event.purefa_array_connection.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # A planned switchover tags the source pod eda/planned_work before it
@@ -170,7 +173,7 @@
             detail: >-
               status={{ event.purefa_replica_link.status }} paused for {{ event.purefa_replica_link.paused_for_s }}s
               (since this rulebook noticed), recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old
-            target_array: "{{ event.purefa_replica_link.array }}"
+            target_array: "{{ event.purefa_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replica link unhealthy - notify
@@ -193,7 +196,7 @@
             detail: >-
               direction={{ event.purefa_replica_link.direction }} lag={{ event.purefa_replica_link.lag_ms }}ms
               recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old
-            target_array: "{{ event.purefa_replica_link.array }}"
+            target_array: "{{ event.purefa_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replica link lag above the RPO - notify
@@ -217,7 +220,7 @@
             detail: >-
               recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old,
               status={{ event.purefa_replica_link.status }}, breached for {{ event.purefa_replica_link.rpo_breach_polls }} polls
-            target_array: "{{ event.purefa_replica_link.array }}"
+            target_array: "{{ event.purefa_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replica link lag above the RPO for N polls - escalate
@@ -241,7 +244,7 @@
             detail: >-
               lag {{ event.purefa_replica_link.lag_s }}s vs RPO {{ event.purefa_replica_link.rpo_seconds }}s,
               recovery point {{ event.purefa_replica_link.recovery_point_age_s }}s old
-            target_array: "{{ event.purefa_replica_link.array }}"
+            target_array: "{{ event.purefa_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Stretched pod member offline - prefer the online array on its hosts
@@ -259,10 +262,10 @@
         run_playbook:
           name: playbooks/preferred_array.yml
           extra_vars:
-            target_array: "{{ event.purefa_stretched_pod.array }}"
-            pod: "{{ event.purefa_stretched_pod.pod }}"
-            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
-            offline_arrays: "{{ event.purefa_stretched_pod.offline_arrays }}"
+            target_array: "{{ event.purefa_stretched_pod.array | pprint }}"
+            pod: "{{ event.purefa_stretched_pod.pod | pprint }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays | pprint }}"
+            offline_arrays: "{{ event.purefa_stretched_pod.offline_arrays | pprint }}"
             mode: prefer_online
             alert_log: "{{ alert_log }}"
 
@@ -282,8 +285,8 @@
           extra_vars:
             severity: critical
             subject: "Stretched pod {{ event.purefa_stretched_pod.pod }} degraded as seen from {{ event.purefa_stretched_pod.array }}"
-            detail: "{{ event.purefa_stretched_pod.members }}"
-            target_array: "{{ event.purefa_stretched_pod.array }}"
+            detail: "{{ event.purefa_stretched_pod.members | pprint }}"
+            target_array: "{{ event.purefa_stretched_pod.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Stretched pod recovered - restore host preferred arrays
@@ -294,9 +297,9 @@
         run_playbook:
           name: playbooks/preferred_array.yml
           extra_vars:
-            target_array: "{{ event.purefa_stretched_pod.array }}"
-            pod: "{{ event.purefa_stretched_pod.pod }}"
-            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
+            target_array: "{{ event.purefa_stretched_pod.array | pprint }}"
+            pod: "{{ event.purefa_stretched_pod.pod | pprint }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays | pprint }}"
             offline_arrays: []
             mode: restore
             alert_log: "{{ alert_log }}"
@@ -317,12 +320,12 @@
         run_playbook:
           name: playbooks/replicate_now.yml
           extra_vars:
-            target_array: "{{ event.purefa_pg_replication.array }}"
-            pgroup: "{{ event.purefa_pg_replication.pgroup }}"
-            reason: "{{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
-            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s }}"
-            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms }}"
-            in_progress: "{{ event.purefa_pg_replication.in_progress }}"
+            target_array: "{{ event.purefa_pg_replication.array | pprint }}"
+            pgroup: "{{ event.purefa_pg_replication.pgroup | pprint }}"
+            reason: "{{ ('stuck' if event.purefa_pg_replication.stuck else 'overdue') | pprint }}"
+            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s | pprint }}"
+            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms | pprint }}"
+            in_progress: "{{ event.purefa_pg_replication.in_progress | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # With orchestrator_enabled true the overdue or stuck group is handed to
@@ -347,8 +350,8 @@
             orchestrator_url: "{{ orchestrator_url }}"
             orchestrator_webhook_path: "{{ orchestrator_paths.replication }}"
             orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
-            event: "{{ event }}"
-            array: "{{ event.purefa_pg_replication.array }}"
+            event: "{{ event | pprint }}"
+            array: "{{ event.purefa_pg_replication.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection group replication overdue or stuck - notify only
@@ -375,7 +378,7 @@
               schedule every {{ event.purefa_pg_replication.frequency_ms }}ms,
               in progress={{ event.purefa_pg_replication.in_progress }},
               targets={{ event.purefa_pg_replication.targets }}
-            target_array: "{{ event.purefa_pg_replication.array }}"
+            target_array: "{{ event.purefa_pg_replication.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # A schedule switched off is never overdue (overdue needs an enabled
@@ -407,7 +410,7 @@
               schedule every {{ event.purefa_pg_replication.frequency_ms }}ms when enabled,
               last completed {{ event.purefa_pg_replication.since_last_completed_s }}s ago,
               members={{ event.purefa_pg_replication.member_count }}
-            target_array: "{{ event.purefa_pg_replication.array }}"
+            target_array: "{{ event.purefa_pg_replication.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection group snapshot schedule disabled with members - notify
@@ -432,7 +435,7 @@
               members={{ event.purefa_pg_replication.member_count }},
               snapshot schedule every {{ event.purefa_pg_replication.snapshot_frequency_ms }}ms when enabled,
               targets={{ event.purefa_pg_replication.targets }}
-            target_array: "{{ event.purefa_pg_replication.array }}"
+            target_array: "{{ event.purefa_pg_replication.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
 - name: FlashArray protection posture
@@ -464,9 +467,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -483,9 +488,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # Protection posture: one purefa_protection_posture event per array per
@@ -511,13 +516,13 @@
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_finding.unprotected_count }} of
-              {{ event.purefa_protection_finding.volumes_total }} volumes on
-              {{ event.purefa_protection_finding.array }} have no protection
+              {{ (event.purefa_protection_finding.unprotected_count ~ ' of ' ~
+              event.purefa_protection_finding.volumes_total ~ ' volumes on ' ~
+              event.purefa_protection_finding.array ~ ' have no protection') | pprint }}
             detail: >-
               in no protection group and no replicated pod:
               {{ event.purefa_protection_finding.unprotected_csv }}
-            target_array: "{{ event.purefa_protection_finding.array }}"
+            target_array: "{{ event.purefa_protection_finding.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Volumes with local snapshots only - notify
@@ -536,12 +541,12 @@
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_finding.local_only_count }} volumes on
-              {{ event.purefa_protection_finding.array }} have local snapshots only
+              {{ (event.purefa_protection_finding.local_only_count ~ ' volumes on ' ~
+              event.purefa_protection_finding.array ~ ' have local snapshots only') | pprint }}
             detail: >-
               in protection groups without a target and in no replicated pod:
               {{ event.purefa_protection_finding.local_only }}
-            target_array: "{{ event.purefa_protection_finding.array }}"
+            target_array: "{{ event.purefa_protection_finding.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection groups without SafeMode - notify
@@ -560,13 +565,13 @@
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_finding.groups_unlocked_count }} of
-              {{ event.purefa_protection_finding.groups_total }} protection groups on
-              {{ event.purefa_protection_finding.array }} are not SafeMode locked
+              {{ (event.purefa_protection_finding.groups_unlocked_count ~ ' of ' ~
+              event.purefa_protection_finding.groups_total ~ ' protection groups on ' ~
+              event.purefa_protection_finding.array ~ ' are not SafeMode locked') | pprint }}
             detail: >-
               groups with members whose retention lock is not ratcheted:
               {{ event.purefa_protection_finding.groups_unlocked }}
-            target_array: "{{ event.purefa_protection_finding.array }}"
+            target_array: "{{ event.purefa_protection_finding.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection group retention below the minimum - notify
@@ -584,13 +589,13 @@
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_finding.groups_short_retention_count }} protection groups on
-              {{ event.purefa_protection_finding.array }} keep snapshots for fewer than
-              {{ protection_min_retention_days }} days
+              {{ (event.purefa_protection_finding.groups_short_retention_count ~ ' protection groups on ' ~
+              event.purefa_protection_finding.array ~ ' keep snapshots for fewer than ' ~
+              protection_min_retention_days ~ ' days') | pprint }}
             detail: >-
               source retention below the minimum:
               {{ event.purefa_protection_finding.groups_short_retention }}
-            target_array: "{{ event.purefa_protection_finding.array }}"
+            target_array: "{{ event.purefa_protection_finding.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Protection group members removed - notify
@@ -608,13 +613,13 @@
           extra_vars:
             severity: warning
             subject: >-
-              {{ event.purefa_protection_finding.members_removed_count }} members left
-              protection groups on {{ event.purefa_protection_finding.array }}
+              {{ (event.purefa_protection_finding.members_removed_count ~ ' members left protection groups on ' ~
+              event.purefa_protection_finding.array) | pprint }}
             detail: >-
               removed since the previous poll (group:member):
               {{ event.purefa_protection_finding.members_removed }};
               added: {{ event.purefa_protection_finding.members_added }}
-            target_array: "{{ event.purefa_protection_finding.array }}"
+            target_array: "{{ event.purefa_protection_finding.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
 - name: FlashArray DR drill

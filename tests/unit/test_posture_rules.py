@@ -251,7 +251,7 @@ def test_rule_notifies_the_same_way_in_both_forms(name):
     extra = run["extra_vars"]
     assert set(extra) == NOTIFY_VARS
     assert extra["severity"] == severity
-    assert extra["target_array"] == "{{ event.%s.array }}" % kind
+    assert extra["target_array"] == "{{ event.%s.array | pprint }}" % kind
     assert extra["alert_log"] == "{{ alert_log }}"
     # the subject names the array once, as the sibling rules do; the detail
     # names the items from the event

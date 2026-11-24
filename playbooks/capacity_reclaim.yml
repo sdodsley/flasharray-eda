@@ -38,7 +38,7 @@
     - name: Refuse a request id that is not a plain file name
       ansible.builtin.assert:
         that:
-          - request_id is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - request_id is regex('[A-Za-z0-9][A-Za-z0-9._-]*', match_type='fullmatch')
         fail_msg: "request id {{ request_id | string | truncate(80) }} is not a valid request id"
 
     - name: See whether the request file is there
@@ -62,7 +62,7 @@
         - name: Refuse a rebuild without the array and the candidates
           ansible.builtin.assert:
             that:
-              - (array | default(at_risk_array | default(''))) is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+              - (array | default(at_risk_array | default(''))) is regex('[A-Za-z0-9][A-Za-z0-9._-]*', match_type='fullmatch')
               - candidates is defined and candidates is mapping
             fail_msg: "{{ request_file }} does not exist and the extra vars array (or at_risk_array) and candidates, the request job's artifacts, are not both set (rebuild_from_artifacts is true)"
 

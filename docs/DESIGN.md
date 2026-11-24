@@ -54,7 +54,7 @@ Forward both into tickets.
 | --- | --- | --- | --- |
 | Pull | `purefa_events`: one asyncio source plugin polling N arrays, seven signals each on its own interval, one asyncio task per signal, SDK calls in a thread pool, one py-pure-client client per array rebuilt after a failure, every REST call bounded by `request_timeout` | poll interval | a read-only API token per array |
 | Push | `purefa_syslog`: UDP and TCP on one port (default 5140; 514 needs root or a capability); RFC 3164 headers with or without a priority (the array sends none) and RFC 5424 headers; the `purity.audit`, `purity.alert` and `purity.test` programs kept and the controllers' other system log (which the array also forwards) dropped; the array's own service accounts counted as automation (`system_users`); audit lines parsed into fields (user, command, action, result, interface, session, location) in both layouts Purity writes. `syslog.yml` raises the fast notification for a human's action and for alerts; the REST plugin owns the full record | sub-second | a syslog target on the array |
-| Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
+| Zero custom code | native OpenMetrics exporter (Purity//FA 6.7+) -> `prometheus/flasharray.rules.yml` -> Alertmanager -> `ansible.eda.alertmanager` with the `plain_text` filter -> `alertmanager.yml` | scrape + rule eval | an existing Prometheus |
 
 The Prometheus rules cover hardware and drive status, capacity and
 days-to-full, data reduction drop, read and write latency against last
@@ -377,6 +377,14 @@ Each remediation passes the gates its event allows; the table in
   ([VERIFICATION.md](VERIFICATION.md)).
 - Scale: one plugin instance polls N arrays with one REST client per array.
   Two arrays are verified; larger fleets are untested.
+- Event text is plain text. The event sources break template markers and
+  the vault header in every string they emit and the `plain_text` filter
+  does the same on the stock listener sources, so an alert summary, an
+  audit's arguments or a webhook body reaches a rule or a playbook as plain
+  text. A rule string that opens
+  with a field is one `| pprint` expression and a playbook keeps stored
+  text with `| string`, so a field reaches the playbook as the value it was
+  and the record as its text ([SECURITY.md](../SECURITY.md)).
 
 ## 7. Deployment
 

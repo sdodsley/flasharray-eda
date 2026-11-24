@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The repository root is the Ansible collection sdodsley.flasharray_eda: the
-# two event source plugins (extensions/eda/plugins/event_source), the
-# rulebooks (extensions/eda/rulebooks) and the playbooks (playbooks/) are
+# event source plugins (extensions/eda/plugins/event_source), the event
+# filter (extensions/eda/plugins/event_filter), the rulebooks
+# (extensions/eda/rulebooks) and the playbooks (playbooks/) are
 # already laid out as collection content. `make collection` builds the
 # tarball into build/ and installs it under ./collections, which env.sh puts
 # first on ANSIBLE_COLLECTIONS_PATH; the decision environment builds and
@@ -20,7 +21,7 @@ authors:
   - sdodsley
 description: >-
   Event-Driven Ansible for standalone Everpure FlashArrays: event source
-  plugins, rulebooks and playbooks
+  plugins, an event filter, rulebooks and playbooks
 license:
   - Apache-2.0
 tags:

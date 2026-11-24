@@ -151,7 +151,7 @@ def test_alerts_rulebook_notifies_at_closing_routes_a_rise_and_logs_closed():
     resolved = rules["Alert resolved - notify"]
     assert 'transition == "closing"' in resolved["condition"]
     extra = resolved["action"]["run_playbook"]["extra_vars"]
-    assert extra["severity"] == "{{ event.purefa_alert.severity_down }}"
+    assert extra["severity"] == "{{ event.purefa_alert.severity_down | pprint }}"
     assert "resolved_after_s" in extra["detail"]
     raised = rules["Alert severity raised - route through the runbook map again"]
     assert "severity_raised == true" in raised["condition"]
@@ -252,7 +252,10 @@ def test_alerts_rulebook_notifies_once_for_an_alert_resolved_between_polls():
     assert 'state == "closing"' in between["condition"]
     play = between["action"]["run_playbook"]
     assert play["name"] == "playbooks/notify.yml"
-    assert play["extra_vars"]["severity"] == "{{ event.purefa_alert.severity_down }}"
+    assert (
+        play["extra_vars"]["severity"]
+        == "{{ event.purefa_alert.severity_down | pprint }}"
+    )
     assert "resolved_after_s" in play["extra_vars"]["detail"]
     # after the maintenance rule, before the runbook map: first match wins
     assert names.index(

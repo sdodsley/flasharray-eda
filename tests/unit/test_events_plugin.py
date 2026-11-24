@@ -1138,6 +1138,42 @@ def test_signal_loop_other_signals_report_a_failed_array_and_carry_on(events):
     assert bad.resets == 1
 
 
+def test_signal_loop_emits_every_string_as_plain_text(events):
+    """Text from the array and from a REST error is queued with its template
+    markers broken, so the rules and the playbooks meet data."""
+    good = LockedArray(
+        FakeClient(alerts=[alert("1", summary="(fixture): {{ 7 * 7 }} {% x %}")]),
+        "array-a",
+    )
+    bad_client = FakeClient()
+    bad_client.get_alerts = lambda **kw: FakeError("#jinja2:x {{ 7 * 7 }}")
+    bad = LockedArray(bad_client, "array-b")
+    got = []
+
+    async def go():
+        done = asyncio.Event()
+
+        class Q:
+            async def put(self, event):
+                got.append(event)
+                if len(got) == 2:
+                    done.set()
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            task = asyncio.create_task(
+                events._signal_loop(Q(), "alerts", [bad, good], {}, {}, ex)
+            )
+            await asyncio.wait_for(done.wait(), 10)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(go())
+    assert "# jinja2:x { { 7 * 7 }}" in got[0]["purefa_poll_error"]["error"]
+    assert got[1]["purefa_alert"]["summary"] == "(fixture): { { 7 * 7 }} { % x %}"
+    assert "{{" not in json.dumps(got) and "{%" not in json.dumps(got)
+
+
 def test_signal_loop_counts_a_streak_and_escalates_at_the_threshold(events):
     # fail, fail, succeed, fail: the streak reaches the threshold on the
     # second failure, the success ends it, and the next failure starts again

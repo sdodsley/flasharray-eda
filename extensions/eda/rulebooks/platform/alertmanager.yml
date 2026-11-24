@@ -19,6 +19,8 @@
         data_alerts_path: alerts
         data_host_path: ''
         data_path_separator: .
+      filters:
+        - sdodsley.flasharray_eda.plain_text: {}
   rules:
     - name: Hardware component not ok - identify LED and notify
       condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashArrayHardwareComponentNotOk"
@@ -33,12 +35,12 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.alert.labels.array_name }}'
-              component: '{{ event.alert.labels.component_name }}'
-              component_type: '{{ event.alert.labels.component_type | default('''') }}'
+              target_array: '{{ event.alert.labels.array_name | default('''') | pprint }}'
+              component: '{{ event.alert.labels.component_name | default('''') | pprint }}'
+              component_type: '{{ event.alert.labels.component_type | default('''') | pprint }}'
               component_status: not_ok
-              component_details: '{{ event.alert.annotations.summary | default('''') }}'
-              severity: '{{ event.alert.labels.severity | default(''critical'') }}'
+              component_details: '{{ event.alert.annotations.summary | default('''') | pprint }}'
+              severity: '{{ event.alert.labels.severity | default(''critical'') | pprint }}'
               led_state: true
     - name: Capacity threshold - approval request
       condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashArrayCapacityHigh"
@@ -52,8 +54,8 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              at_risk_array: '{{ event.alert.labels.array_name }}'
-              used_pct: '{{ event.alert.annotations.value | default('''') }}'
+              at_risk_array: '{{ event.alert.labels.array_name | default('''') | pprint }}'
+              used_pct: '{{ event.alert.annotations.value | default('''') | pprint }}'
               used_bytes: ''
               capacity_bytes: ''
     - name: Scrape failed - notify
@@ -68,10 +70,10 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              severity: '{{ event.alert.labels.severity | default(''critical'') }}'
+              severity: '{{ event.alert.labels.severity | default(''critical'') | pprint }}'
               subject: 'FlashArrayScrapeFailed: {{ event.alert.annotations.summary | default('''') }}'
               detail: instance={{ event.alert.labels.instance | default('') }} labels={{ event.alert.labels }}
-              target_array: '{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) }}'
+              target_array: '{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) | pprint }}'
     - name: Any other firing FlashArray alert - notify
       condition: event.alert.status == "firing" and event.alert.labels.alertname is defined and event.alert.labels.alertname not in ["FlashArrayHardwareComponentNotOk", "FlashArrayCapacityHigh", "FlashArrayScrapeFailed"]
       throttle:
@@ -85,10 +87,10 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              severity: '{{ event.alert.labels.severity | default(''warning'') }}'
-              subject: '{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary | default('''') }}'
+              severity: '{{ event.alert.labels.severity | default(''warning'') | pprint }}'
+              subject: '{{ (event.alert.labels.alertname ~ '': '' ~ (event.alert.annotations.summary | default(''''))) | pprint }}'
               detail: domain={{ event.alert.labels.domain | default('') }} labels={{ event.alert.labels }}
-              target_array: '{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) }}'
+              target_array: '{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) | pprint }}'
     - name: Resolved - log
       condition: event.alert.status == "resolved"
       action:
@@ -99,5 +101,5 @@
             extra_vars:
               severity: info
               subject: 'resolved: {{ event.alert.labels.alertname | default('''') }} on {{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) }}'
-              detail: '{{ event.alert.annotations.summary | default('''') }}'
-              target_array: '{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) }}'
+              detail: '{{ event.alert.annotations.summary | default('''') | pprint }}'
+              target_array: '{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('''')) | pprint }}'

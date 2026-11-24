@@ -37,10 +37,10 @@
         run_playbook:
           name: playbooks/preferred_array.yml
           extra_vars:
-            target_array: "{{ event.purefa_stretched_pod.array }}"
-            pod: "{{ event.purefa_stretched_pod.pod }}"
-            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
-            offline_arrays: "{{ event.purefa_stretched_pod.offline_arrays }}"
+            target_array: "{{ event.purefa_stretched_pod.array | pprint }}"
+            pod: "{{ event.purefa_stretched_pod.pod | pprint }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays | pprint }}"
+            offline_arrays: "{{ event.purefa_stretched_pod.offline_arrays | pprint }}"
             mode: prefer_online
             alert_log: "{{ alert_log }}"
 
@@ -52,9 +52,9 @@
         run_playbook:
           name: playbooks/preferred_array.yml
           extra_vars:
-            target_array: "{{ event.purefa_stretched_pod.array }}"
-            pod: "{{ event.purefa_stretched_pod.pod }}"
-            online_arrays: "{{ event.purefa_stretched_pod.online_arrays }}"
+            target_array: "{{ event.purefa_stretched_pod.array | pprint }}"
+            pod: "{{ event.purefa_stretched_pod.pod | pprint }}"
+            online_arrays: "{{ event.purefa_stretched_pod.online_arrays | pprint }}"
             offline_arrays: []
             mode: restore
             alert_log: "{{ alert_log }}"
@@ -75,10 +75,10 @@
         run_playbook:
           name: playbooks/replicate_now.yml
           extra_vars:
-            target_array: "{{ event.purefa_pg_replication.array }}"
-            pgroup: "{{ event.purefa_pg_replication.pgroup }}"
-            reason: "{{ 'stuck' if event.purefa_pg_replication.stuck else 'overdue' }}"
-            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s }}"
-            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms }}"
-            in_progress: "{{ event.purefa_pg_replication.in_progress }}"
+            target_array: "{{ event.purefa_pg_replication.array | pprint }}"
+            pgroup: "{{ event.purefa_pg_replication.pgroup | pprint }}"
+            reason: "{{ ('stuck' if event.purefa_pg_replication.stuck else 'overdue') | pprint }}"
+            since_last_completed_s: "{{ event.purefa_pg_replication.since_last_completed_s | pprint }}"
+            frequency_ms: "{{ event.purefa_pg_replication.frequency_ms | pprint }}"
+            in_progress: "{{ event.purefa_pg_replication.in_progress | pprint }}"
             alert_log: "{{ alert_log }}"

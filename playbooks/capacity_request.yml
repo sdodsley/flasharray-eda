@@ -21,7 +21,7 @@
     - name: Refuse an array name that is not a plain file name
       ansible.builtin.assert:
         that:
-          - at_risk_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - at_risk_array is regex('[A-Za-z0-9][A-Za-z0-9._-]*', match_type='fullmatch')
         fail_msg: "array name {{ at_risk_array | string | truncate(80) }} is not a valid array name"
 
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
@@ -45,9 +45,9 @@
       ansible.builtin.set_fact:
         request_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
         request_id: >-
-          {{ at_risk_array ~ '-' ~ ((request_key | string | regex_replace('[^0-9A-Za-z]', ''))
+          {{ (at_risk_array ~ '-' ~ ((request_key | string | regex_replace('[^0-9A-Za-z]', ''))
              if request_key | default('') | string | length > 0
-             else now(utc=true).strftime('%Y%m%d%H%M%S')) }}
+             else now(utc=true).strftime('%Y%m%d%H%M%S'))) | string }}
 
     - name: Make sure the request directory exists
       ansible.builtin.file:
@@ -91,7 +91,7 @@
       ansible.builtin.set_fact:
         open_request: "{{ open_cmd.stdout | from_json }}"
         request_open: "{{ (open_cmd.stdout | from_json).open is not none }}"
-        request_id: "{{ (open_cmd.stdout | from_json).open | default(request_id, true) }}"
+        request_id: "{{ (open_cmd.stdout | from_json).open | default(request_id, true) | string }}"
 
     # The Alertmanager path may name an array that is not in the inventory,
     # and a failed read must not lose the request: the candidate list is then
@@ -121,8 +121,8 @@
           {{ (open_request.candidates | default({'volumes': [], 'snapshots': []}, true)) if request_open | bool
              else ((candidates_cmd.stdout | from_json) if (candidates_cmd.rc | default(1)) == 0 else {'volumes': [], 'snapshots': []}) }}
         candidates_error: >-
-          {{ '' if (request_open | bool or (candidates_cmd.rc | default(1)) == 0)
-             else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory')) }}
+          {{ ('' if (request_open | bool or (candidates_cmd.rc | default(1)) == 0)
+             else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory'))) | string }}
 
     - name: Build the request
       ansible.builtin.set_fact:
@@ -133,18 +133,18 @@
           status: >-
             {{ (('already_raised' if open_request.status == 'awaiting_approval' else 'already_' ~ open_request.status)
                 if request_open | bool else 'awaiting_approval') }}
-          request_id: "{{ request_id }}"
-          array: "{{ at_risk_array }}"
-          used_pct: "{{ used_pct | default('') }}"
-          used_bytes: "{{ used_bytes | default('') }}"
-          capacity_bytes: "{{ capacity_bytes | default('') }}"
-          days_to_full: "{{ days_to_full | default('') }}"
-          top_growers: "{{ top_growers | default([]) }}"
-          pending_eradication_volumes: "{{ pending_eradication_volumes | default(candidates.volumes | length) }}"
-          pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(candidates.snapshots | length) }}"
+          request_id: "{{ request_id | string }}"
+          array: "{{ at_risk_array | string }}"
+          used_pct: "{{ ('' if (used_pct | default(none)) is none else used_pct) | string }}"
+          used_bytes: "{{ ('' if (used_bytes | default(none)) is none else used_bytes) | string }}"
+          capacity_bytes: "{{ ('' if (capacity_bytes | default(none)) is none else capacity_bytes) | string }}"
+          days_to_full: "{{ ('' if (days_to_full | default(none)) is none else days_to_full) | string }}"
+          top_growers: "{{ top_growers if (top_growers is defined and top_growers is not string and top_growers is not mapping and top_growers is iterable) else [] }}"
+          pending_eradication_volumes: "{{ pending_eradication_volumes | default(candidates.volumes | length, true) | int }}"
+          pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(candidates.snapshots | length, true) | int }}"
           candidates: "{{ candidates }}"
-          candidates_error: "{{ candidates_error | trim }}"
-          candidate_targets: "{{ candidate_targets | default([]) }}"
+          candidates_error: "{{ candidates_error | trim | string }}"
+          candidate_targets: "{{ candidate_targets if (candidate_targets is defined and candidate_targets is not string and candidate_targets is not mapping and candidate_targets is iterable) else [] }}"
           proposed_actions:
             - eradicate_pending
 
@@ -170,7 +170,7 @@
           (full in {{ days_to_full | default('n/a') }} days);
           candidates pending eradication: {{ candidates.volumes | length }} volumes /
           {{ candidates.snapshots | length }} snapshots{{ (' (' ~ candidates_error | trim ~ ')') if candidates_error | trim else '' }};
-          arrays with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}
+          arrays with headroom: {{ capacity_request.candidate_targets | selectattr('array', 'defined') | map(attribute='array') | list }}
 
     # Job artifacts: an Ansible Automation Platform workflow passes them to
     # the next node as extra_vars (request_id reaches capacity_reclaim.yml

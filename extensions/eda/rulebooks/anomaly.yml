@@ -48,9 +48,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -67,9 +69,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -95,10 +97,12 @@
         run_playbook:
           name: playbooks/protect_now.yml
           extra_vars:
-            target_array: "{{ events.cap.purefa_capacity.array }}"
-            drr_drop_pct: "{{ events.cap.purefa_capacity.drr_drop_pct }}"
-            snapshot_growth_pct: "{{ events.cap.purefa_capacity.snapshot_growth_pct }}"
-            audit_user: "{{ events.audit.purefa_audit.user }}"
-            audit_command: "{{ events.audit.purefa_audit.command }} {{ events.audit.purefa_audit.subcommand }} {{ events.audit.purefa_audit.arguments }}"
+            target_array: "{{ events.cap.purefa_capacity.array | pprint }}"
+            drr_drop_pct: "{{ events.cap.purefa_capacity.drr_drop_pct | pprint }}"
+            snapshot_growth_pct: "{{ events.cap.purefa_capacity.snapshot_growth_pct | pprint }}"
+            audit_user: "{{ events.audit.purefa_audit.user | pprint }}"
+            audit_command: >-
+              {{ (events.audit.purefa_audit.command ~ ' ' ~ events.audit.purefa_audit.subcommand ~ ' ' ~
+              events.audit.purefa_audit.arguments) | pprint }}
             extend_eradication_by_s: "{{ anomaly_extend_eradication_by_s }}"
             alert_log: "{{ alert_log }}"

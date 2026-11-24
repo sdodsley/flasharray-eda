@@ -185,6 +185,7 @@ def _run_playbook(
     secret=CLIENT_SECRET,
     env_extra=None,
     url=None,
+    extra_vars=None,
 ):
     """Run orchestrator_post.yml once against the mock, or against `url`;
     return (rc, alert-log records, output)."""
@@ -201,6 +202,7 @@ def _run_playbook(
                     v["array"] for k, v in event.items() if k.startswith("purefa_")
                 ),
                 "alert_log": str(alert_log),
+                **(extra_vars or {}),
             }
         )
     )
@@ -417,6 +419,52 @@ def test_unreachable_orchestrator_records_a_minus_one_warning(tmp_path):
     assert record["execution_id"] == ""
     assert record["reason"].startswith("token request failed: ")
     assert record["body_bytes"] > 0
+
+
+@needs_ansible
+def test_the_local_fallback_records_the_event_fields_by_type(tmp_path):
+    """The fallback on and nothing answering: the local capacity request
+    carries the event's scalars as text, a null as empty text, and the lists
+    and the counts as sent. The array is not in the inventory, so nothing is
+    read from an array."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    event = _capacity_event(array="array-z", days_to_full=None)
+    rc, records, output = _run_playbook(
+        tmp_path,
+        None,
+        event,
+        url=f"http://127.0.0.1:{port}",
+        extra_vars={
+            "orchestrator_fallback_local": True,
+            "request_dir": str(tmp_path / "requests"),
+        },
+    )
+    assert rc == 0, output
+    assert [r["kind"] for r in records] == ["orchestrator_post", "capacity_request"]
+    request, data = records[1], event["purefa_capacity"]
+    assert request["status"] == "awaiting_approval"
+    assert request["array"] == "array-z"
+    assert request["used_pct"] == "91.2"
+    assert request["used_bytes"] == "45600000000000"
+    assert request["capacity_bytes"] == "50000000000000"
+    assert request["days_to_full"] == ""
+    assert request["top_growers"] == data["top_growers"]
+    assert request["candidate_targets"] == data["others"]
+    assert int(request["pending_eradication_volumes"]) == 1
+    assert int(request["pending_eradication_snapshots"]) == 3
+
+
+@needs_ansible
+def test_an_array_name_shaped_like_a_list_is_sent_and_recorded_as_text(tmp_path, mock):
+    rc, records, output = _run_playbook(
+        tmp_path, mock, _capacity_event(array="['a' 'b']")
+    )
+    assert rc == 0, output
+    assert len(records) == 1, records
+    assert records[0]["array"] == "['a' 'b']"
+    assert _records(mock.record)[0]["event"]["array"] == "['a' 'b']"
 
 
 @needs_ansible

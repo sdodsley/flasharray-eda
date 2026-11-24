@@ -50,9 +50,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll has failed {{ event.purefa_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: >-
+              {{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll has failed ' ~
+              event.purefa_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -69,9 +71,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefa_poll_error.array }} {{ event.purefa_poll_error.signal }} poll failed"
-            detail: "{{ event.purefa_poll_error.error }}"
-            target_array: "{{ event.purefa_poll_error.array }}"
+            subject: "{{ (event.purefa_poll_error.array ~ ' ' ~ event.purefa_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefa_poll_error.error | pprint }}"
+            target_array: "{{ event.purefa_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -96,11 +98,11 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.purefa_hardware.array }}"
-            component: "{{ event.purefa_hardware.component }}"
-            component_type: "{{ event.purefa_hardware.type }}"
-            component_status: "{{ event.purefa_hardware.status }}"
-            component_details: "{{ event.purefa_hardware.details }}"
+            target_array: "{{ event.purefa_hardware.array | pprint }}"
+            component: "{{ event.purefa_hardware.component | pprint }}"
+            component_type: "{{ event.purefa_hardware.type | pprint }}"
+            component_status: "{{ event.purefa_hardware.status | pprint }}"
+            component_details: "{{ event.purefa_hardware.details | pprint }}"
             led_state: true
             alert_log: "{{ alert_log }}"
 
@@ -132,10 +134,10 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.purefa_hardware_recovered.array }}"
-            component: "{{ event.purefa_hardware_recovered.component }}"
-            component_type: "{{ event.purefa_hardware_recovered.type }}"
-            component_status: "{{ event.purefa_hardware_recovered.status }}"
+            target_array: "{{ event.purefa_hardware_recovered.array | pprint }}"
+            component: "{{ event.purefa_hardware_recovered.component | pprint }}"
+            component_type: "{{ event.purefa_hardware_recovered.type | pprint }}"
+            component_status: "{{ event.purefa_hardware_recovered.status | pprint }}"
             component_details: "recovered from {{ event.purefa_hardware_recovered.previous_status }}"
             led_state: false
             severity: info
@@ -146,10 +148,10 @@
       action:
         debug:
           msg: >-
-            {{ event.purefa_hardware_recovered.array }} {{ event.purefa_hardware_recovered.component }} recovered
-            ({{ event.purefa_hardware_recovered.previous_status }} -> {{ event.purefa_hardware_recovered.status }});
-            identify LED {{ 'left as it is' if event.purefa_hardware_recovered.identify_enabled else 'off' }}
-
+            {{ (event.purefa_hardware_recovered.array ~ ' ' ~ event.purefa_hardware_recovered.component ~
+            ' recovered (' ~ event.purefa_hardware_recovered.previous_status ~ ' -> ' ~
+            event.purefa_hardware_recovered.status ~ '); identify LED ' ~
+            ('left as it is' if event.purefa_hardware_recovered.identify_enabled else 'off')) | pprint }}
     - name: Drive not healthy - notify
       condition: event.purefa_health.drive_issue_count is defined and event.purefa_health.drive_issue_count > 0
       throttle:
@@ -162,8 +164,8 @@
           extra_vars:
             severity: critical
             subject: "Drive issue on {{ event.purefa_health.array }}"
-            detail: "{{ event.purefa_health.drive_issues }}"
-            target_array: "{{ event.purefa_health.array }}"
+            detail: "{{ event.purefa_health.drive_issues | pprint }}"
+            target_array: "{{ event.purefa_health.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Controller failover - notify
@@ -175,7 +177,7 @@
             severity: critical
             subject: "Controller failover on {{ event.purefa_controller_failover.array }}: primary is now {{ event.purefa_controller_failover.primary }}"
             detail: "previous primary {{ event.purefa_controller_failover.previous_primary }}; controllers {{ event.purefa_controller_failover.controllers }}"
-            target_array: "{{ event.purefa_controller_failover.array }}"
+            target_array: "{{ event.purefa_controller_failover.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # Host port connectivity, for hosts with volumes (the plugin skips the
@@ -202,11 +204,10 @@
             severity: critical
             subject: "Host {{ event.purefa_host_connectivity.host }} on {{ event.purefa_host_connectivity.array }} has critical port connectivity"
             detail: >-
-              {{ event.purefa_host_connectivity.details }};
-              {{ event.purefa_host_connectivity.connection_count }} volumes connected,
-              host group {{ event.purefa_host_connectivity.host_group }},
-              personality {{ event.purefa_host_connectivity.personality }}
-            target_array: "{{ event.purefa_host_connectivity.array }}"
+              {{ (event.purefa_host_connectivity.details ~ '; ' ~ event.purefa_host_connectivity.connection_count ~
+              ' volumes connected, host group ' ~ event.purefa_host_connectivity.host_group ~ ', personality ' ~
+              event.purefa_host_connectivity.personality) | pprint }}
+            target_array: "{{ event.purefa_host_connectivity.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Host paths degraded - notify
@@ -227,11 +228,10 @@
             severity: warning
             subject: "Host {{ event.purefa_host_connectivity.host }} on {{ event.purefa_host_connectivity.array }} has {{ event.purefa_host_connectivity.status }} port connectivity"
             detail: >-
-              {{ event.purefa_host_connectivity.details }};
-              {{ event.purefa_host_connectivity.connection_count }} volumes connected,
-              host group {{ event.purefa_host_connectivity.host_group }},
-              personality {{ event.purefa_host_connectivity.personality }}
-            target_array: "{{ event.purefa_host_connectivity.array }}"
+              {{ (event.purefa_host_connectivity.details ~ '; ' ~ event.purefa_host_connectivity.connection_count ~
+              ' volumes connected, host group ' ~ event.purefa_host_connectivity.host_group ~ ', personality ' ~
+              event.purefa_host_connectivity.personality) | pprint }}
+            target_array: "{{ event.purefa_host_connectivity.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Host paths recovered - notify
@@ -248,7 +248,7 @@
               status {{ event.purefa_host_connectivity.status }};
               {{ event.purefa_host_connectivity.connection_count }} volumes connected,
               host group {{ event.purefa_host_connectivity.host_group }}
-            target_array: "{{ event.purefa_host_connectivity.array }}"
+            target_array: "{{ event.purefa_host_connectivity.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Maintenance window active - log

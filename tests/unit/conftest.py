@@ -12,9 +12,10 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PLUGINS = ROOT / "extensions" / "eda" / "plugins" / "event_source"
+FILTERS = ROOT / "extensions" / "eda" / "plugins" / "event_filter"
 
 
-def _load(name):
+def _load(name, directory=PLUGINS):
     """Load a plugin module from its file; pypureclient is stubbed so the
     import works on a machine without the SDK."""
     if "pypureclient" not in sys.modules:
@@ -22,7 +23,7 @@ def _load(name):
         stub.flasharray = MagicMock()
         sys.modules["pypureclient"] = stub
         sys.modules["pypureclient.flasharray"] = stub.flasharray
-    spec = importlib.util.spec_from_file_location(name, PLUGINS / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, directory / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -36,6 +37,11 @@ def events():
 @pytest.fixture(scope="session")
 def syslog():
     return _load("purefa_syslog")
+
+
+@pytest.fixture(scope="session")
+def plain_text_filter():
+    return _load("plain_text", FILTERS)
 
 
 @pytest.fixture(scope="session")

@@ -517,8 +517,8 @@ Slack is exercised from the platform. **FlashArray - notify** with the
 `Slack webhook` credential attached posts the record to the channel (200
 returned, the failure report skipped): the severity icon, the severity,
 the subject with the array named once and the detail on its own line;
-against a capture server it carries a real line break, drops a carriage
-return and escapes `&`, `<` and `>`. The approval bot, a container on the
+against a capture server it carries a real line break and escapes `&`,
+`<` and `>`. The approval bot, a container on the
 platform host connected over Socket Mode, posts the card for a new
 orchestrator approval within one poll, and a click on Approve decides it:
 the orchestrator records the approval under the bot's user with

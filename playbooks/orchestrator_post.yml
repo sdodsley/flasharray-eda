@@ -99,7 +99,7 @@
           event:
             schema: flasharray-eda/1
             event_type: "{{ event_type }}"
-            array: "{{ array | default(event_data.array | default(''), true) }}"
+            array: "{{ array | default(event_data.array | default(''), true) | string }}"
             maintenance_active: "{{ event_data.maintenance_active | default(false) | bool }}"
             observed_at: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
             data: "{{ event_data }}"
@@ -140,7 +140,7 @@
         token_status: "{{ token_response.status | default(0) }}"
         token_reason: >-
           {{ token_response.json.detail | default(token_response.msg | default('no response'))
-             | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) }}
+             | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) | string }}
       no_log: true
 
     # One read-only call set, in Python: every page of the executions still
@@ -232,7 +232,7 @@
         execution_id: "{{ post_response.json.execution_id | default(pending_execution) }}"
         post_reason: >-
           {{ post_response.json.detail | default(post_response.msg | default('no response'))
-             | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) }}
+             | string | regex_replace('\s+', ' ') | truncate(240, true, '...', 0) | string }}
         stage: >-
           {{ 'size_check' if oversize else ('token' if ao_token | length == 0
              else ('pending' if pending_execution | length > 0 else 'post')) }}
@@ -282,12 +282,32 @@
     - (hostvars['localhost'].orchestrator_record.status | default(0)) != 202
     - hostvars['localhost'].orchestrator_record.stage | default('') != 'pending'
   vars:
-    at_risk_array: "{{ hostvars['localhost'].event_data.array }}"
-    used_pct: "{{ hostvars['localhost'].event_data.used_pct }}"
-    used_bytes: "{{ hostvars['localhost'].event_data.used_bytes }}"
-    capacity_bytes: "{{ hostvars['localhost'].event_data.capacity_bytes }}"
-    days_to_full: "{{ hostvars['localhost'].event_data.days_to_full }}"
-    top_growers: "{{ hostvars['localhost'].event_data.top_growers }}"
-    pending_eradication_volumes: "{{ hostvars['localhost'].event_data.pending_eradication_volumes }}"
-    pending_eradication_snapshots: "{{ hostvars['localhost'].event_data.pending_eradication_snapshots }}"
-    candidate_targets: "{{ hostvars['localhost'].event_data.others }}"
+    at_risk_array: "{{ hostvars['localhost'].event_data.array | string }}"
+    used_pct: >-
+      {{ ('' if (hostvars['localhost'].event_data.used_pct | default(none)) is none
+          else hostvars['localhost'].event_data.used_pct) | string }}
+    used_bytes: >-
+      {{ ('' if (hostvars['localhost'].event_data.used_bytes | default(none)) is none
+          else hostvars['localhost'].event_data.used_bytes) | string }}
+    capacity_bytes: >-
+      {{ ('' if (hostvars['localhost'].event_data.capacity_bytes | default(none)) is none
+          else hostvars['localhost'].event_data.capacity_bytes) | string }}
+    days_to_full: >-
+      {{ ('' if (hostvars['localhost'].event_data.days_to_full | default(none)) is none
+          else hostvars['localhost'].event_data.days_to_full) | string }}
+    top_growers: >-
+      {{ hostvars['localhost'].event_data.top_growers
+         if (hostvars['localhost'].event_data.top_growers is defined
+             and hostvars['localhost'].event_data.top_growers is not string
+             and hostvars['localhost'].event_data.top_growers is not mapping
+             and hostvars['localhost'].event_data.top_growers is iterable)
+         else [] }}
+    pending_eradication_volumes: "{{ hostvars['localhost'].event_data.pending_eradication_volumes | default(0, true) | int }}"
+    pending_eradication_snapshots: "{{ hostvars['localhost'].event_data.pending_eradication_snapshots | default(0, true) | int }}"
+    candidate_targets: >-
+      {{ hostvars['localhost'].event_data.others
+         if (hostvars['localhost'].event_data.others is defined
+             and hostvars['localhost'].event_data.others is not string
+             and hostvars['localhost'].event_data.others is not mapping
+             and hostvars['localhost'].event_data.others is iterable)
+         else [] }}

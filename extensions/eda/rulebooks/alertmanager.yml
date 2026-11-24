@@ -1,10 +1,11 @@
 ---
 # Zero custom code path: Prometheus scrapes the array's native OpenMetrics
 # exporter, prometheus/flasharray.rules.yml raises alerts, Alertmanager
-# posts them here through the stock ansible.eda.alertmanager source, and the
-# same playbooks run. The `domain` label set by the rules file selects the
-# playbook; the array name comes from the alert's array_name label (the
-# scrape-failure alert only has `instance`, so it gets its own rule).
+# posts them here through the stock ansible.eda.alertmanager source with the
+# collection's plain_text event filter, and the same playbooks run. The
+# `domain` label set by the rules file selects the playbook; the array name
+# comes from the alert's array_name label (the scrape-failure alert only has
+# `instance`, so it gets its own rule).
 #
 # Alertmanager receiver:
 #   receivers:
@@ -35,6 +36,9 @@
         data_alerts_path: alerts
         data_host_path: ""
         data_path_separator: .
+      filters:
+        # the alert's labels and annotations reach the rules as plain text
+        - sdodsley.flasharray_eda.plain_text: {}
 
   rules:
     - name: Hardware component not ok - identify LED and notify
@@ -50,12 +54,12 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.alert.labels.array_name }}"
-            component: "{{ event.alert.labels.component_name }}"
-            component_type: "{{ event.alert.labels.component_type | default('') }}"
+            target_array: "{{ event.alert.labels.array_name | default('') | pprint }}"
+            component: "{{ event.alert.labels.component_name | default('') | pprint }}"
+            component_type: "{{ event.alert.labels.component_type | default('') | pprint }}"
             component_status: not_ok
-            component_details: "{{ event.alert.annotations.summary | default('') }}"
-            severity: "{{ event.alert.labels.severity | default('critical') }}"
+            component_details: "{{ event.alert.annotations.summary | default('') | pprint }}"
+            severity: "{{ event.alert.labels.severity | default('critical') | pprint }}"
             led_state: true
             alert_log: "{{ alert_log }}"
 
@@ -71,10 +75,10 @@
         run_playbook:
           name: playbooks/capacity_request.yml
           extra_vars:
-            at_risk_array: "{{ event.alert.labels.array_name }}"
+            at_risk_array: "{{ event.alert.labels.array_name | default('') | pprint }}"
             # the rules file puts the bare percentage in annotations.value;
             # summary is the sentence for humans
-            used_pct: "{{ event.alert.annotations.value | default('') }}"
+            used_pct: "{{ event.alert.annotations.value | default('') | pprint }}"
             used_bytes: ""
             capacity_bytes: ""
             request_dir: "{{ request_dir }}"
@@ -93,10 +97,10 @@
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
-            severity: "{{ event.alert.labels.severity | default('critical') }}"
+            severity: "{{ event.alert.labels.severity | default('critical') | pprint }}"
             subject: "FlashArrayScrapeFailed: {{ event.alert.annotations.summary | default('') }}"
             detail: "instance={{ event.alert.labels.instance | default('') }} labels={{ event.alert.labels }}"
-            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}"
+            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Any other firing FlashArray alert - notify
@@ -113,10 +117,10 @@
         run_playbook:
           name: playbooks/notify.yml
           extra_vars:
-            severity: "{{ event.alert.labels.severity | default('warning') }}"
-            subject: "{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary | default('') }}"
+            severity: "{{ event.alert.labels.severity | default('warning') | pprint }}"
+            subject: "{{ (event.alert.labels.alertname ~ ': ' ~ (event.alert.annotations.summary | default(''))) | pprint }}"
             detail: "domain={{ event.alert.labels.domain | default('') }} labels={{ event.alert.labels }}"
-            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}"
+            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Resolved - log
@@ -129,6 +133,6 @@
             subject: >-
               resolved: {{ event.alert.labels.alertname | default('') }}
               on {{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}
-            detail: "{{ event.alert.annotations.summary | default('') }}"
-            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) }}"
+            detail: "{{ event.alert.annotations.summary | default('') | pprint }}"
+            target_array: "{{ event.alert.labels.array_name | default(event.alert.labels.instance | default('')) | pprint }}"
             alert_log: "{{ alert_log }}"

@@ -1,6 +1,6 @@
 # Decision environment for the FlashArray rulebooks: ansible-rulebook plus
 # the collection this repository builds into (sdodsley.flasharray_eda, with
-# the two event source plugins, the rulebooks and the playbooks), its
+# its plugins, the rulebooks and the playbooks), its
 # dependencies ansible.eda and everpure.flasharray, and py-pure-client. The
 # same image serves standalone `ansible-rulebook` runs and EDA controller
 # activations: the rulebooks name their sources by FQCN

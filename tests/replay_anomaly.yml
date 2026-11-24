@@ -30,10 +30,12 @@
         run_playbook:
           name: playbooks/protect_now.yml
           extra_vars:
-            target_array: "{{ events.cap.purefa_capacity.array }}"
-            drr_drop_pct: "{{ events.cap.purefa_capacity.drr_drop_pct }}"
-            snapshot_growth_pct: "{{ events.cap.purefa_capacity.snapshot_growth_pct }}"
-            audit_user: "{{ events.audit.purefa_audit.user }}"
-            audit_command: "{{ events.audit.purefa_audit.command }} {{ events.audit.purefa_audit.subcommand }} {{ events.audit.purefa_audit.arguments }}"
+            target_array: "{{ events.cap.purefa_capacity.array | pprint }}"
+            drr_drop_pct: "{{ events.cap.purefa_capacity.drr_drop_pct | pprint }}"
+            snapshot_growth_pct: "{{ events.cap.purefa_capacity.snapshot_growth_pct | pprint }}"
+            audit_user: "{{ events.audit.purefa_audit.user | pprint }}"
+            audit_command: >-
+              {{ (events.audit.purefa_audit.command ~ ' ' ~ events.audit.purefa_audit.subcommand ~ ' ' ~
+              events.audit.purefa_audit.arguments) | pprint }}
             extend_eradication_by_s: "{{ anomaly_extend_eradication_by_s }}"
             alert_log: "{{ alert_log }}"

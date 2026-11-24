@@ -39,18 +39,19 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: >-
-              {{ 'critical' if event.purefa_syslog.severity in ['emerg', 'alert', 'crit', 'err']
-              else ('info' if event.purefa_syslog.severity in ['notice', 'info', 'debug'] else 'warning') }}
+              {{ ('critical' if event.purefa_syslog.severity in ['emerg', 'alert', 'crit', 'err']
+              else ('info' if event.purefa_syslog.severity in ['notice', 'info', 'debug'] else 'warning')) | pprint }}
             subject: >-
-              {{ event.purefa_syslog.array }} alert{{ (' ' ~ event.purefa_syslog.fields.code) if event.purefa_syslog.fields.code is defined else '' }}:
-              {{ event.purefa_syslog.fields.subject | default(event.purefa_syslog.message) }}
+              {{ (event.purefa_syslog.array ~ ' alert' ~
+              ((' ' ~ event.purefa_syslog.fields.code) if event.purefa_syslog.fields.code is defined else '') ~
+              ': ' ~ (event.purefa_syslog.fields.subject | default(event.purefa_syslog.message))) | pprint }}
             detail: >-
-              {{ event.purefa_syslog.fields.description | default('') }}
-              {{ ('KB ' ~ event.purefa_syslog.fields.knowledge_base_url) if event.purefa_syslog.fields.knowledge_base_url is defined else '' }}
-              (syslog {{ event.purefa_syslog.severity }} from {{ event.purefa_syslog.source }},
-              {{ event.purefa_syslog.fields.utc_time | default(event.purefa_syslog.time) }} UTC)
-            alert_code: "{{ event.purefa_syslog.fields.code | default('') }}"
-            target_array: "{{ event.purefa_syslog.array }}"
+              {{ ((event.purefa_syslog.fields.description | default('')) ~ ' ' ~
+              (('KB ' ~ event.purefa_syslog.fields.knowledge_base_url) if event.purefa_syslog.fields.knowledge_base_url is defined else '') ~
+              ' (syslog ' ~ event.purefa_syslog.severity ~ ' from ' ~ event.purefa_syslog.source ~ ', ' ~
+              (event.purefa_syslog.fields.utc_time | default(event.purefa_syslog.time)) ~ ' UTC)') | pprint }}
+            alert_code: "{{ event.purefa_syslog.fields.code | default('') | pprint }}"
+            target_array: "{{ event.purefa_syslog.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Human action via syslog audit - fast notification
@@ -65,9 +66,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_syslog.user }} on {{ event.purefa_syslog.array }}: {{ event.purefa_syslog.action }}"
-            detail: "{{ event.purefa_syslog.fields }}"
-            target_array: "{{ event.purefa_syslog.array }}"
+            subject: "{{ (event.purefa_syslog.user ~ ' on ' ~ event.purefa_syslog.array ~ ': ' ~ event.purefa_syslog.action) | pprint }}"
+            detail: "{{ event.purefa_syslog.fields | pprint }}"
+            target_array: "{{ event.purefa_syslog.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # The line /syslog-servers/test sends (the self-check asks for one every
@@ -80,12 +81,12 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefa_syslog.array }}: syslog test line received"
+            subject: "{{ (event.purefa_syslog.array ~ ': syslog test line received') | pprint }}"
             detail: >-
               purity.test from {{ event.purefa_syslog.source }},
               array time {{ event.purefa_syslog.fields.utc_time | default(event.purefa_syslog.time) }} UTC,
               received {{ event.meta.received_at }}: {{ event.purefa_syslog.message }}
-            target_array: "{{ event.purefa_syslog.array }}"
+            target_array: "{{ event.purefa_syslog.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Anything else from the array - log

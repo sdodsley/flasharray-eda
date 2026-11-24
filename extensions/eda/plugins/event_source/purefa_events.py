@@ -7,6 +7,11 @@ Polls one or more FlashArrays over REST (py-pure-client) and emits plain
 fact events.  Thresholds, baselines and policy live in the rulebook, not here.
 One instance can run several signals, each on its own interval.
 
+Every string in an event is plain text: template markers and the vault
+header in text that comes from the array (alert summaries, audit arguments,
+REST error messages) are broken by a space before the event is queued
+(`plain_text` below).
+
 Verified against Purity//FA 6.10.6 (REST 2.46) with py-pure-client 1.94.1.
 
 Arguments
@@ -420,7 +425,7 @@ EXAMPLES = r"""
         event.purefa_alert.severity == "critical"
       action:
         debug:
-          msg: "{{ event.purefa_alert.array }}: {{ event.purefa_alert.summary }}"
+          msg: "alert on {{ event.purefa_alert.array }}: {{ event.purefa_alert.summary }}"
 """
 
 import asyncio
@@ -428,6 +433,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -513,6 +519,37 @@ def _truthy(value, default=False):
 
 def _csv(values):
     return ",".join(sorted(str(v) for v in (values or [])))
+
+
+_MARKER = re.compile(r"\{(?=[{%#]|\Z)")
+_OVERRIDE = re.compile(r"#(?=jinja2|(?:j(?:i(?:n(?:ja?)?)?)?)?\Z)", re.IGNORECASE)
+_VAULT = re.compile(
+    r"\$(?=ANSIBLE_VAULT|(?:A(?:N(?:S(?:I(?:B(?:L(?:E(?:_(?:V(?:A(?:U(?:L)?)?)?)?)?)?)?)?)?)?)?)?\Z)"
+)
+
+
+def plain_text(value):
+    """Return value with the template markers and the vault header in every
+    string broken by a space ("{{" -> "{ {", "{%" -> "{ %", "{#" -> "{ #",
+    "#jinja2" -> "# jinja2", "$ANSIBLE_VAULT" -> "$ ANSIBLE_VAULT"),
+    recursively through dicts (text keys too), lists and tuples; anything
+    else is returned as is. A "{", a "#" or a "$" that ends a string, or a
+    "#" or a "$" followed there by the start of "jinja2" or of
+    "ANSIBLE_VAULT", gets the space too, so text joined on after it
+    completes neither. The text stays readable. Kept identical in the
+    plain_text event filter, purefa_events.py and purefa_syslog.py
+    (tests/unit/test_plain_text.py checks); ansible-rulebook loads each
+    plugin from its own file, so none of them can import it from another."""
+    if isinstance(value, str):
+        return _VAULT.sub("$ ", _OVERRIDE.sub("# ", _MARKER.sub("{ ", value)))
+    if isinstance(value, dict):
+        return {
+            (plain_text(k) if isinstance(k, str) else k): plain_text(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [plain_text(v) for v in value]
+    return value
 
 
 def _items(resp, what):
@@ -2027,7 +2064,7 @@ async def _signal_loop(queue, signal, arrays, state, args, executor):
 
     async def emit(events):
         for event in events:
-            await queue.put(event)
+            await queue.put(plain_text(event))
 
     escalate_after = int(args.get("poll_error_escalate", 10) or 10)
 

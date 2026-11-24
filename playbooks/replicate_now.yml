@@ -64,7 +64,7 @@
 
     - name: Pin the snapshot suffix and decide whether a snapshot is still wanted
       ansible.builtin.set_fact:
-        snap_suffix: "{{ snapshot_suffix | default('eda-' ~ reason ~ '-' ~ now(utc=true).strftime('%Y%m%d%H%M%S'), true) }}"
+        snap_suffix: "{{ snapshot_suffix | default('eda-' ~ reason ~ '-' ~ now(utc=true).strftime('%Y%m%d%H%M%S'), true) | string }}"
         snapshot_wanted: >-
           {{ not (recent.pinned_exists | bool)
              and (recent.newest_age_s is none

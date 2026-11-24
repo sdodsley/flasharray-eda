@@ -4,6 +4,7 @@
 event source. Nothing here binds a socket."""
 
 import asyncio
+import json
 
 import pytest
 import yaml
@@ -342,6 +343,36 @@ def test_emitter_filters_senders_and_queues_locally(syslog):
         assert local.get_nowait()["protocol"] == "tcp"
 
     asyncio.run(go())
+
+
+def test_forwarded_events_carry_plain_text(syslog):
+    """parse() keeps the text as logged; what reaches ansible-rulebook has its
+    template markers broken, in every field."""
+    line = REAL_CMD.replace("eda-syslog-human", "marker-{{ 7 * 7 }}-{% x %}")
+    event = syslog.parse(line, {}, set())
+    assert "{{ 7 * 7 }}" in json.dumps(event)
+    queued = syslog._forwarded(event)
+    assert set(queued) == {"purefa_syslog"}
+    inner = queued["purefa_syslog"]
+    assert inner["kind"] == "audit" and inner["user"] == "eda-human"
+    assert "marker-{ { 7 * 7 }}-{ % x %}" in json.dumps(queued)
+    assert "{{" not in json.dumps(queued) and "{%" not in json.dumps(queued)
+
+
+def test_the_forwarder_queues_each_line_in_order_as_plain_text(syslog):
+    async def go():
+        local, queue = asyncio.Queue(), asyncio.Queue()
+        task = asyncio.create_task(syslog._forward(local, queue))
+        local.put_nowait({"message": "{{ 7 * 7 }}"})
+        local.put_nowait({"message": "second"})
+        got = [await queue.get(), await queue.get()]
+        task.cancel()
+        return got
+
+    assert asyncio.run(go()) == [
+        {"purefa_syslog": {"message": "{ { 7 * 7 }}"}},
+        {"purefa_syslog": {"message": "second"}},
+    ]
 
 
 def test_udp_protocol_splits_datagrams_into_lines(syslog):

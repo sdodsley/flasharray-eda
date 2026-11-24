@@ -78,6 +78,17 @@ matters.
   (`verify_ssl: false`, `disable_warnings: true`) because arrays in a lab
   usually carry self-signed certificates. Turn it on where the arrays have
   real ones.
+- **Event text is plain text.** Both event sources break template markers
+  and the vault header in every string they emit, and the
+  `sdodsley.flasharray_eda.plain_text` event filter does the same for the
+  stock Alertmanager and webhook sources the listener rulebooks use, so
+  free text from an array, a syslog
+  sender or a webhook body reaches the rules and the playbooks as data.
+  Keep the filter on any stock source a rulebook of your own adds, write a
+  rule string that opens with an event field as one expression ending in
+  `| pprint` (in parentheses when it joins parts), open any other string
+  that carries a field with a plain word, and end text a playbook stores
+  in a fact with `| string`, as the shipped rules and playbooks do.
 - **Reporting.** Please report a vulnerability privately to the maintainer
   through GitHub's security advisory form for this repository rather than in
   a public issue.
