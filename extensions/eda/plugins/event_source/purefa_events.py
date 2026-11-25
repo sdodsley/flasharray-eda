@@ -191,7 +191,8 @@ purefa_stretched_pod    pod, members[{array,status,mediator_status,
                         all-online poll after a degraded one)
 purefa_pg_replication   pgroup, targets[], target_count, member_count,
                         schedule_enabled, frequency_ms, last_completed,
-                        since_last_completed_s, overdue,
+                        since_last_completed_s, overdue (never for a
+                        group with no members),
                         schedule_disabled_with_targets (a target set but the
                         replication schedule off), snapshot_schedule_enabled,
                         snapshot_frequency_ms, snapshot_schedule_disabled
@@ -1696,8 +1697,11 @@ def poll_replication(arr, state, args):
                     "frequency_ms": freq,
                     "last_completed": last,
                     "since_last_completed_s": since,
+                    # an empty group has nothing to send: the array takes no
+                    # scheduled snapshot of it and refuses an immediate one
                     "overdue": bool(
-                        sched.get("enabled")
+                        members
+                        and sched.get("enabled")
                         and freq
                         and since is not None
                         and since * 1000 > 2 * freq

@@ -256,8 +256,15 @@ The native exporter the Prometheus rules are written for, as served on
   to the telemetry signal; an IOPS cap on that volume is visible at once
   in the volume's own `reads_per_sec` (1000 to 500 to 1000 as the limit is
   set and cleared).
-- A protection group snapshot on a group with no members fails;
-  `protect_now.yml` reports those groups as failures. Eradicating a snapshot
+- A protection group snapshot on a group with no members fails (400,
+  "Protection group has no volumes to snapshot"), and so does one on a
+  group whose only member is a host with no connected volumes;
+  `protect_now.yml` reports those groups as failures and
+  `replicate_now.yml` reads the group first and requests nothing. A
+  destroyed volume stays in
+  `/protection-groups/volumes` until it is eradicated but leaves the
+  group's `volume_count` at once, and the schedule of an emptied group
+  takes no snapshot and writes no audit record. Eradicating a snapshot
   in a SafeMode-protected group is refused by the array; the reclaim reports
   the refusal and never forces it.
 

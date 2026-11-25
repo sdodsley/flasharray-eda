@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `replicate_now.yml` reads the protection group before it snapshots and
+  requests nothing for a group with no volumes, which the array refuses to
+  snapshot; the job publishes an `outcome` sentence that the orchestrator's
+  closing notification carries. A group with no members is no longer
+  `overdue`, and the rules only notify when its transfer is stuck.
 - The `protection` signal lists every volume with no protection group and
   no replicated pod, the volumes with local snapshots only, the groups with
   members but no SafeMode or below the retention minimum, and the members

@@ -74,6 +74,7 @@ check "expand second run already_at_size" "$(rec volume_expand already_at_size)"
 
 echo "===== 2. replicate now twice"
 PB -e target_array="$A" -e pgroup="$PGROUP" -e reason=overdue playbooks/replicate_now.yml | tail -2
+check "replicate first run skipped (PGROUP must hold volumes)" "$(rec replicate_now skipped)" "false"
 PB -e target_array="$A" -e pgroup="$PGROUP" -e reason=overdue playbooks/replicate_now.yml | tail -2
 check "replicate second run changed" "$(rec replicate_now changed)" "false"
 check "replicate second run skipped" "$(rec replicate_now skipped)" "true"

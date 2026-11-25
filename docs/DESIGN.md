@@ -169,7 +169,11 @@ Every action sits behind a per-site switch (`replication_auto_replicate_now`,
   With `orchestrator_enabled` the event goes to the automation orchestrator
   instead and an approval with a one-hour window gates the snapshot
   (`orchestrator/replication_overdue_approval.json`). The group's schedule
-  is never touched; one extra snapshot is sent.
+  is never touched; one extra snapshot is sent. A group with no members is
+  never overdue and a transfer of it that is stuck is only notified; the
+  playbook reads the group before it snapshots, and one with no volumes,
+  its own or those of its hosts and host groups, gets no request, only a
+  record saying so.
 - A protection group whose replication schedule is off while it has a
   target, or a local group (no target) whose snapshot schedule is off while
   it has members: a notification (critical and hourly for the first,

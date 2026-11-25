@@ -362,8 +362,11 @@ dated entry. What each stage does:
   an execution); the execution notifies, pauses at its one-hour approval,
   and on approval **FlashArray - replicate now** runs with the event
   array's credential, creates the immediate replicated snapshot and
-  publishes `pgroup`, `snapshot_suffix` and `changed`, which the closing
-  notify reads. A definition that reads an artifact the job does not
+  publishes its artifacts, which the closing notify reads. The closing
+  notify of the definition in the tree reads `outcome` and `changed`; that
+  text, and the job requesting nothing for a group with no volumes, rest on
+  the artifact cross-check in the unit tests and a command-line run, not on
+  an execution here (docs/VERIFICATION.md). A definition that reads an artifact the job does not
   publish fails at that node at run time, not at validation; the unit
   tests therefore cross-check artifacts against `set_stats`, and a
   corrected definition is published as the next version with the

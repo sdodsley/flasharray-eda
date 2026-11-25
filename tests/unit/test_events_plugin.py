@@ -903,6 +903,22 @@ def test_pg_overdue_and_stuck(events):
     assert pg["in_progress"] is None and pg["overdue"] is False
 
 
+def test_an_empty_pg_is_never_overdue(events):
+    # the last transfer completed five periods ago, as in the test above, but
+    # the group's volumes have gone: there is nothing to send
+    client = pg_client([transfer("pg-prod", 1, completed=NOW_MS - 5 * HOUR_MS)])
+    client.pgroups[0]["volume_count"] = 0
+    out = events.poll_replication(FakeArray(client), {}, {})
+    pg = next(e["purefa_pg_replication"] for e in out if "purefa_pg_replication" in e)
+    assert pg["member_count"] == 0 and pg["since_last_completed_s"] >= 5 * 3600
+    assert pg["overdue"] is False
+    # a host or a host group is a member too
+    client.pgroups[0]["host_count"] = 1
+    out = events.poll_replication(FakeArray(client), {}, {})
+    pg = next(e["purefa_pg_replication"] for e in out if "purefa_pg_replication" in e)
+    assert pg["member_count"] == 1 and pg["overdue"] is True
+
+
 def test_pg_disabled_schedules_are_flagged_and_local_groups_are_read(events):
     """A replication schedule switched off on a group with a target, and a
     snapshot schedule switched off on a local group with members, each get a

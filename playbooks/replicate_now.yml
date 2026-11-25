@@ -6,7 +6,10 @@
 # Run twice: a second launch inside replicate_now_cooldown_s (default 300) of
 # the group's newest eda-* snapshot, or with a snapshot_suffix that already
 # exists, requests nothing more and records that (changed false, skipped
-# true); the artifacts then name the snapshot that already exists.
+# true); the artifacts then name the snapshot that already exists. The group
+# is read first: one with no volumes, its own or those connected to its
+# hosts and host groups, is refused by the array, so nothing is requested
+# and the artifacts name no snapshot (has_volumes false, skipped true).
 - name: Replicate a protection group now
   hosts: "{{ target_array }}"
   gather_facts: false
@@ -26,7 +29,7 @@
           - credential_array is not defined or credential_array == inventory_hostname
         fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
 
-    - name: Read the group's newest eda snapshot (and whether a pinned suffix exists)
+    - name: Read the group's volumes and its newest eda snapshot (and whether a pinned suffix exists)
       ansible.builtin.command:
         cmd: "{{ ansible_playbook_python }} -"
         stdin: |
@@ -35,6 +38,27 @@
           from pypureclient import flasharray
           c = flasharray.Client(target=os.environ["FA_HOST"], api_token=os.environ["FA_TOKEN"], verify_ssl=False)
           pg = os.environ["PG"]
+          # whether the group holds anything to snapshot: the array refuses a group with no
+          # volumes, its own or those connected to its hosts and host groups (a destroyed
+          # volume no longer counts). A read that fails leaves the answer open and the
+          # module reports.
+          def rows(r):
+              return [x.to_dict() for x in r.items] if r.status_code == 200 else None
+          def connected(members, **kind):
+              names = [m["member"]["name"] for m in members or []]
+              return rows(c.get_connections(**{next(iter(kind)): names})) if names else members
+          group = rows(c.get_protection_groups(names=[pg]))
+          has_volumes = None
+          if group:
+              has_volumes = int(group[0].get("volume_count") or 0) > 0
+              if not has_volumes:
+                  found = []
+                  if int(group[0].get("host_count") or 0):
+                      found.append(connected(rows(c.get_protection_groups_hosts(group_names=[pg])), host_names=True))
+                  if int(group[0].get("host_group_count") or 0):
+                      found.append(connected(rows(c.get_protection_groups_host_groups(group_names=[pg])),
+                                             host_group_names=True))
+                  has_volumes = None if None in found else any(found)
           # the newest snapshot this playbook (or an approval of it) took: protect-now's eda-protect-*
           # snapshots are local and do not count, nor does one already destroyed
           r = c.get_protection_group_snapshots(filter="name='%s.eda-*'" % pg, sort=["created-"], limit=20)
@@ -46,7 +70,8 @@
           if pinned:
               p = c.get_protection_group_snapshots(names=["%s.%s" % (pg, pinned)])
               exists = p.status_code == 200 and len(list(p.items)) > 0
-          print(json.dumps({"newest": newest["name"] if newest else None,
+          print(json.dumps({"has_volumes": has_volumes,
+                            "newest": newest["name"] if newest else None,
                             "newest_age_s": int(time.time() - newest["created"] / 1000) if newest else None,
                             "pinned_exists": exists}))
       environment:
@@ -66,9 +91,21 @@
       ansible.builtin.set_fact:
         snap_suffix: "{{ snapshot_suffix | default('eda-' ~ reason ~ '-' ~ now(utc=true).strftime('%Y%m%d%H%M%S'), true) | string }}"
         snapshot_wanted: >-
-          {{ not (recent.pinned_exists | bool)
+          {{ recent.has_volumes != false
+             and not (recent.pinned_exists | bool)
              and (recent.newest_age_s is none
                   or (recent.newest_age_s | int) >= (replicate_now_cooldown_s | default(300) | int)) }}
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ (inventory_hostname ~ ': ' ~ pgroup ~ ' was ' ~ reason ~ '; ' ~
+              ('immediate replicated snapshot ' ~ pgroup ~ '.' ~ snap_suffix ~ ' requested' if snapshot_wanted | bool
+               else ('nothing requested: the group has no volumes' if recent.has_volumes == false
+                     else ('nothing requested: snapshot ' ~ pgroup ~ '.' ~ snap_suffix ~ ' already exists'
+                           if recent.pinned_exists | bool
+                           else 'nothing requested: ' ~ recent.newest ~ ' is ' ~ recent.newest_age_s
+                                ~ ' s old, inside the cooldown')))) | string }}
 
     - name: Snapshot the group and replicate immediately
       when: snapshot_wanted | bool
@@ -94,17 +131,13 @@
               'since_last_completed_s': since_last_completed_s | default(''),
               'frequency_ms': frequency_ms | default(''), 'in_progress': in_progress | default(''),
               'changed': snap.changed | default(false), 'skipped': not (snapshot_wanted | bool),
+              'has_volumes': recent.has_volumes,
               'newest_before': recent.newest, 'newest_age_s': recent.newest_age_s} | to_json }}
       delegate_to: localhost
 
     - name: Show the action
       ansible.builtin.debug:
-        msg: >-
-          {{ inventory_hostname }}: {{ pgroup }} was {{ reason }};
-          {{ 'immediate replicated snapshot requested' if snapshot_wanted | bool
-             else ('snapshot ' ~ snap_suffix ~ ' already exists, nothing requested' if recent.pinned_exists | bool
-                   else 'nothing requested: ' ~ recent.newest ~ ' is ' ~ recent.newest_age_s ~ ' s old, inside the cooldown') }}
-          (changed={{ snap.changed | default(false) }})
+        msg: "{{ outcome }} (changed={{ snap.changed | default(false) }})"
 
     # job artifacts for workflow and orchestrator nodes (orchestrator/README.md)
     - name: Publish the job artifacts
@@ -113,8 +146,10 @@
         per_host: false
         data: >-
           {{ {'array': inventory_hostname, 'pgroup': pgroup, 'reason': reason,
-              'snapshot_suffix': (snap_suffix if (snapshot_wanted | bool or recent.pinned_exists | bool)
-                                  else (recent.newest.split('.', 1) | last)),
+              'snapshot_suffix': ('' if recent.has_volumes == false
+                                  else (snap_suffix if (snapshot_wanted | bool or recent.pinned_exists | bool)
+                                        else ((recent.newest.split('.', 1) | last) if recent.newest else ''))),
+              'outcome': outcome, 'has_volumes': recent.has_volumes,
               'changed': snap.changed | default(false), 'skipped': not (snapshot_wanted | bool)} }}
       run_once: true
       delegate_to: localhost

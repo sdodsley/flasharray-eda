@@ -513,6 +513,18 @@ reported the seven others unchanged. Its first live run found the
 service-accounts path misspelt and the export contract (no
 `credential_names`, no empty `extra_vars`); both are in the tool.
 
+On 2026-11-25 the volumes of that group were destroyed on array A; its
+schedule took no further snapshot, and the job an approval then launched
+failed on the array's refusal (400, no volumes to snapshot). With the
+check, `replicate_now.yml` launched twice from the command line against the
+empty group requested nothing both times (`skipped` true, `has_volumes`
+false, the group's snapshots unchanged), and the replication signal
+reported `member_count` 0 and `overdue` false for it. A scratch group whose
+only member was a host with no connected volumes got the same refusal from
+the array, and the playbook requested nothing for it either. Not verified:
+a group whose hosts do bring volumes, the job on the platform and the
+changed definition's closing notify.
+
 Slack is exercised from the platform. **FlashArray - notify** with the
 `Slack webhook` credential attached posts the record to the channel (200
 returned, the failure report skipped): the severity icon, the severity,

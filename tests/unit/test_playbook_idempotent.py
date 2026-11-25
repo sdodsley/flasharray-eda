@@ -74,7 +74,7 @@ def test_expand_volume_treats_an_equal_size_as_already_done():
 def test_replicate_now_reads_before_it_snapshots_and_skips_inside_the_cooldown():
     tasks = [t["name"] for t in _tasks("replicate_now.yml")]
     read = next(
-        n for n in tasks if n.startswith("Read the group's newest eda snapshot")
+        n for n in tasks if n.startswith("Read the group's volumes and its newest")
     )
     snap = next(n for n in tasks if n.startswith("Snapshot the group"))
     assert tasks.index(read) < tasks.index(snap)
@@ -87,7 +87,26 @@ def test_replicate_now_reads_before_it_snapshots_and_skips_inside_the_cooldown()
         pin, "snapshot_wanted"
     )
     assert "recent.pinned_exists" in _set_fact(pin, "snapshot_wanted")
+    # a group with no volumes is read first and never snapshotted
+    assert _set_fact(pin, "snapshot_wanted").startswith(
+        "{{ recent.has_volumes != false"
+    )
     text = _text("replicate_now.yml")
+    for read in (
+        "get_protection_groups(names=[pg])",
+        "get_protection_groups_hosts(group_names=[pg])",
+        "get_protection_groups_host_groups(group_names=[pg])",
+        "get_connections(",
+    ):
+        assert read in text
+    assert "has_volumes = None if None in found else any(found)" in text
+    assert (
+        "'nothing requested: the group has no volumes' if recent.has_volumes == false"
+        in text
+    )
+    # and the artifacts name no snapshot then
+    assert "'snapshot_suffix': ('' if recent.has_volumes == false" in text
+    assert "if recent.newest else ''" in text
     assert "'skipped': not (snapshot_wanted | bool)" in text
     assert "snap.changed | default(false)" in text  # the skipped task has no changed
     assert (

@@ -80,15 +80,15 @@
     {
       "id": "notify_sent",
       "type": "aap_job_template",
-      "name": "Notify: snapshot requested",
+      "name": "Notify: replicate now ran",
       "parameters": {
         "job_template_name": "FlashArray - notify",
         "organization_name": "FlashArray",
         "credential_id": "REPLACE_AT_SYNC",
         "extra_vars": {
           "severity": "info",
-          "subject": "${trigger.event.array}: immediate replicated snapshot of ${trigger.event.data.pgroup} requested after approval",
-          "detail": "Snapshot ${trigger.event.data.pgroup}.${replicate_now.artifacts.snapshot_suffix} sent to the group's targets (changed: ${replicate_now.artifacts.changed}). Job: ${replicate_now.job_url}",
+          "subject": "${trigger.event.array}: replicate now ran for ${trigger.event.data.pgroup} after approval",
+          "detail": "${replicate_now.artifacts.outcome} (changed: ${replicate_now.artifacts.changed}). Job: ${replicate_now.job_url}",
           "target_array": "${trigger.event.array}"
         }
       }

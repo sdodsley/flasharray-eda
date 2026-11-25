@@ -308,6 +308,7 @@
       condition: >-
         event.purefa_pg_replication.pgroup is defined and
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        event.purefa_pg_replication.member_count > 0 and
         event.purefa_pg_replication.maintenance_active == false and
         vars.replication_auto_replicate_now == true and
         vars.orchestrator_enabled == false
@@ -328,6 +329,8 @@
             in_progress: "{{ event.purefa_pg_replication.in_progress | pprint }}"
             alert_log: "{{ alert_log }}"
 
+    # A group with no members has nothing to send (it is never overdue, and a
+    # transfer still stuck from before it was emptied is only notified).
     # With orchestrator_enabled true the overdue or stuck group is handed to
     # the automation orchestrator, where an approval gates the immediate
     # replicated snapshot (orchestrator/replication_overdue_approval.json);
@@ -336,6 +339,7 @@
       condition: >-
         event.purefa_pg_replication.pgroup is defined and
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
+        event.purefa_pg_replication.member_count > 0 and
         event.purefa_pg_replication.maintenance_active == false and
         vars.orchestrator_enabled == true
       throttle:
@@ -359,6 +363,7 @@
         event.purefa_pg_replication.pgroup is defined and
         (event.purefa_pg_replication.overdue == true or event.purefa_pg_replication.stuck == true) and
         (event.purefa_pg_replication.maintenance_active == true or
+         event.purefa_pg_replication.member_count == 0 or
          (vars.replication_auto_replicate_now == false and vars.orchestrator_enabled == false))
       throttle:
         once_within: 1 hour

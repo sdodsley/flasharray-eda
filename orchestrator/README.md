@@ -169,7 +169,9 @@ with `set_stats` so the orchestrator sees them as
 - **FlashArray - identify LED** publishes `array`, `component`, `led_state`
   (`on` or `off`), `led_changed` and `led_error`.
 - **FlashArray - replicate now** publishes `array`, `pgroup`, `reason`,
-  `snapshot_suffix` and `changed`.
+  `snapshot_suffix` (empty when the group has no volumes), `outcome` (one
+  sentence: the snapshot requested, or why nothing was), `has_volumes`,
+  `changed` and `skipped`.
 - **FlashArray - DR promote** and **FlashArray - DR demote** publish
   `array`, `pod`, the pod's promotion status before and after, the replica
   link's status and `changed`; DR demote also publishes
@@ -186,7 +188,8 @@ with `set_stats` so the orchestrator sees them as
   `changed`; the failover and failback notifies report them.
 - The run-twice flags a node may route on: expand volume `already_at_size`,
   replicate now and protect now `skipped` (and the suffix that already
-  exists), capacity request `already_raised`, capacity reclaim
+  exists; replicate now also skips a group with no volumes, `has_volumes`
+  false and no suffix), capacity request `already_raised`, capacity reclaim
   `already_done` and `nothing_pending`, Alertmanager silence `reused` and
   `already_expired`, DR drill `skipped_count` (a copy older than
   `dr_drill_stale_s`, default 1800 s, is removed before the drill as a dead
@@ -413,7 +416,8 @@ docs/VERIFICATION.md.
   - expand volume treats a volume already at the size as done
     (`already_at_size`);
   - replicate now and protect now read the newest eda snapshot first and
-    request nothing inside their cooldown (`skipped`);
+    request nothing inside their cooldown (`skipped`), and replicate now
+    requests nothing for a group with no volumes;
   - the capacity request is keyed on `request_key` and reuses a request
     already awaiting approval (`already_raised`);
   - the reclaim accepts a request already done with the same action

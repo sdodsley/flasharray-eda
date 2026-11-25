@@ -43,7 +43,15 @@ ARTIFACT_KEYS = {
     "digest.yml": {"record_kind", "arrays", "held", "read_until"},
     "alertmanager_silence.yml": {"silence_id", "mode"},
     "expand_volume.yml": {"volume", "old_size", "new_size"},
-    "replicate_now.yml": {"pgroup", "reason", "snapshot_suffix", "changed"},
+    "replicate_now.yml": {
+        "pgroup",
+        "reason",
+        "snapshot_suffix",
+        "outcome",
+        "has_volumes",
+        "changed",
+        "skipped",
+    },
     "self_check.yml": {"arrays_checked", "tests_run", "failed_count", "failed"},
     "definitions_check.yml": {
         "result",

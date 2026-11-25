@@ -44,6 +44,21 @@ def test_disabled_schedules_are_notified_and_the_overdue_rules_are_unchanged():
         assert "overdue == true" in rules[name]["condition"]
 
 
+def test_only_a_group_with_members_is_replicated_or_handed_on():
+    for path in (
+        "extensions/eda/rulebooks/replication.yml",
+        "extensions/eda/rulebooks/platform/replication.yml",
+    ):
+        rules = _rules(path)
+        for name in (
+            "Protection group replication overdue or stuck - replicate now",
+            "Protection group replication overdue or stuck - hand the event to the orchestrator",
+        ):
+            assert "member_count > 0" in rules[name]["condition"], (path, name)
+        notify = rules["Protection group replication overdue or stuck - notify only"]
+        assert "member_count == 0" in notify["condition"], path
+
+
 def test_the_platform_rulebook_carries_the_same_two_rules():
     rules = _rules("extensions/eda/rulebooks/platform/replication.yml")
     for name in (
